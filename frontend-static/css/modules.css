@@ -1004,7 +1004,40 @@
 .tbl-dense .tk.clickable:hover { color: var(--fg); text-shadow: 0 0 6px var(--accent-dim); }
 
 /* ── SCR Screener ────────────────────────────────────────── */
+.scr-universe-row {
+  display: flex; gap: 8px; padding: 8px 12px 6px; align-items: center; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+}
+.scr-lbl { font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+  letter-spacing: 0.08em; color: var(--fg-faint); margin-right: 2px; }
+.scr-uni-btn {
+  background: transparent; color: var(--fg-faint);
+  border: 1px solid var(--border); border-radius: 2px;
+  padding: 3px 10px; font-family: var(--font-mono); font-size: 10px;
+  font-weight: 700; letter-spacing: 0.06em; cursor: pointer; transition: all 120ms;
+}
+.scr-uni-btn:hover { border-color: var(--fg-faint); color: var(--fg); }
+.scr-uni-btn.active { background: var(--accent-bg); color: var(--accent); border-color: var(--accent-dim); }
+.scr-text-search {
+  flex: 1; min-width: 180px; max-width: 360px;
+  background: var(--panel-alt); border: 1px solid var(--border); border-radius: 2px;
+  color: var(--fg); font-family: var(--font-mono); font-size: 11px;
+  padding: 3px 8px; outline: none;
+}
+.scr-text-search:focus { border-color: var(--accent); }
 .scr-presets-row { display: flex; gap: 6px; padding: 8px 12px; flex-wrap: wrap; align-items: center; }
+.scr-tags-cell { white-space: normal; max-width: 220px; }
+.scr-tag {
+  display: inline-block; padding: 1px 5px; margin: 1px 2px 1px 0;
+  font-size: 9px; font-family: var(--font-mono); letter-spacing: 0.04em;
+  border-radius: 2px; background: var(--panel-alt); color: var(--fg-faint);
+  border: 1px solid var(--border);
+}
+.scr-tag-match {
+  background: var(--accent-bg); color: var(--accent); border-color: var(--accent-dim);
+}
+.scr-th-nosort { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em;
+  padding: 6px 8px; color: var(--fg-faint); text-align: left; white-space: nowrap; }
 .scr-preset-btn {
   background: transparent; color: var(--fg);
   border: 1px solid var(--border); border-radius: 2px;

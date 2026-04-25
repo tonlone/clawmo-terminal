@@ -7,11 +7,11 @@
   /* ── Module registry ──────────────────────────────────────── */
   const MODULES = [
     { id: 'stock-analysis', code: 'EQ',  fkey: 1,  label: 'Stock Analysis', labelCN: '股票分析', group: 'Core',     src: 'stocks.clawmo.tech', pdfExportable: true },
-    { id: 'signals',        code: 'SIG', fkey: 2,  label: 'Signals',        labelCN: '交易信號', group: 'Core',     src: 'stocks.clawmo.tech/signals.html', pdfExportable: true, pdfNeedsTicker: false },
-    { id: 'financials',     code: 'FIN', fkey: 3,  label: 'Financials',    labelCN: '財務深度',  group: 'Core',     src: 'stocks.clawmo.tech', pdfExportable: true },
-    { id: 'holdings',       code: 'HLD', fkey: 4,  label: 'Holdings',      labelCN: '機構持股',  group: 'Core',     src: 'stocks.clawmo.tech', pdfExportable: true },
-    { id: 'screener',       code: 'SCR', fkey: 5,  label: 'Screener',       labelCN: '選股器',   group: 'Core',     src: 'stocks.clawmo.tech/screener.html', pdfExportable: true, pdfNeedsTicker: false },
-    { id: 'breadth',        code: 'BRD', fkey: 6,  label: 'Market Breadth', labelCN: '市場廣度', group: 'Core',     src: 'stocks.clawmo.tech/breadth.html', pdfExportable: true, pdfNeedsTicker: false },
+    { id: 'financials',     code: 'FIN', fkey: 2,  label: 'Financials',    labelCN: '財務深度',  group: 'Core',     src: 'stocks.clawmo.tech', pdfExportable: true },
+    { id: 'holdings',       code: 'HLD', fkey: 3,  label: 'Holdings',      labelCN: '機構持股',  group: 'Core',     src: 'stocks.clawmo.tech', pdfExportable: true },
+    { id: 'screener',       code: 'SCR', fkey: 4,  label: 'Screener',       labelCN: '選股器',   group: 'Core',     src: 'stocks.clawmo.tech/screener.html', pdfExportable: true, pdfNeedsTicker: false },
+    { id: 'breadth',        code: 'BRD', fkey: 5,  label: 'Market Breadth', labelCN: '市場廣度', group: 'Core',     src: 'stocks.clawmo.tech/breadth.html', pdfExportable: true, pdfNeedsTicker: false },
+    { id: 'signals',        code: 'SIG', fkey: 6,  label: 'Signals',        labelCN: '交易信號', group: 'Core',     src: 'stocks.clawmo.tech/signals.html', pdfExportable: true, pdfNeedsTicker: false },
     { id: 'sctr',           code: 'SCT', fkey: 7,  label: 'SCTR',           labelCN: 'SCTR排名', group: 'Tools',    src: 'stocks.clawmo.tech/sctr.html', pdfExportable: true, pdfNeedsTicker: false },
     { id: 'deep-value',     code: 'DVL', fkey: 8,  label: 'Deep Value',     labelCN: '深度價值', group: 'Tools',    src: 'deep-value.clawmo.tech' },
     { id: 'gex',            code: 'GEX', fkey: 9,  label: 'GEX',            labelCN: '伽瑪曝險', group: 'Tools',    src: 'stocks.clawmo.tech/gex.html', pdfExportable: true, pdfNeedsTicker: false },

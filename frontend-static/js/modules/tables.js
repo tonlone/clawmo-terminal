@@ -102,31 +102,45 @@
   async function renderScreener(body) {
     body.innerHTML = `<div class="mod-loading">Loading screener…</div>`;
     try {
-      const d = await fetchJSON(`${BASE}/screener_index.json`);
-      const stocks = d.stocks || [];
+      const coreData = await fetchJSON(`${BASE}/screener_index.json`);
+      let stocks = coreData.stocks || [];
+      let allusData = null;
       const state = {
         filters: [],
         sector: 'All',
         industry: 'All',
         activePreset: null,
+        industryLeaderMode: false,
+        universeMode: 'core',
+        textSearch: '',
         sort: { key: 'market_cap', asc: false },
       };
-      // Persist preset choice within a session so tab-switching preserves it
+      // Persist preset choice within a session (but not universe mode — always start on core)
       const saved = window._scrState;
-      if (saved) Object.assign(state, saved);
+      if (saved) { Object.assign(state, saved); state.universeMode = 'core'; state.textSearch = ''; }
 
-      const sectors = {};
-      const indByS = {};
-      stocks.forEach((s) => {
-        if (s.sector) sectors[s.sector] = 1;
-        if (s.sector && s.industry) {
-          (indByS[s.sector] = indByS[s.sector] || {})[s.industry] = 1;
-        }
-      });
-      const sortedSectors = Object.keys(sectors).sort();
+      let sectors = {}, indByS = {}, sortedSectors = [];
+      function rebuildSectorIndex(list) {
+        sectors = {}; indByS = {};
+        list.forEach((s) => {
+          if (s.sector) sectors[s.sector] = 1;
+          if (s.sector && s.industry) (indByS[s.sector] = indByS[s.sector] || {})[s.industry] = 1;
+        });
+        sortedSectors = Object.keys(sectors).sort();
+      }
+      rebuildSectorIndex(stocks);
 
       function applyFilters() {
+        const q = state.textSearch.trim().toLowerCase();
         return stocks.filter((s) => {
+          if (q) {
+            const tagHit = Array.isArray(s.tags) && s.tags.some((t) => t.includes(q));
+            const hit = tagHit ||
+                        s.ticker.toLowerCase().includes(q) ||
+                        (s.name || '').toLowerCase().includes(q) ||
+                        (s.industry || '').toLowerCase().includes(q);
+            if (!hit) return false;
+          }
           if (state.sector   !== 'All' && s.sector   !== state.sector)   return false;
           if (state.industry !== 'All' && s.industry !== state.industry) return false;
           return state.filters.every((f) => matchFilter(s, f));
@@ -148,52 +162,180 @@
 
       function renderResults(filtered) {
         const { key, asc } = state.sort;
-        const sorted = [...filtered].sort((a, b) => {
-          const av = a[key], bv = b[key];
-          const an = (av == null || !isFinite(av)) ? -Infinity : Number(av);
-          const bn = (bv == null || !isFinite(bv)) ? -Infinity : Number(bv);
-          if (key === 'ticker' || key === 'name' || key === 'sector') {
-            const cmp = String(av || '').localeCompare(String(bv || ''));
-            return asc ? cmp : -cmp;
-          }
-          return asc ? an - bn : bn - an;
-        });
-        const rows = sorted.slice(0, 120).map((s) => `
-          <tr>
-            <td class="tk clickable" data-tk="${s.ticker}">${s.ticker}</td>
-            <td class="pat">${s.name || '—'}</td>
-            <td class="pat">${s.sector || '—'}</td>
-            <td class="mono">${fmt_.compact(s.market_cap)}</td>
-            <td class="mono">${fmt_.num(s.pe_ratio, 1)}</td>
-            <td class="mono">${s.revenue_growth_1y != null ? (s.revenue_growth_1y * 100).toFixed(1) + '%' : '—'}</td>
-            <td class="mono ${s.roe >= 0.15 ? 'num-up' : s.roe < 0 ? 'num-dn' : ''}">${s.roe != null ? (s.roe * 100).toFixed(1) + '%' : '—'}</td>
-            <td class="mono">${s.dividend_yield != null ? (s.dividend_yield * 100).toFixed(2) + '%' : '—'}</td>
-            <td class="mono ${s.net_margin >= 0.1 ? 'num-up' : s.net_margin < 0 ? 'num-dn' : ''}">${s.net_margin != null ? (s.net_margin * 100).toFixed(1) + '%' : '—'}</td>
-            <td class="mono ${s.return_1y >= 0 ? 'num-up' : 'num-dn'}">${s.return_1y != null ? (s.return_1y >= 0 ? '+' : '') + s.return_1y.toFixed(1) + '%' : '—'}</td>
-          </tr>
-        `).join('');
+        const q = state.textSearch.trim().toLowerCase();
+
+        function renderTags(tags) {
+          if (!tags || !tags.length) return '<span style="color:var(--fg-faint)">—</span>';
+          return tags.map((t) => {
+            const matched = q && t.includes(q);
+            return `<span class="scr-tag${matched ? ' scr-tag-match' : ''}">${t}</span>`;
+          }).join(' ');
+        }
+
+        let displayRows;
+        let colCount;
+        let headCellsDef;
+        let rowRenderer;
+
         function sortArrow(k) {
           if (state.sort.key !== k) return '<span class="scr-sort" style="opacity:0.3">▾</span>';
           return `<span class="scr-sort">${state.sort.asc ? '▴' : '▾'}</span>`;
         }
-        const headCells = [
-          ['ticker',            'TICKER'],
-          ['name',              'NAME'],
-          ['sector',            'SECTOR'],
-          ['market_cap',        'MCAP'],
-          ['pe_ratio',          'P/E'],
-          ['revenue_growth_1y', 'REV 1Y'],
-          ['roe',               'ROE'],
-          ['dividend_yield',    'DIV'],
-          ['net_margin',        'NM%'],
-          ['return_1y',         'RET 1Y'],
-        ].map(([k, lbl]) => `<th class="scr-th" data-sort-key="${k}">${lbl} ${sortArrow(k)}</th>`).join('');
+
+        function sortedList(list) {
+          return [...list].sort((a, b) => {
+            const av = a[key], bv = b[key];
+            if (key === 'ticker' || key === 'name' || key === 'sector' || key === 'industry') {
+              const cmp = String(av || '').localeCompare(String(bv || ''));
+              return asc ? cmp : -cmp;
+            }
+            const an = (av == null || !isFinite(av)) ? -Infinity : Number(av);
+            const bn = (bv == null || !isFinite(bv)) ? -Infinity : Number(bv);
+            return asc ? an - bn : bn - an;
+          });
+        }
+
+        if (state.industryLeaderMode) {
+          // Group by industry → pick leader by market_cap, then sort result set
+          const byInd = {};
+          filtered.forEach((s) => {
+            const ind = s.industry || '(Unknown)';
+            if (!byInd[ind] || (s.market_cap || 0) > (byInd[ind].market_cap || 0)) byInd[ind] = s;
+          });
+          displayRows = sortedList(Object.values(byInd));
+          if (state.universeMode === 'allus') {
+            colCount = 9;
+            headCellsDef = [
+              ['industry',       'INDUSTRY'],
+              ['ticker',         'TICKER'],
+              ['name',           'NAME'],
+              ['sector',         'SECTOR'],
+              ['market_cap',     'MCAP'],
+              ['price',          'PRICE'],
+              ['beta',           'BETA'],
+              ['dividend_yield', 'DIV'],
+              [null,             'THEMES'],
+            ];
+            rowRenderer = (s) => `
+              <tr>
+                <td class="pat">${s.industry || '—'}</td>
+                <td class="tk clickable" data-tk="${s.ticker}">${s.ticker}</td>
+                <td class="pat">${s.name || '—'}</td>
+                <td class="pat">${s.sector || '—'}</td>
+                <td class="mono">${fmt_.compact(s.market_cap)}</td>
+                <td class="mono">${s.price != null ? '$' + s.price.toFixed(2) : '—'}</td>
+                <td class="mono">${s.beta != null ? s.beta.toFixed(2) : '—'}</td>
+                <td class="mono">${s.dividend_yield ? (s.dividend_yield * 100).toFixed(2) + '%' : '—'}</td>
+                <td class="scr-tags-cell">${renderTags(s.tags)}</td>
+              </tr>
+            `;
+          } else {
+            colCount = 9;
+            headCellsDef = [
+              ['industry',   'INDUSTRY'],
+              ['ticker',     'TICKER'],
+              ['name',       'NAME'],
+              ['sector',     'SECTOR'],
+              ['market_cap', 'MCAP'],
+              ['pe_ratio',   'P/E'],
+              ['roe',        'ROE'],
+              ['net_margin', 'NM%'],
+              ['return_1y',  'RET 1Y'],
+            ];
+            rowRenderer = (s) => `
+              <tr>
+                <td class="pat">${s.industry || '—'}</td>
+                <td class="tk clickable" data-tk="${s.ticker}">${s.ticker}</td>
+                <td class="pat">${s.name || '—'}</td>
+                <td class="pat">${s.sector || '—'}</td>
+                <td class="mono">${fmt_.compact(s.market_cap)}</td>
+                <td class="mono">${fmt_.num(s.pe_ratio, 1)}</td>
+                <td class="mono ${s.roe >= 0.15 ? 'num-up' : s.roe < 0 ? 'num-dn' : ''}">${s.roe != null ? (s.roe * 100).toFixed(1) + '%' : '—'}</td>
+                <td class="mono ${s.net_margin >= 0.1 ? 'num-up' : s.net_margin < 0 ? 'num-dn' : ''}">${s.net_margin != null ? (s.net_margin * 100).toFixed(1) + '%' : '—'}</td>
+                <td class="mono ${s.return_1y >= 0 ? 'num-up' : 'num-dn'}">${s.return_1y != null ? (s.return_1y >= 0 ? '+' : '') + s.return_1y.toFixed(1) + '%' : '—'}</td>
+              </tr>
+            `;
+          }
+        } else if (state.universeMode === 'allus') {
+          displayRows = sortedList(filtered).slice(0, 200);
+          colCount = 9;
+          headCellsDef = [
+            ['ticker',         'TICKER'],
+            ['name',           'NAME'],
+            ['sector',         'SECTOR'],
+            ['industry',       'INDUSTRY'],
+            ['market_cap',     'MCAP'],
+            ['price',          'PRICE'],
+            ['beta',           'BETA'],
+            ['dividend_yield', 'DIV'],
+            [null,             'THEMES'],
+          ];
+          rowRenderer = (s) => `
+            <tr>
+              <td class="tk clickable" data-tk="${s.ticker}">${s.ticker}</td>
+              <td class="pat">${s.name || '—'}</td>
+              <td class="pat">${s.sector || '—'}</td>
+              <td class="pat">${s.industry || '—'}</td>
+              <td class="mono">${fmt_.compact(s.market_cap)}</td>
+              <td class="mono">${s.price != null ? '$' + s.price.toFixed(2) : '—'}</td>
+              <td class="mono">${s.beta != null ? s.beta.toFixed(2) : '—'}</td>
+              <td class="mono">${s.dividend_yield ? (s.dividend_yield * 100).toFixed(2) + '%' : '—'}</td>
+              <td class="scr-tags-cell">${renderTags(s.tags)}</td>
+            </tr>
+          `;
+        } else {
+          displayRows = sortedList(filtered).slice(0, 120);
+          colCount = 10;
+          headCellsDef = [
+            ['ticker',     'TICKER'],
+            ['name',       'NAME'],
+            ['sector',     'SECTOR'],
+            ['industry',   'INDUSTRY'],
+            ['market_cap', 'MCAP'],
+            ['pe_ratio',   'P/E'],
+            ['roe',        'ROE'],
+            ['dividend_yield', 'DIV'],
+            ['net_margin', 'NM%'],
+            ['return_1y',  'RET 1Y'],
+          ];
+          rowRenderer = (s) => `
+            <tr>
+              <td class="tk clickable" data-tk="${s.ticker}">${s.ticker}</td>
+              <td class="pat">${s.name || '—'}</td>
+              <td class="pat">${s.sector || '—'}</td>
+              <td class="pat">${s.industry || '—'}</td>
+              <td class="mono">${fmt_.compact(s.market_cap)}</td>
+              <td class="mono">${fmt_.num(s.pe_ratio, 1)}</td>
+              <td class="mono ${s.roe >= 0.15 ? 'num-up' : s.roe < 0 ? 'num-dn' : ''}">${s.roe != null ? (s.roe * 100).toFixed(1) + '%' : '—'}</td>
+              <td class="mono">${s.dividend_yield != null ? (s.dividend_yield * 100).toFixed(2) + '%' : '—'}</td>
+              <td class="mono ${s.net_margin >= 0.1 ? 'num-up' : s.net_margin < 0 ? 'num-dn' : ''}">${s.net_margin != null ? (s.net_margin * 100).toFixed(1) + '%' : '—'}</td>
+              <td class="mono ${s.return_1y >= 0 ? 'num-up' : 'num-dn'}">${s.return_1y != null ? (s.return_1y >= 0 ? '+' : '') + s.return_1y.toFixed(1) + '%' : '—'}</td>
+            </tr>
+          `;
+        }
+
+        const rows = displayRows.map(rowRenderer).join('');
+        const headCells = headCellsDef
+          .map(([k, lbl]) => k
+            ? `<th class="scr-th" data-sort-key="${k}">${lbl} ${sortArrow(k)}</th>`
+            : `<th class="scr-th-nosort">${lbl}</th>`
+          ).join('');
+
         const bodyEl = body.querySelector('#scr-results-body');
-        if (bodyEl) bodyEl.innerHTML = rows || '<tr><td colspan="10" class="empty">no matches — loosen filters or clear</td></tr>';
+        if (bodyEl) bodyEl.innerHTML = rows || `<tr><td colspan="${colCount}" class="empty">no matches — loosen filters or clear</td></tr>`;
         const headEl = body.querySelector('#scr-results-head');
         if (headEl) headEl.innerHTML = `<tr>${headCells}</tr>`;
         const countEl = body.querySelector('#scr-count');
-        if (countEl) countEl.textContent = `${filtered.length} matches · top ${Math.min(120, sorted.length)} shown`;
+        if (countEl) {
+          if (state.industryLeaderMode) {
+            countEl.textContent = `${displayRows.length} industry leaders`;
+          } else if (state.universeMode === 'allus') {
+            const cap = 200;
+            countEl.textContent = `${filtered.length} matches · top ${Math.min(cap, filtered.length)} shown`;
+          } else {
+            countEl.textContent = `${filtered.length} matches · top ${Math.min(120, filtered.length)} shown`;
+          }
+        }
       }
 
       function rerenderFilters() {
@@ -236,7 +378,8 @@
           op: r.querySelector('.scr-f-op').value,
           v:  r.querySelector('.scr-f-val').value,
         }));
-        state.activePreset = null;  // editing => custom
+        state.activePreset = null;
+        state.industryLeaderMode = false;
         body.querySelectorAll('.scr-preset-btn').forEach((b) => b.classList.toggle('active', false));
         reRun();
       }
@@ -248,7 +391,7 @@
           <div class="mod-meta">
             <span class="chip" id="scr-count">${stocks.length} loaded</span>
             <span class="chip">UNIVERSE · ${stocks.length}</span>
-            <span class="chip chip-dim">${fmt_.ago(d.generated_at)}</span>
+            <span class="chip chip-dim">${fmt_.ago(coreData.generated_at)}</span>
           </div>
         </div>
 
@@ -260,12 +403,21 @@
             <button class="scr-preset-btn" data-preset="dividend">DIVIDEND</button>
             <button class="scr-preset-btn" data-preset="quality">QUALITY</button>
             <span class="scr-preset-sep">│</span>
+            <button class="scr-preset-btn" data-preset="industry-leaders">INDUSTRY LEADERS</button>
+            <span class="scr-preset-sep">│</span>
             <button class="scr-preset-btn scr-preset-clear" data-preset="clear">CLEAR ALL</button>
           </div>
         </div>
 
         <div class="mod-panel">
           <div class="mod-panel-title">FILTERS <span class="scr-hint">· numeric percents enter as &ldquo;15&rdquo; for 15%; market-cap accepts 10B · 500M · 100K</span></div>
+          <div class="scr-universe-row">
+            <span class="scr-lbl">UNIVERSE</span>
+            <button class="scr-uni-btn active" data-uni="core">CORE · ${coreData.count || stocks.length}</button>
+            <button class="scr-uni-btn" data-uni="allus">ALL US · ~5K</button>
+            <input class="scr-text-search stk-tick-input" id="scr-text-search" type="search"
+                   placeholder="search ticker, company or industry…" autocomplete="off">
+          </div>
           <div class="scr-dropdown-row">
             <label>Sector
               <select id="scr-sector">
@@ -308,11 +460,19 @@
           state.sector = 'All';
           state.industry = 'All';
           state.activePreset = null;
+          state.industryLeaderMode = false;
           body.querySelector('#scr-sector').value = 'All';
+          const searchEl = body.querySelector('#scr-text-search');
+          if (searchEl) { searchEl.value = ''; state.textSearch = ''; }
           refreshIndustryOptions();
+        } else if (preset === 'industry-leaders') {
+          state.filters = [];
+          state.activePreset = 'industry-leaders';
+          state.industryLeaderMode = true;
         } else {
           state.filters = SCR_PRESETS[preset].map((f) => ({ ...f }));
           state.activePreset = preset;
+          state.industryLeaderMode = false;
         }
         rerenderFilters();
         reRun();
@@ -344,12 +504,78 @@
         if (!th) return;
         const key = th.dataset.sortKey;
         if (state.sort.key === key) state.sort.asc = !state.sort.asc;
-        else { state.sort.key = key; state.sort.asc = (key === 'ticker' || key === 'name' || key === 'sector'); }
+        else { state.sort.key = key; state.sort.asc = (key === 'ticker' || key === 'name' || key === 'sector' || key === 'industry'); }
+        reRun();
+      });
+
+      // Show/hide metric-only UI depending on universe mode
+      function updateModeUI() {
+        const isAllus = state.universeMode === 'allus';
+        const filterRows = body.querySelector('#scr-filter-rows');
+        const addBtn     = body.querySelector('#scr-add-filter');
+        if (filterRows) filterRows.style.display = isAllus ? 'none' : '';
+        if (addBtn)     addBtn.style.display     = isAllus ? 'none' : '';
+        // Grey out fundamental presets in ALL US (no P/E / ROE data available)
+        body.querySelectorAll('.scr-preset-btn').forEach((b) => {
+          const fundamental = !['industry-leaders', 'clear'].includes(b.dataset.preset);
+          b.disabled     = isAllus && fundamental;
+          b.style.opacity = (isAllus && fundamental) ? '0.35' : '';
+        });
+        // Update universe button active state
+        body.querySelectorAll('.scr-uni-btn').forEach((b) =>
+          b.classList.toggle('active', b.dataset.uni === state.universeMode));
+      }
+
+      // Universe toggle — lazy-loads screener_universe.json on first click
+      body.addEventListener('click', async (ev) => {
+        const btn = ev.target.closest('[data-uni]');
+        if (!btn || btn.disabled) return;
+        const mode = btn.dataset.uni;
+        if (mode === state.universeMode) return;
+
+        if (mode === 'allus') {
+          if (!allusData) {
+            btn.textContent = 'Loading…';
+            btn.disabled = true;
+            try {
+              allusData = await fetchJSON(`${BASE}/screener_universe.json`);
+            } finally {
+              btn.disabled = false;
+              btn.textContent = `ALL US · ${allusData ? allusData.count : '~5K'}`;
+            }
+          }
+          stocks = allusData.stocks || [];
+        } else {
+          stocks = coreData.stocks || [];
+        }
+
+        state.universeMode  = mode;
+        state.filters       = [];
+        state.activePreset  = null;
+        state.industryLeaderMode = false;
+        state.textSearch    = '';
+        state.sector        = 'All';
+        state.industry      = 'All';
+
+        rebuildSectorIndex(stocks);
+        const searchEl = body.querySelector('#scr-text-search');
+        if (searchEl) searchEl.value = '';
+        body.querySelector('#scr-sector').value = 'All';
+        refreshIndustryOptions();
+        updateModeUI();
+        rerenderFilters();
+        reRun();
+      });
+
+      // Text search
+      body.querySelector('#scr-text-search').addEventListener('input', (ev) => {
+        state.textSearch = ev.target.value;
         reRun();
       });
 
       refreshIndustryOptions();
       rerenderFilters();
+      updateModeUI();
       reRun();
       attachTickerClicks(body);
       // Re-attach clicks on result rerender
