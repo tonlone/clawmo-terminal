@@ -1,0 +1,1530 @@
+/* F5 Screener · F6 SCTR · F7 GEX · F8 Smart Money
+   All 4 are "ranked table" modules. Bundled here to share the primitive render. */
+(function () {
+  'use strict';
+  const { fetchJSON, fmt } = window.OC_DATA;
+  const BASE = 'https://stocks.clawmo.tech/data';
+
+  function pnlCls(v) {
+    if (v == null || isNaN(v)) return '';
+    return v > 0 ? 'num-up' : v < 0 ? 'num-dn' : '';
+  }
+  function openStock(ticker) {
+    if (window.OC_UPDATE_PANE_PARAMS && window.OC_OPEN_MODULE) {
+      window.OC_OPEN_MODULE('stock-analysis', { ticker });
+    }
+  }
+
+  /* ── F5 Screener — fundamentals-rich screener with presets + custom filters
+     Mirrors stocks.clawmo.tech screener.html (VALUE / GROWTH / DIVIDEND /
+     QUALITY presets + custom filter rows + sector/industry dropdowns).
+     All filtering runs client-side on the already-cached screener_index.json. */
+  const SCR_METRICS = [
+    { key: 'pe_ratio',          label: 'P/E',              cat: 'Valuation',     fmt: 'num' },
+    { key: 'ps_ratio',          label: 'P/S',              cat: 'Valuation',     fmt: 'num' },
+    { key: 'ev_ebitda',         label: 'EV/EBITDA',        cat: 'Valuation',     fmt: 'num' },
+    { key: 'dividend_yield',    label: 'Div Yield %',      cat: 'Valuation',     fmt: 'pct' },
+    { key: 'gross_margin',      label: 'Gross Margin %',   cat: 'Profitability', fmt: 'pct' },
+    { key: 'operating_margin',  label: 'Operating Margin %', cat: 'Profitability', fmt: 'pct' },
+    { key: 'net_margin',        label: 'Net Margin %',     cat: 'Profitability', fmt: 'pct' },
+    { key: 'fcf_margin',        label: 'FCF Margin %',     cat: 'Profitability', fmt: 'pct' },
+    { key: 'roe',               label: 'ROE %',            cat: 'Profitability', fmt: 'pct' },
+    { key: 'roa',               label: 'ROA %',            cat: 'Profitability', fmt: 'pct' },
+    { key: 'roic',              label: 'ROIC %',           cat: 'Profitability', fmt: 'pct' },
+    { key: 'revenue_growth_1y', label: 'Rev Growth 1Y %',  cat: 'Growth',        fmt: 'pct' },
+    { key: 'revenue_growth_3y', label: 'Rev Growth 3Y %',  cat: 'Growth',        fmt: 'pct' },
+    { key: 'eps_growth_1y',     label: 'EPS Growth 1Y %',  cat: 'Growth',        fmt: 'pct' },
+    { key: 'fcf_growth_1y',     label: 'FCF Growth 1Y %',  cat: 'Growth',        fmt: 'pct' },
+    { key: 'debt_equity',       label: 'Debt / Equity',    cat: 'Solvency',      fmt: 'num' },
+    { key: 'interest_coverage', label: 'Interest Coverage',cat: 'Solvency',      fmt: 'num' },
+    { key: 'market_cap',        label: 'Market Cap',       cat: 'Size',          fmt: 'cur' },
+    { key: 'revenue',           label: 'Revenue',          cat: 'Size',          fmt: 'cur' },
+    { key: 'return_1y',         label: '1Y Return %',      cat: 'Performance',   fmt: 'pctRaw' },
+    { key: 'alpha_1y',          label: '1Y Alpha %',       cat: 'Performance',   fmt: 'pctRaw' },
+  ];
+
+  /* Presets match stocks.clawmo.tech exactly. Values are user-facing
+     (dividend_yield "2" means 2%, not 0.02) — normalized at compare time. */
+  const SCR_PRESETS = {
+    value:    [{ m: 'pe_ratio', op: '<', v: '20' }, { m: 'dividend_yield', op: '>', v: '2' }, { m: 'debt_equity', op: '<', v: '1.5' }],
+    growth:   [{ m: 'revenue_growth_1y', op: '>', v: '20' }, { m: 'roe', op: '>', v: '15' }, { m: 'operating_margin', op: '>', v: '15' }],
+    dividend: [{ m: 'dividend_yield', op: '>', v: '3' }, { m: 'fcf_margin', op: '>', v: '10' }, { m: 'debt_equity', op: '<', v: '2' }],
+    quality:  [{ m: 'roe', op: '>', v: '20' }, { m: 'roic', op: '>', v: '15' }, { m: 'revenue_growth_3y', op: '>', v: '10' }, { m: 'net_margin', op: '>', v: '15' }],
+  };
+
+  /* User-visible Currency input parser: "1B"/"500M"/"100K" → raw number. */
+  function parseScrVal(text, fmt) {
+    if (text == null || text === '') return null;
+    const t = String(text).trim().toUpperCase();
+    if (fmt === 'cur') {
+      const m = t.match(/^(-?[\d.]+)\s*([BMKT]?)$/);
+      if (!m) { const n = Number(t); return isNaN(n) ? null : n; }
+      const mult = { T: 1e12, B: 1e9, M: 1e6, K: 1e3, '': 1 }[m[2] || ''] || 1;
+      return Number(m[1]) * mult;
+    }
+    const n = Number(t);
+    return isNaN(n) ? null : n;
+  }
+
+  function normalizeFilterValue(metric, userVal) {
+    // pct metrics stored as fractions (0.03), user enters the percent
+    if (metric.fmt === 'pct') return userVal / 100;
+    return userVal;
+  }
+
+  function matchFilter(stock, f) {
+    const metric = SCR_METRICS.find((m) => m.key === f.m);
+    if (!metric) return true;
+    const raw = parseScrVal(f.v, metric.fmt);
+    if (raw == null) return true;  // empty value = no constraint
+    const thresh = normalizeFilterValue(metric, raw);
+    const sv = stock[f.m];
+    if (sv == null || typeof sv !== 'number' || !isFinite(sv)) return false;
+    switch (f.op) {
+      case '>':  return sv >  thresh;
+      case '>=': return sv >= thresh;
+      case '<':  return sv <  thresh;
+      case '<=': return sv <= thresh;
+      case '=':  return Math.abs(sv - thresh) < 1e-6;
+      default:   return true;
+    }
+  }
+
+  function fmtMetricCell(stock, metricKey, fmt) {
+    const v = stock[metricKey];
+    if (v == null || (typeof v === 'number' && !isFinite(v))) return '—';
+    if (fmt === 'pct')    return (v * 100).toFixed(2) + '%';
+    if (fmt === 'pctRaw') return (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%';
+    if (fmt === 'cur')    return fmt_.compact(v);
+    return Number(v).toFixed(2);
+  }
+
+  async function renderScreener(body) {
+    body.innerHTML = `<div class="mod-loading">Loading screener…</div>`;
+    try {
+      const d = await fetchJSON(`${BASE}/screener_index.json`);
+      const stocks = d.stocks || [];
+      const state = {
+        filters: [],
+        sector: 'All',
+        industry: 'All',
+        activePreset: null,
+        sort: { key: 'market_cap', asc: false },
+      };
+      // Persist preset choice within a session so tab-switching preserves it
+      const saved = window._scrState;
+      if (saved) Object.assign(state, saved);
+
+      const sectors = {};
+      const indByS = {};
+      stocks.forEach((s) => {
+        if (s.sector) sectors[s.sector] = 1;
+        if (s.sector && s.industry) {
+          (indByS[s.sector] = indByS[s.sector] || {})[s.industry] = 1;
+        }
+      });
+      const sortedSectors = Object.keys(sectors).sort();
+
+      function applyFilters() {
+        return stocks.filter((s) => {
+          if (state.sector   !== 'All' && s.sector   !== state.sector)   return false;
+          if (state.industry !== 'All' && s.industry !== state.industry) return false;
+          return state.filters.every((f) => matchFilter(s, f));
+        });
+      }
+
+      function renderFilterRow(i, f) {
+        return `<div class="scr-filter-row" data-idx="${i}">
+          <select class="scr-f-metric">${
+            SCR_METRICS.map((m) => `<option value="${m.key}"${m.key === f.m ? ' selected' : ''}>${m.label}</option>`).join('')
+          }</select>
+          <select class="scr-f-op">${
+            ['>', '>=', '<', '<=', '='].map((op) => `<option value="${op}"${op === f.op ? ' selected' : ''}>${op}</option>`).join('')
+          }</select>
+          <input class="scr-f-val" type="text" value="${f.v || ''}" placeholder="value">
+          <button class="scr-f-rm" data-idx="${i}" title="Remove">×</button>
+        </div>`;
+      }
+
+      function renderResults(filtered) {
+        const { key, asc } = state.sort;
+        const sorted = [...filtered].sort((a, b) => {
+          const av = a[key], bv = b[key];
+          const an = (av == null || !isFinite(av)) ? -Infinity : Number(av);
+          const bn = (bv == null || !isFinite(bv)) ? -Infinity : Number(bv);
+          if (key === 'ticker' || key === 'name' || key === 'sector') {
+            const cmp = String(av || '').localeCompare(String(bv || ''));
+            return asc ? cmp : -cmp;
+          }
+          return asc ? an - bn : bn - an;
+        });
+        const rows = sorted.slice(0, 120).map((s) => `
+          <tr>
+            <td class="tk clickable" data-tk="${s.ticker}">${s.ticker}</td>
+            <td class="pat">${s.name || '—'}</td>
+            <td class="pat">${s.sector || '—'}</td>
+            <td class="mono">${fmt_.compact(s.market_cap)}</td>
+            <td class="mono">${fmt_.num(s.pe_ratio, 1)}</td>
+            <td class="mono">${s.revenue_growth_1y != null ? (s.revenue_growth_1y * 100).toFixed(1) + '%' : '—'}</td>
+            <td class="mono ${s.roe >= 0.15 ? 'num-up' : s.roe < 0 ? 'num-dn' : ''}">${s.roe != null ? (s.roe * 100).toFixed(1) + '%' : '—'}</td>
+            <td class="mono">${s.dividend_yield != null ? (s.dividend_yield * 100).toFixed(2) + '%' : '—'}</td>
+            <td class="mono ${s.net_margin >= 0.1 ? 'num-up' : s.net_margin < 0 ? 'num-dn' : ''}">${s.net_margin != null ? (s.net_margin * 100).toFixed(1) + '%' : '—'}</td>
+            <td class="mono ${s.return_1y >= 0 ? 'num-up' : 'num-dn'}">${s.return_1y != null ? (s.return_1y >= 0 ? '+' : '') + s.return_1y.toFixed(1) + '%' : '—'}</td>
+          </tr>
+        `).join('');
+        function sortArrow(k) {
+          if (state.sort.key !== k) return '<span class="scr-sort" style="opacity:0.3">▾</span>';
+          return `<span class="scr-sort">${state.sort.asc ? '▴' : '▾'}</span>`;
+        }
+        const headCells = [
+          ['ticker',            'TICKER'],
+          ['name',              'NAME'],
+          ['sector',            'SECTOR'],
+          ['market_cap',        'MCAP'],
+          ['pe_ratio',          'P/E'],
+          ['revenue_growth_1y', 'REV 1Y'],
+          ['roe',               'ROE'],
+          ['dividend_yield',    'DIV'],
+          ['net_margin',        'NM%'],
+          ['return_1y',         'RET 1Y'],
+        ].map(([k, lbl]) => `<th class="scr-th" data-sort-key="${k}">${lbl} ${sortArrow(k)}</th>`).join('');
+        const bodyEl = body.querySelector('#scr-results-body');
+        if (bodyEl) bodyEl.innerHTML = rows || '<tr><td colspan="10" class="empty">no matches — loosen filters or clear</td></tr>';
+        const headEl = body.querySelector('#scr-results-head');
+        if (headEl) headEl.innerHTML = `<tr>${headCells}</tr>`;
+        const countEl = body.querySelector('#scr-count');
+        if (countEl) countEl.textContent = `${filtered.length} matches · top ${Math.min(120, sorted.length)} shown`;
+      }
+
+      function rerenderFilters() {
+        const wrap = body.querySelector('#scr-filter-rows');
+        if (wrap) wrap.innerHTML = state.filters.map((f, i) => renderFilterRow(i, f)).join('');
+        // reflect active preset highlight
+        body.querySelectorAll('.scr-preset-btn').forEach((b) => b.classList.toggle('active', b.dataset.preset === state.activePreset));
+        attachFilterHandlers();
+      }
+
+      function reRun() {
+        window._scrState = { ...state };
+        const filtered = applyFilters();
+        renderResults(filtered);
+      }
+
+      function attachFilterHandlers() {
+        body.querySelectorAll('.scr-f-metric, .scr-f-op, .scr-f-val').forEach((el) => {
+          el.addEventListener('change', readFilters);
+          el.addEventListener('input', debouncedReadFilters);
+        });
+        body.querySelectorAll('.scr-f-rm').forEach((btn) => btn.addEventListener('click', () => {
+          const idx = Number(btn.dataset.idx);
+          state.filters.splice(idx, 1);
+          state.activePreset = null;
+          rerenderFilters();
+          reRun();
+        }));
+      }
+
+      let readTimer = null;
+      function debouncedReadFilters() {
+        if (readTimer) clearTimeout(readTimer);
+        readTimer = setTimeout(readFilters, 200);
+      }
+      function readFilters() {
+        const rows = body.querySelectorAll('.scr-filter-row');
+        state.filters = Array.from(rows).map((r) => ({
+          m:  r.querySelector('.scr-f-metric').value,
+          op: r.querySelector('.scr-f-op').value,
+          v:  r.querySelector('.scr-f-val').value,
+        }));
+        state.activePreset = null;  // editing => custom
+        body.querySelectorAll('.scr-preset-btn').forEach((b) => b.classList.toggle('active', false));
+        reRun();
+      }
+
+      // Build initial shell
+      body.innerHTML = `
+        <div class="mod-head">
+          <div class="mod-title">${window.OC_TITLE('screener')} · FUNDAMENTALS SCREENER</div>
+          <div class="mod-meta">
+            <span class="chip" id="scr-count">${stocks.length} loaded</span>
+            <span class="chip">UNIVERSE · ${stocks.length}</span>
+            <span class="chip chip-dim">${fmt_.ago(d.generated_at)}</span>
+          </div>
+        </div>
+
+        <div class="mod-panel">
+          <div class="mod-panel-title">PRESETS</div>
+          <div class="scr-presets-row">
+            <button class="scr-preset-btn" data-preset="value">VALUE</button>
+            <button class="scr-preset-btn" data-preset="growth">GROWTH</button>
+            <button class="scr-preset-btn" data-preset="dividend">DIVIDEND</button>
+            <button class="scr-preset-btn" data-preset="quality">QUALITY</button>
+            <span class="scr-preset-sep">│</span>
+            <button class="scr-preset-btn scr-preset-clear" data-preset="clear">CLEAR ALL</button>
+          </div>
+        </div>
+
+        <div class="mod-panel">
+          <div class="mod-panel-title">FILTERS <span class="scr-hint">· numeric percents enter as &ldquo;15&rdquo; for 15%; market-cap accepts 10B · 500M · 100K</span></div>
+          <div class="scr-dropdown-row">
+            <label>Sector
+              <select id="scr-sector">
+                <option value="All">All</option>
+                ${sortedSectors.map((s) => `<option value="${s}"${s === state.sector ? ' selected' : ''}>${s}</option>`).join('')}
+              </select>
+            </label>
+            <label>Industry
+              <select id="scr-industry"><option value="All">All</option></select>
+            </label>
+          </div>
+          <div id="scr-filter-rows"></div>
+          <button class="scr-add-btn" id="scr-add-filter">+ ADD FILTER</button>
+        </div>
+
+        <div class="mod-panel">
+          <div class="mod-panel-title">RESULTS · click ticker to open EQ · click column to sort</div>
+          <div class="tbl-wrap">
+            <table class="tbl-dense scr-results-table">
+              <thead id="scr-results-head"></thead>
+              <tbody id="scr-results-body"></tbody>
+            </table>
+          </div>
+        </div>
+      `;
+
+      function refreshIndustryOptions() {
+        const sel = body.querySelector('#scr-industry');
+        if (!sel) return;
+        const list = state.sector === 'All' ? [] : Object.keys(indByS[state.sector] || {}).sort();
+        sel.innerHTML = '<option value="All">All</option>' +
+          list.map((ind) => `<option value="${ind}"${ind === state.industry ? ' selected' : ''}>${ind}</option>`).join('');
+      }
+
+      // Preset handler
+      body.querySelectorAll('.scr-preset-btn').forEach((btn) => btn.addEventListener('click', () => {
+        const preset = btn.dataset.preset;
+        if (preset === 'clear') {
+          state.filters = [];
+          state.sector = 'All';
+          state.industry = 'All';
+          state.activePreset = null;
+          body.querySelector('#scr-sector').value = 'All';
+          refreshIndustryOptions();
+        } else {
+          state.filters = SCR_PRESETS[preset].map((f) => ({ ...f }));
+          state.activePreset = preset;
+        }
+        rerenderFilters();
+        reRun();
+      }));
+
+      // Sector dropdown
+      body.querySelector('#scr-sector').addEventListener('change', (ev) => {
+        state.sector = ev.target.value;
+        state.industry = 'All';
+        refreshIndustryOptions();
+        reRun();
+      });
+      // Industry dropdown
+      body.addEventListener('change', (ev) => {
+        if (ev.target && ev.target.id === 'scr-industry') {
+          state.industry = ev.target.value;
+          reRun();
+        }
+      });
+      // Add-filter button
+      body.querySelector('#scr-add-filter').addEventListener('click', () => {
+        state.filters.push({ m: 'pe_ratio', op: '<', v: '' });
+        state.activePreset = null;
+        rerenderFilters();
+      });
+      // Column sort
+      body.addEventListener('click', (ev) => {
+        const th = ev.target.closest('.scr-th[data-sort-key]');
+        if (!th) return;
+        const key = th.dataset.sortKey;
+        if (state.sort.key === key) state.sort.asc = !state.sort.asc;
+        else { state.sort.key = key; state.sort.asc = (key === 'ticker' || key === 'name' || key === 'sector'); }
+        reRun();
+      });
+
+      refreshIndustryOptions();
+      rerenderFilters();
+      reRun();
+      attachTickerClicks(body);
+      // Re-attach clicks on result rerender
+      const obs = new MutationObserver(() => attachTickerClicks(body));
+      const bodyEl = body.querySelector('#scr-results-body');
+      if (bodyEl) obs.observe(bodyEl, { childList: true });
+    } catch (e) { body.innerHTML = `<div class="mod-err">${e.message}</div>`; }
+  }
+
+  // local alias so the large function above reads cleanly
+  const fmt_ = fmt;
+
+  /* ── F6 SCTR — Technical Rank, US + TSX (full list, sortable, searchable) */
+  const SCTR_COLS = [
+    { key: 'ticker',     label: 'TICKER',  type: 'str', cls: '' },
+    { key: 'name',       label: 'NAME',    type: 'str', cls: '' },
+    { key: 'price',      label: 'PRICE',   type: 'num', cls: 'num' },
+    { key: 'chg_pct',    label: 'CHG',     type: 'num', cls: 'num' },
+    { key: 'sctr_raw',   label: 'SCTR',    type: 'num', cls: 'num' },
+    { key: 'sctr_rank',  label: '%ILE',    type: 'num', cls: 'num' },
+    { key: 'rs_trend',   label: 'TREND',   type: 'str', cls: '' },
+    { key: 'rs',         label: 'RS',      type: null,  cls: '' },  // sparkline, not sortable
+  ];
+
+  async function renderSCTR(body) {
+    body.innerHTML = `<div class="mod-loading">Loading SCTR…</div>`;
+    try {
+      const d = await fetchJSON(`${BASE}/sctr.json`);
+
+      body.innerHTML = `
+        <div class="mod-head">
+          <div class="mod-title">${window.OC_TITLE('sctr')} · TECHNICAL RANK</div>
+          <div class="mod-meta"><span class="chip chip-dim">${fmt.ago(d.us?.updated)}</span></div>
+        </div>
+        <div class="mod-grid-2">
+          <div>${panelShell('us', d.us)}</div>
+          <div>${panelShell('tsx', d.tsx)}</div>
+        </div>
+      `;
+      wireSctrPanel(body, 'us', d.us);
+      wireSctrPanel(body, 'tsx', d.tsx);
+      attachTickerClicks(body);
+    } catch (e) { body.innerHTML = `<div class="mod-err">${e.message}</div>`; }
+  }
+
+  function panelShell(key, u) {
+    if (!u) return '';
+    const title = `${u.label || key.toUpperCase()} · vs ${u.benchmark || '—'}`;
+    return `
+      <div class="mod-panel" data-sctr-panel="${key}">
+        <div class="mod-panel-title">
+          ${title} · <span class="sctr-count mono">${u.count} stocks</span>
+          <input type="search" class="sctr-search stk-tick-input" placeholder="filter ticker/name…" style="margin-left:8px;min-width:140px">
+        </div>
+        <div class="tbl-wrap" style="max-height:calc(100vh - 210px)">
+          <table class="tbl-dense">
+            <thead><tr>
+              ${SCTR_COLS.map(c => c.type
+                ? `<th class="sctr-th${c.cls ? ' '+c.cls : ''}" data-col="${c.key}">${c.label} <span class="sctr-sort-arrow" style="opacity:0.3">▾</span></th>`
+                : `<th class="${c.cls}">${c.label}</th>`).join('')}
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
+  function wireSctrPanel(body, key, u) {
+    if (!u) return;
+    const panelEl = body.querySelector(`[data-sctr-panel="${key}"]`);
+    if (!panelEl) return;
+    const tbody = panelEl.querySelector('tbody');
+    const countEl = panelEl.querySelector('.sctr-count');
+    const searchEl = panelEl.querySelector('.sctr-search');
+    const ths = panelEl.querySelectorAll('.sctr-th');
+
+    const state = { sortCol: 'sctr_rank', sortDir: 'desc', query: '' };
+
+    function render() {
+      const q = state.query.trim().toUpperCase();
+      let list = (u.stocks || []).slice();
+      if (q) {
+        list = list.filter(s =>
+          (s.ticker || '').toUpperCase().includes(q) ||
+          (s.name || '').toUpperCase().includes(q));
+      }
+      const col = SCTR_COLS.find(c => c.key === state.sortCol);
+      list.sort((a, b) => {
+        const av = a[state.sortCol], bv = b[state.sortCol];
+        if (col && col.type === 'str') {
+          const cmp = String(av || '').localeCompare(String(bv || ''));
+          return state.sortDir === 'asc' ? cmp : -cmp;
+        }
+        const an = (av == null || !isFinite(av)) ? -Infinity : Number(av);
+        const bn = (bv == null || !isFinite(bv)) ? -Infinity : Number(bv);
+        return state.sortDir === 'asc' ? an - bn : bn - an;
+      });
+
+      tbody.innerHTML = list.map(s => {
+        const spark = window.OC_CHART && s.rs_sparkline ? window.OC_CHART.sparkline(s.rs_sparkline, { w: 70, h: 16 }) : '';
+        const trendCls = s.rs_trend === 'rising' ? 'num-up' : s.rs_trend === 'falling' ? 'num-dn' : '';
+        return `<tr>
+          <td class="tk clickable" data-tk="${s.ticker}">${s.ticker}</td>
+          <td class="pat">${s.name || '—'}</td>
+          <td class="mono">${fmt.num(s.price, 2)}</td>
+          <td class="mono ${pnlCls(s.chg_pct)}">${fmt.pct(s.chg_pct)}</td>
+          <td class="mono">${fmt.num(s.sctr_raw, 1)}</td>
+          <td class="mono">${fmt.num(s.sctr_rank, 0)}</td>
+          <td class="${trendCls}" style="text-align:center">${s.rs_trend || '—'}</td>
+          <td class="spark-cell">${spark}</td>
+        </tr>`;
+      }).join('') || '<tr><td colspan="8" class="empty">no matches</td></tr>';
+
+      if (countEl) countEl.textContent = q
+        ? `${list.length} of ${u.count} stocks`
+        : `${u.count} stocks`;
+
+      ths.forEach(th => {
+        const isActive = th.dataset.col === state.sortCol;
+        th.classList.toggle('sctr-sorted', isActive);
+        const arrow = th.querySelector('.sctr-sort-arrow');
+        if (arrow) {
+          arrow.textContent = isActive ? (state.sortDir === 'desc' ? '▾' : '▴') : '▾';
+          arrow.style.opacity = isActive ? '1' : '0.3';
+        }
+      });
+
+      attachTickerClicks(panelEl);
+    }
+
+    if (searchEl) {
+      searchEl.addEventListener('input', (e) => {
+        state.query = e.target.value;
+        render();
+      });
+    }
+    ths.forEach(th => {
+      th.addEventListener('click', () => {
+        const col = th.dataset.col;
+        if (!col) return;
+        if (state.sortCol === col) state.sortDir = state.sortDir === 'desc' ? 'asc' : 'desc';
+        else { state.sortCol = col; state.sortDir = (col === 'ticker' || col === 'name') ? 'asc' : 'desc'; }
+        render();
+      });
+    });
+    ths.forEach(th => { if (th.dataset.col) th.style.cursor = 'pointer'; });
+    render();
+  }
+
+  /* ── F7 GEX — Gamma exposure · master-detail ───────────────
+     Universe view: butterfly chart + pos/neg tables (click ticker → detail).
+     Detail view:   per-ticker KPIs, Greeks, strike chart, Greeks table.
+     Ticker selection persists via pane.params.gexTicker so deep-links work. */
+  async function renderGEX(body, ctx) {
+    body.innerHTML = `<div class="mod-loading">Loading GEX…</div>`;
+    try {
+      const d = await fetchJSON(`${BASE}/gex_index.json`);
+      // Cache on body so detail → close doesn't refetch
+      body._gexUniverse = d;
+
+      const preTicker = (ctx && ctx.params && ctx.params.gexTicker) || null;
+      if (preTicker) {
+        renderGexUniverseShell(body, d);  // mod-head + strip (no butterfly/tables)
+        await showGexDetail(body, preTicker);
+      } else {
+        renderGexUniverse(body, d);
+      }
+    } catch (e) { body.innerHTML = `<div class="mod-err">${e.message}</div>`; }
+  }
+
+  function renderGexUniverseShell(body, d) {
+    body.innerHTML = `
+      <div class="mod-head">
+        <div class="mod-title">${window.OC_TITLE('gex')} · GAMMA EXPOSURE</div>
+        <div class="mod-meta">
+          <span class="chip">TOTAL · ${d.total}</span>
+          <span class="chip num-up">POS · ${d.positive_count}</span>
+          <span class="chip num-dn">NEG · ${d.negative_count}</span>
+          <span class="chip chip-dim">${fmt.ago(d.updated)}</span>
+        </div>
+      </div>
+      <div id="gex-main"></div>
+    `;
+  }
+
+  function renderGexUniverse(body, d) {
+    const stocks = d.stocks || [];
+    const totalPos = stocks.filter(s => s.net_gex > 0).reduce((a, s) => a + s.net_gex, 0);
+    const totalNeg = stocks.filter(s => s.net_gex < 0).reduce((a, s) => a + s.net_gex, 0);
+    const netMarket = totalPos + totalNeg;
+    const posNegRatio = totalNeg ? Math.abs(totalPos / totalNeg) : null;
+
+    const topPos = stocks.filter(s => s.net_gex > 0).sort((a, b) => b.net_gex - a.net_gex).slice(0, 10);
+    const topNeg = stocks.filter(s => s.net_gex < 0).sort((a, b) => a.net_gex - b.net_gex).slice(0, 10);
+    const butterfly = [...topPos, ...topNeg.reverse()];
+    const maxMag = Math.max(...butterfly.map(s => Math.abs(s.net_gex)), 1);
+
+    const bar = (s) => {
+      const gex = s.net_gex;
+      const pct = Math.min(100, (Math.abs(gex) / maxMag) * 100);
+      const isPos = gex >= 0;
+      const tooltip = `${s.ticker}: $${(gex / 1e9).toFixed(2)}B net GEX · spot ${s.spot?.toFixed(2)} · ${(s.chg_pct >= 0 ? '+' : '') + (s.chg_pct?.toFixed(2) || '0')}%`;
+      return `
+        <div class="gex-row" title="${tooltip}">
+          <span class="gex-ticker gex-tk-click" data-tk="${s.ticker}" style="cursor:pointer">${s.ticker}</span>
+          <div class="gex-bar-half gex-left">
+            ${!isPos ? `<div class="gex-bar gex-neg" style="width:${pct.toFixed(1)}%"></div>` : ''}
+          </div>
+          <div class="gex-bar-half gex-right">
+            ${isPos ? `<div class="gex-bar gex-pos" style="width:${pct.toFixed(1)}%"></div>` : ''}
+          </div>
+          <span class="gex-val mono ${isPos ? 'num-up' : 'num-dn'}">${isPos ? '+' : ''}${fmt.compact(gex)}</span>
+        </div>
+      `;
+    };
+
+    body.innerHTML = `
+      <div class="mod-head">
+        <div class="mod-title">${window.OC_TITLE('gex')} · GAMMA EXPOSURE</div>
+        <div class="mod-meta">
+          <span class="chip">TOTAL · ${d.total}</span>
+          <span class="chip num-up">POS · ${d.positive_count}</span>
+          <span class="chip num-dn">NEG · ${d.negative_count}</span>
+          <span class="chip chip-dim">${fmt.ago(d.updated)}</span>
+        </div>
+      </div>
+      <div id="gex-main"></div>
+    `;
+    const main = body.querySelector('#gex-main');
+    main.innerHTML = renderGexUniverseBody(d, stocks, totalPos, totalNeg, netMarket, posNegRatio, butterfly, bar);
+    body._gexUniverse = d;
+    wireGexTable(body, 'pos', stocks.filter(s => s.net_gex > 0));
+    wireGexTable(body, 'neg', stocks.filter(s => s.net_gex < 0));
+    // Butterfly ticker click → detail view (table ticker clicks are wired
+    // inside wireGexTable.render() since that DOM re-renders on sort/search).
+    body.querySelectorAll('.gex-row .gex-tk-click').forEach(el => {
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const tk = el.dataset.tk;
+        if (!tk) return;
+        if (window.OC_UPDATE_PANE_PARAMS) window.OC_UPDATE_PANE_PARAMS({ gexTicker: tk });
+        renderGexUniverseShell(body, d);
+        showGexDetail(body, tk);
+      });
+    });
+  }
+
+  function renderGexMarketState(d) {
+    const stocks = d.stocks || [];
+    const spy = stocks.find(s => s.ticker === 'SPY') || null;
+
+    // Fallback to universe majority if SPY is missing (shouldn't happen, but safe)
+    const regime = spy
+      ? spy.regime
+      : ((d.positive_count || 0) >= (d.negative_count || 0) ? 'positive' : 'negative');
+    const isPos = regime === 'positive';
+    const klass = isPos ? 'gex-state-positive' : 'gex-state-negative';
+    const label = isPos ? 'STABILITY BUFFER' : 'VOLATILITY ACCELERATOR';
+
+    const narrative = isPos
+      ? 'Dealers buy dips and sell rallies, dampening volatility. Expect mean-reverting price action and pins at major strikes. Driven by income strategies (covered calls, cash-secured puts). Lower expected realized volatility.'
+      : 'Dealers sell dips and buy rallies, amplifying moves. Expect trend continuation, gap risk, and elevated realized volatility. Driven by speculation and fear (long puts, leverage). Trends accelerate until the gamma flip is reached.';
+
+    const total = d.total || ((d.positive_count || 0) + (d.negative_count || 0)) || 1;
+    const posPct = Math.round(((d.positive_count || 0) / total) * 100);
+    const negPct = Math.round(((d.negative_count || 0) / total) * 100);
+
+    let spyLine = '';
+    if (spy) {
+      const gexBn = spy.net_gex_bn != null ? spy.net_gex_bn : (spy.net_gex || 0) / 1e9;
+      const gexSign = gexBn >= 0 ? '+' : '−';
+      const gexCls = gexBn >= 0 ? 'num-up' : 'num-dn';
+      const chg = spy.chg_pct != null ? spy.chg_pct : 0;
+      const chgSign = chg >= 0 ? '+' : '';
+      const chgCls = chg >= 0 ? 'num-up' : 'num-dn';
+      spyLine = `
+        <span class="chip">SPY NET GEX <span class="mono ${gexCls}">${gexSign}$${Math.abs(gexBn).toFixed(2)}B</span></span>
+        <span class="chip">SPOT <span class="mono">$${(spy.spot || 0).toFixed(2)}</span> <span class="mono ${chgCls}">${chgSign}${chg.toFixed(2)}%</span></span>
+      `;
+    }
+
+    return `
+      <div class="gex-state-hero ${klass}">
+        <div class="gex-state-headline">
+          <span class="gex-state-tag">GAMMA REGIME · ${isPos ? 'POSITIVE' : 'NEGATIVE'}</span>
+          <span class="gex-state-label">${label}</span>
+        </div>
+        <div class="gex-state-stats">
+          ${spyLine}
+          <span class="chip">UNIVERSE <span class="mono">${posPct}% POS / ${negPct}% NEG</span></span>
+        </div>
+        <div class="gex-state-narrative">${narrative}</div>
+      </div>
+    `;
+  }
+
+  function renderGexUniverseBody(d, stocks, totalPos, totalNeg, netMarket, posNegRatio, butterfly, bar) {
+    return `
+        ${renderGexMarketState(d)}
+
+        <div class="acct-strip">
+          <div class="acct-card"><div class="acct-name">TOTAL POSITIVE GEX</div><div class="acct-val"><span class="mono num-up">+${fmt.compact(totalPos)}</span></div><div class="acct-meta"><span>${d.positive_count} tickers dealer long</span></div></div>
+          <div class="acct-card"><div class="acct-name">TOTAL NEGATIVE GEX</div><div class="acct-val"><span class="mono num-dn">${fmt.compact(totalNeg)}</span></div><div class="acct-meta"><span>${d.negative_count} tickers dealer short</span></div></div>
+          <div class="acct-card"><div class="acct-name">NET MARKET GEX</div><div class="acct-val"><span class="mono ${netMarket >= 0 ? 'num-up' : 'num-dn'}">${netMarket >= 0 ? '+' : ''}${fmt.compact(netMarket)}</span></div><div class="acct-meta"><span>${netMarket >= 0 ? 'dealers long → pinning' : 'dealers short → trending'}</span></div></div>
+          <div class="acct-card"><div class="acct-name">POS / NEG RATIO</div><div class="acct-val"><span class="mono">${posNegRatio != null ? posNegRatio.toFixed(2) + '×' : '—'}</span></div><div class="acct-meta"><span>how dominant the long side</span></div></div>
+        </div>
+
+        <div class="mod-panel">
+          <div class="mod-panel-title">NET GEX · TOP 10 POSITIVE + TOP 10 NEGATIVE · butterfly summary</div>
+          <div class="gex-bars">
+            ${butterfly.map(bar).join('')}
+            <div class="gex-axis-label">
+              <span>← dealer short gamma</span>
+              <span class="gex-axis-center">0</span>
+              <span>dealer long gamma →</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="mod-grid-2">
+          ${gexTableShell('pos', 'POSITIVE · pinning zones · dealer long gamma', stocks.filter(s => s.net_gex > 0))}
+          ${gexTableShell('neg', 'NEGATIVE · acceleration risk · dealer short gamma', stocks.filter(s => s.net_gex < 0))}
+        </div>
+    `;
+  }
+
+  const GEX_COLS = [
+    { key: 'ticker',          label: 'TICKER',  type: 'str' },
+    { key: 'spot',            label: 'SPOT',    type: 'num' },
+    { key: 'chg_pct',         label: 'CHG',     type: 'num' },
+    { key: 'put_call_ratio',  label: 'P/C',     type: 'num' },
+    { key: 'avg_iv',          label: 'IV',      type: 'num' },
+    { key: 'iv_rank',         label: 'IVR',     type: 'num', glossary: 'IVR' },
+    { key: 'iv_percentile',   label: 'IVP',     type: 'num', glossary: 'IVP' },
+    { key: 'net_gex',         label: 'GEX',     type: 'num' },
+  ];
+
+  function gexTableShell(sign, title, list) {
+    return `
+      <div class="mod-panel" data-gex-panel="${sign}">
+        <div class="mod-panel-title">
+          <span class="gex-count mono">${list.length}</span> ${title}
+          <input type="search" class="gex-search stk-tick-input" placeholder="filter ticker…" style="margin-left:8px;min-width:140px">
+        </div>
+        <div class="tbl-wrap" style="max-height:calc(100vh - 340px)">
+          <table class="tbl-dense">
+            <thead><tr>
+              ${GEX_COLS.map(c => `<th class="gex-th" data-col="${c.key}"${c.glossary ? ` data-glossary="${c.glossary}"` : ''}>${c.label} <span class="gex-sort-arrow" style="opacity:0.3">▾</span></th>`).join('')}
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
+  function wireGexTable(body, sign, list) {
+    const panelEl = body.querySelector(`[data-gex-panel="${sign}"]`);
+    if (!panelEl) return;
+    const tbody = panelEl.querySelector('tbody');
+    const countEl = panelEl.querySelector('.gex-count');
+    const searchEl = panelEl.querySelector('.gex-search');
+    const ths = panelEl.querySelectorAll('.gex-th');
+    const total = list.length;
+
+    const state = { sortCol: 'net_gex', sortDir: sign === 'pos' ? 'desc' : 'asc', query: '' };
+
+    function render() {
+      const q = state.query.trim().toUpperCase();
+      let rows = list.slice();
+      if (q) rows = rows.filter(s => (s.ticker || '').toUpperCase().includes(q));
+      const col = GEX_COLS.find(c => c.key === state.sortCol);
+      rows.sort((a, b) => {
+        const av = a[state.sortCol], bv = b[state.sortCol];
+        if (col && col.type === 'str') {
+          const cmp = String(av || '').localeCompare(String(bv || ''));
+          return state.sortDir === 'asc' ? cmp : -cmp;
+        }
+        const an = (av == null || !isFinite(av)) ? -Infinity : Number(av);
+        const bn = (bv == null || !isFinite(bv)) ? -Infinity : Number(bv);
+        return state.sortDir === 'asc' ? an - bn : bn - an;
+      });
+
+      tbody.innerHTML = rows.map(s => `<tr>
+        <td class="tk gex-tk-click" data-tk="${s.ticker}" style="cursor:pointer">${s.ticker}</td>
+        <td class="mono">${fmt.num(s.spot, 2)}</td>
+        <td class="mono ${pnlCls(s.chg_pct)}">${fmt.pct(s.chg_pct)}</td>
+        <td class="mono">${fmt.num(s.put_call_ratio, 2)}</td>
+        <td class="mono">${fmt.num(s.avg_iv, 0)}%</td>
+        <td class="mono ${s.iv_rank != null && s.iv_rank > 80 ? 'num-dn' : s.iv_rank != null && s.iv_rank < 20 ? 'num-up' : ''}">${s.iv_rank != null ? fmt.num(s.iv_rank, 0) + '%' : '—'}</td>
+        <td class="mono">${s.iv_percentile != null ? fmt.num(s.iv_percentile, 0) + '%' : '—'}</td>
+        <td class="mono ${sign === 'pos' ? 'num-up' : 'num-dn'}">${fmt.compact(s.net_gex)}</td>
+      </tr>`).join('') || '<tr><td colspan="8" class="empty">no matches</td></tr>';
+
+      if (countEl) countEl.textContent = q ? `${rows.length} of ${total}` : String(total);
+
+      ths.forEach(th => {
+        const active = th.dataset.col === state.sortCol;
+        const arrow = th.querySelector('.gex-sort-arrow');
+        if (arrow) {
+          arrow.textContent = active ? (state.sortDir === 'desc' ? '▾' : '▴') : '▾';
+          arrow.style.opacity = active ? '1' : '0.3';
+        }
+      });
+
+      // Ticker click → show GEX detail (not stock-analysis) within this module.
+      // We use closest(#gex-main) to find the pane body; falls back to panelEl's parents.
+      panelEl.querySelectorAll('td.gex-tk-click').forEach(td => {
+        td.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          const tk = td.dataset.tk;
+          if (!tk) return;
+          const bodyEl = panelEl.closest('.pane-body') || panelEl.parentElement?.closest('.pane-body');
+          if (!bodyEl) return;
+          if (window.OC_UPDATE_PANE_PARAMS) window.OC_UPDATE_PANE_PARAMS({ gexTicker: tk });
+          renderGexUniverseShell(bodyEl, bodyEl._gexUniverse);
+          showGexDetail(bodyEl, tk);
+        });
+      });
+    }
+
+    if (searchEl) searchEl.addEventListener('input', (e) => { state.query = e.target.value; render(); });
+    ths.forEach(th => {
+      th.style.cursor = 'pointer';
+      th.addEventListener('click', () => {
+        const col = th.dataset.col;
+        if (state.sortCol === col) state.sortDir = state.sortDir === 'desc' ? 'asc' : 'desc';
+        else { state.sortCol = col; state.sortDir = col === 'ticker' ? 'asc' : 'desc'; }
+        render();
+      });
+    });
+    render();
+  }
+
+  /* ── GEX detail view ─────────────────────────────────────────
+     Loads /data/gex/{TICKER}.json, replaces #gex-main with a per-ticker
+     brief (KPIs, levels, Greeks, strike chart, Greeks table). Close button
+     restores the universe view from body._gexUniverse. */
+  async function showGexDetail(body, ticker) {
+    const main = body.querySelector('#gex-main');
+    if (!main) return;
+    main.innerHTML = `<div class="mod-loading">Loading ${ticker} detail…</div>`;
+    let td;
+    try {
+      td = await fetchJSON(`https://stocks.clawmo.tech/data/gex/${encodeURIComponent(ticker)}.json`);
+    } catch (e) {
+      main.innerHTML = `<div class="mod-err">No detail available for ${escapeGex(ticker)} — ${escapeGex(e.message)}</div>
+        <div style="margin-top:8px"><button class="gex-back-btn" type="button">← back to universe</button></div>`;
+      wireGexBack(body, main);
+      return;
+    }
+    main.innerHTML = renderGexDetailHtml(td);
+    wireGexBack(body, main);
+    // EQ link
+    const eq = main.querySelector('.gex-open-eq');
+    if (eq) eq.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      if (window.OC_OPEN_MODULE) window.OC_OPEN_MODULE('stock-analysis', { ticker: td.ticker });
+    });
+  }
+
+  function closeGexDetail(body) {
+    if (window.OC_UPDATE_PANE_PARAMS) window.OC_UPDATE_PANE_PARAMS({ gexTicker: null });
+    const d = body._gexUniverse;
+    if (d) renderGexUniverse(body, d);
+    else renderGEX(body, {});  // fallback: refetch
+  }
+
+  function wireGexBack(body, scope) {
+    const btn = scope.querySelector('.gex-back-btn');
+    if (btn) btn.addEventListener('click', () => closeGexDetail(body));
+  }
+
+  function renderGexDetailHtml(td) {
+    const netCls = td.net_gex >= 0 ? 'num-up' : 'num-dn';
+    const regimeLabel = td.regime === 'positive' ? 'POSITIVE · stabilizing' : 'NEGATIVE · amplifying';
+    const regimeCls = td.regime === 'positive' ? 'num-up' : 'num-dn';
+    const pc = td.put_call_ratio;
+    const pcCls = pc == null ? '' : pc > 1 ? 'num-dn' : pc > 0.7 ? 'num-warn' : 'num-up';
+    const pcLabel = pc == null ? '—' : pc > 1.5 ? 'Very bearish' : pc > 1 ? 'Bearish' : pc > 0.7 ? 'Neutral' : 'Bullish';
+    const ivLabel = td.avg_iv == null ? '—' : td.avg_iv > 60 ? 'High volatility' : td.avg_iv > 30 ? 'Moderate' : 'Low volatility';
+    const gs = td.greeks_summary || {};
+    const kl = td.key_levels || {};
+    const expFirst = td.exp_dates && td.exp_dates[0];
+    const expLast = td.exp_dates && td.exp_dates[td.exp_dates.length - 1];
+
+    const svg = buildGexStrikeSvg(td);
+    const greeksTable = buildGexGreeksTable(td);
+
+    const card = (label, val, cls, sub) => `
+      <div class="acct-card">
+        <div class="acct-name">${escapeGex(label)}</div>
+        <div class="acct-val"><span class="mono ${cls || ''}">${val}</span></div>
+        ${sub ? `<div class="acct-meta"><span>${escapeGex(sub)}</span></div>` : ''}
+      </div>`;
+
+    return `
+      <div class="mod-panel" style="padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <div>
+          <span class="mono" style="font-size:15px;font-weight:700">${escapeGex(td.ticker)}</span>
+          <span style="color:var(--fg-dim);margin-left:8px">· Gamma Detail</span>
+          <span class="chip ${td.chg_pct >= 0 ? 'num-up' : 'num-dn'}" style="margin-left:10px">${fmtPrice(td.spot)} ${td.chg_pct >= 0 ? '+' : ''}${(td.chg_pct || 0).toFixed(2)}%</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <a href="#" class="gex-open-eq" style="color:var(--accent);font-size:12px">Open in EQ ↗</a>
+          <button class="gex-back-btn" type="button" style="background:transparent;border:1px solid var(--border);color:var(--fg);border-radius:3px;padding:3px 10px;cursor:pointer">← back to universe</button>
+        </div>
+      </div>
+
+      <div class="acct-strip" style="grid-template-columns:repeat(4,1fr)">
+        ${card('NET GEX',   '$' + fmtGexMag(td.net_gex),            netCls, td.regime_label || '')}
+        ${card('REGIME',    regimeLabel,                            regimeCls, '')}
+        ${card('CALL GEX',  '$' + fmtGexMag(td.total_call_gex),     'num-up',  (td.total_call_oi || 0).toLocaleString() + ' OI')}
+        ${card('PUT GEX',   '$' + fmtGexMag(td.total_put_gex),      'num-dn',  (td.total_put_oi || 0).toLocaleString() + ' OI')}
+      </div>
+      <div class="acct-strip" style="grid-template-columns:repeat(4,1fr);margin-top:6px">
+        ${card('P/C RATIO',    pc != null ? pc.toFixed(3) : '—',                        pcCls,   pcLabel)}
+        ${card('AVG IV',       td.avg_iv != null ? td.avg_iv.toFixed(1) + '%' : '—',    'num-warn', ivLabel)}
+        ${card('EXPIRATIONS',  String(td.expirations_used || 0),                        '',      (expFirst || '—') + ' — ' + (expLast || '—'))}
+        ${card('NET DELTA',    fmtGexMag(gs.net_delta) + ' sh',                         gs.net_delta >= 0 ? 'num-up' : 'num-dn', gs.net_delta >= 0 ? 'Bullish bias' : 'Bearish bias')}
+      </div>
+      <div class="acct-strip" style="grid-template-columns:repeat(2,1fr);margin-top:6px">
+        ${card('IV RANK',
+          td.iv_rank != null ? td.iv_rank.toFixed(0) + '%' : (td.iv_days > 0 ? 'Bldg (' + td.iv_days + 'd)' : '—'),
+          td.iv_rank != null && td.iv_rank > 80 ? 'num-dn' : td.iv_rank != null && td.iv_rank < 20 ? 'num-up' : 'num-warn',
+          td.iv_rank != null && td.iv_rank > 80 ? 'Expensive' : td.iv_rank != null && td.iv_rank < 20 ? 'Cheap' : 'Moderate')}
+        ${card('IV PCTL',
+          td.iv_percentile != null ? td.iv_percentile.toFixed(0) + '%' : '—',
+          'num-warn',
+          td.iv_percentile != null ? td.iv_percentile.toFixed(0) + '% of days below current IV' : 'Building history…')}
+      </div>
+      <div class="acct-strip" style="grid-template-columns:repeat(4,1fr);margin-top:6px">
+        ${card('CALL WALL',    fmtPrice(kl.call_wall),    'num-up',   'Resistance')}
+        ${card('PUT WALL',     fmtPrice(kl.put_wall),     'num-dn',   'Support')}
+        ${card('MAX GAMMA',    fmtPrice(kl.max_gamma),    '',         'Largest |GEX|')}
+        ${card('GAMMA FLIP',   fmtPrice(kl.gamma_flip),   'num-warn', 'Neg→Pos transition')}
+      </div>
+      <div class="acct-strip" style="grid-template-columns:repeat(2,1fr);margin-top:6px">
+        ${card('TOTAL VEGA',  '$' + fmtGexMag(gs.total_vega),              '', 'P&L per 1% IV move')}
+        ${card('TOTAL THETA', '$' + fmtGexMag(gs.total_theta) + '/day',    'num-dn', 'Time decay cost')}
+      </div>
+
+      <div class="mod-panel">
+        <div class="mod-panel-title">NET GEX BY STRIKE · bars show dealer positioning at each level</div>
+        <div style="overflow-x:auto">${svg}</div>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:4px;font-size:10px;color:var(--fg-dim)">
+          <span><span style="display:inline-block;width:10px;height:10px;background:#4ade80;border-radius:2px;margin-right:3px"></span>Positive GEX</span>
+          <span><span style="display:inline-block;width:10px;height:10px;background:#f87171;border-radius:2px;margin-right:3px"></span>Negative GEX</span>
+          <span><span style="display:inline-block;width:10px;height:2px;background:#e6edf3;margin-right:3px;vertical-align:middle"></span>Spot</span>
+          <span><span style="display:inline-block;width:10px;height:2px;background:#4ade80;margin-right:3px;vertical-align:middle"></span>Call Wall</span>
+          <span><span style="display:inline-block;width:10px;height:2px;background:#f87171;margin-right:3px;vertical-align:middle"></span>Put Wall</span>
+          <span><span style="display:inline-block;width:10px;height:2px;background:#fbbf24;margin-right:3px;vertical-align:middle"></span>Gamma Flip</span>
+        </div>
+      </div>
+
+      ${greeksTable}
+    `;
+  }
+
+  function buildGexStrikeSvg(td) {
+    const strikes = td.strikes || [];
+    if (!strikes.length) return '<div class="mod-loading">No strike data</div>';
+    const lo = td.spot * 0.90, hi = td.spot * 1.10;
+    let f = strikes.filter(s => s.strike >= lo && s.strike <= hi && Math.abs(s.net_gex) > 0);
+    if (!f.length) f = strikes.filter(s => Math.abs(s.net_gex) > 0);
+    if (f.length > 80) {
+      const step = Math.ceil(f.length / 80);
+      f = f.filter((_, i) => i % step === 0);
+    }
+    const n = f.length;
+    if (!n) return '<div class="mod-loading">No data in range</div>';
+
+    const W = Math.max(720, n * 14), H = 320;
+    const padL = 60, padR = 15, padT = 22, padB = 46;
+    const chartW = W - padL - padR, chartH = H - padT - padB;
+    const maxAbs = Math.max(...f.map(s => Math.abs(s.net_gex)), 1);
+    const barW = Math.max(2, Math.min(12, (chartW / n) - 1));
+    const zeroY = padT + chartH / 2;
+
+    const kl = td.key_levels || {};
+    const priceToX = (price) => {
+      if (price == null) return null;
+      let idx = -1, dist = Infinity;
+      for (let i = 0; i < n; i++) {
+        const dd = Math.abs(f[i].strike - price);
+        if (dd < dist) { dist = dd; idx = i; }
+      }
+      if (idx < 0 || dist > td.spot * 0.03) return null;
+      return padL + (idx / n) * chartW + (chartW / n) / 2;
+    };
+
+    let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;min-height:300px;font-family:var(--font-mono);font-size:10px">`;
+
+    const gfX = priceToX(kl.gamma_flip);
+    if (gfX != null) {
+      svg += `<rect x="${padL}" y="${padT}" width="${gfX - padL}" height="${chartH}" fill="#f87171" opacity="0.06"/>`;
+      svg += `<rect x="${gfX}" y="${padT}" width="${W - padR - gfX}" height="${chartH}" fill="#4ade80" opacity="0.06"/>`;
+    }
+    svg += `<line x1="${padL}" y1="${zeroY}" x2="${W - padR}" y2="${zeroY}" stroke="#30363d" stroke-width="1"/>`;
+
+    for (let i = -4; i <= 4; i++) {
+      if (i === 0) continue;
+      const yPos = zeroY - (i / 4) * (chartH / 2);
+      const yVal = (i / 4) * maxAbs;
+      svg += `<line x1="${padL}" y1="${yPos}" x2="${W - padR}" y2="${yPos}" stroke="#21262d" stroke-width="0.5"/>`;
+      svg += `<text x="${padL - 5}" y="${yPos + 3}" fill="#6e7681" text-anchor="end" font-size="9">$${fmtGexMag(yVal)}</text>`;
+    }
+
+    const labelEvery = Math.max(1, Math.floor(n / 18));
+    for (let i = 0; i < n; i++) {
+      const s = f[i];
+      const x = padL + (i / n) * chartW + (chartW / n - barW) / 2;
+      const val = s.net_gex;
+      const barH = Math.abs(val) / maxAbs * (chartH / 2);
+      const y = val >= 0 ? zeroY - barH : zeroY;
+      const color = val >= 0 ? '#4ade80' : '#f87171';
+      svg += `<rect x="${x}" y="${y}" width="${barW}" height="${Math.max(1, barH)}" fill="${color}" opacity="0.85" rx="1"><title>${s.strike}: $${fmtGexMag(val)}</title></rect>`;
+      if (i % labelEvery === 0) {
+        svg += `<text x="${x + barW / 2}" y="${H - padB + 12}" fill="#6e7681" text-anchor="middle" font-size="8" transform="rotate(-45 ${x + barW / 2} ${H - padB + 12})">${s.strike}</text>`;
+      }
+    }
+
+    const cwX = priceToX(kl.call_wall);
+    if (cwX != null) {
+      svg += `<line x1="${cwX}" y1="${padT}" x2="${cwX}" y2="${H - padB}" stroke="#4ade80" stroke-width="1" stroke-dasharray="3 3" opacity="0.75"/>`;
+      svg += `<text x="${cwX + 4}" y="${padT + 11}" fill="#4ade80" font-size="8" font-weight="600">CW $${kl.call_wall.toFixed(0)}</text>`;
+    }
+    const pwX = priceToX(kl.put_wall);
+    if (pwX != null) {
+      svg += `<line x1="${pwX}" y1="${padT}" x2="${pwX}" y2="${H - padB}" stroke="#f87171" stroke-width="1" stroke-dasharray="3 3" opacity="0.75"/>`;
+      svg += `<text x="${pwX + 4}" y="${padT + 22}" fill="#f87171" font-size="8" font-weight="600">PW $${kl.put_wall.toFixed(0)}</text>`;
+    }
+    const gfXline = priceToX(kl.gamma_flip);
+    if (gfXline != null) {
+      svg += `<line x1="${gfXline}" y1="${padT}" x2="${gfXline}" y2="${H - padB}" stroke="#fbbf24" stroke-width="1.3" stroke-dasharray="4 3" opacity="0.85"/>`;
+      svg += `<text x="${gfXline + 4}" y="${padT + 33}" fill="#fbbf24" font-size="8" font-weight="600">Flip $${kl.gamma_flip.toFixed(1)}</text>`;
+    }
+    const spotX = priceToX(td.spot);
+    if (spotX != null) {
+      svg += `<line x1="${spotX}" y1="${padT}" x2="${spotX}" y2="${H - padB}" stroke="#e6edf3" stroke-width="1.5" stroke-dasharray="4 3"/>`;
+      svg += `<text x="${spotX}" y="${padT - 4}" fill="#e6edf3" text-anchor="middle" font-size="10" font-weight="600">Spot $${td.spot.toFixed(2)}</text>`;
+    }
+    svg += '</svg>';
+    return svg;
+  }
+
+  function buildGexGreeksTable(td) {
+    const strikes = td.strikes || [];
+    if (!strikes.length || !strikes[0] || strikes[0].call_delta == null) return '';
+    const sorted = strikes.slice().sort((a, b) => Math.abs(a.strike - td.spot) - Math.abs(b.strike - td.spot));
+    const near = sorted.slice(0, 10).sort((a, b) => a.strike - b.strike);
+    const gap = near.length >= 2 ? Math.abs(near[1].strike - near[0].strike) : 1;
+    const rows = near.map(s => {
+      const atm = Math.abs(s.strike - td.spot) < gap * 0.75;
+      const ndCls = s.net_delta >= 0 ? 'num-up' : 'num-dn';
+      const ntCls = s.net_theta >= 0 ? 'num-up' : 'num-warn';
+      return `<tr${atm ? ' style="background:rgba(96,165,250,0.08);font-weight:600"' : ''}>
+        <td>${s.strike.toFixed(1)}${atm ? ' (ATM)' : ''}</td>
+        <td class="mono num-up">${fmtGexMag(s.call_delta)}</td>
+        <td class="mono num-dn">${fmtGexMag(s.put_delta)}</td>
+        <td class="mono ${ndCls}" style="font-weight:600">${fmtGexMag(s.net_delta)}</td>
+        <td class="mono">${fmtGexMag(s.vega)}</td>
+        <td class="mono num-warn">${fmtGexMag(s.call_theta)}</td>
+        <td class="mono num-warn">${fmtGexMag(s.put_theta)}</td>
+        <td class="mono ${ntCls}">${fmtGexMag(s.net_theta)}</td>
+      </tr>`;
+    }).join('');
+    return `
+      <div class="mod-panel">
+        <div class="mod-panel-title">GREEKS PROFILE · 10 NEAREST STRIKES · dealer risk distribution</div>
+        <div style="font-size:10px;color:var(--fg-dim);line-height:1.5;margin-bottom:4px">
+          Shows how market makers' risk exposure is distributed across strike prices near spot. Larger numbers = more open interest = bigger market impact when price approaches.
+        </div>
+        <div class="tbl-wrap">
+          <table class="tbl-dense">
+            <thead><tr>
+              <th>STRIKE</th>
+              <th class="num" title="Calls: dealer buy/sell per $1 up move">CALL Δ</th>
+              <th class="num" title="Puts: dealer buy/sell per $1 up move">PUT Δ</th>
+              <th class="num" title="Combined directional exposure">NET Δ</th>
+              <th class="num" title="P&L change per 1% IV increase">VEGA $</th>
+              <th class="num" title="Daily time decay on calls">CALL Θ</th>
+              <th class="num" title="Daily time decay on puts">PUT Θ</th>
+              <th class="num" title="Total daily time decay at this strike">NET Θ</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>`;
+  }
+
+  function fmtGexMag(n) {
+    if (n == null || !isFinite(n)) return '—';
+    const abs = Math.abs(n); const sign = n < 0 ? '-' : '';
+    if (abs >= 1e9) return sign + (abs / 1e9).toFixed(2) + 'B';
+    if (abs >= 1e6) return sign + (abs / 1e6).toFixed(1) + 'M';
+    if (abs >= 1e3) return sign + (abs / 1e3).toFixed(0) + 'K';
+    return sign + abs.toFixed(0);
+  }
+  function fmtPrice(n) { return n == null || !isFinite(n) ? '—' : '$' + n.toFixed(2); }
+  function escapeGex(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  /* ── F9 Smart Money — institutional flow desk ──────────────
+     3 sub-tabs: Signals (smart-money.json) · Insider (insider-trades.json)
+                · Congress (congress-trades.json).
+     Sub-tab choice persists on pane.params.smyTab so Phase E deep-links work. */
+  const SMY_TABS = [
+    { id: 'signals',  label: 'Signals' },
+    { id: 'insider',  label: 'Insider Trades' },
+    { id: 'congress', label: 'Congress Trades' },
+  ];
+  const INSIDER_URL  = 'https://stocks.clawmo.tech/data/insider-trades.json';
+  const CONGRESS_URL = 'https://stocks.clawmo.tech/data/congress-trades.json';
+
+  async function renderSmartMoney(body, ctx) {
+    body.innerHTML = `<div class="mod-loading">Loading smart money…</div>`;
+    try {
+      // Parallel fetch — insider/congress are independent of signals
+      const [sig, ins, cg] = await Promise.allSettled([
+        fetchJSON(`${BASE}/smart-money.json`),
+        fetchJSON(INSIDER_URL).catch(() => null),
+        fetchJSON(CONGRESS_URL).catch(() => null),
+      ]);
+      const sigData = sig.status === 'fulfilled' ? sig.value : null;
+      const insData = ins.status === 'fulfilled' ? ins.value : null;
+      const cgData  = cg.status  === 'fulfilled' ? cg.value  : null;
+
+      if (!sigData && !insData && !cgData) {
+        body.innerHTML = `<div class="mod-err">Failed to load smart-money data</div>`;
+        return;
+      }
+
+      const initialTab = (ctx && ctx.params && ctx.params.smyTab) || 'signals';
+      body._smyData = { sig: sigData, ins: insData, cg: cgData };
+
+      body.innerHTML = `
+        <div class="mod-head">
+          <div class="mod-title">${window.OC_TITLE('smart-money')} · INSTITUTIONAL FLOW</div>
+          <div class="mod-meta">
+            ${sigData ? `<span class="chip">SIGNALS · ${(sigData.signals || []).length}</span>` : ''}
+            ${insData ? `<span class="chip">INSIDER · ${(insData.summary || {}).total_trades ?? '—'}</span>` : ''}
+            ${cgData  ? `<span class="chip">CONGRESS · ${(cgData.summary || {}).totalTrades ?? '—'}</span>` : ''}
+            <span class="chip chip-dim">${fmt.ago(sigData?.generated_at || insData?.generated_at || cgData?.generated_at)}</span>
+          </div>
+        </div>
+
+        <div class="fin-subtabs">
+          ${SMY_TABS.map(t => `<button class="fin-subtab-btn${t.id === initialTab ? ' active' : ''}" data-smytab="${t.id}">${t.label}</button>`).join('')}
+        </div>
+
+        <div class="fin-body" id="smyBody"></div>
+      `;
+
+      renderSmyTab(body, initialTab);
+      body.querySelectorAll('.fin-subtab-btn[data-smytab]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const tab = btn.dataset.smytab;
+          body.querySelectorAll('.fin-subtab-btn[data-smytab]').forEach(b => b.classList.toggle('active', b === btn));
+          if (window.OC_UPDATE_PANE_PARAMS) window.OC_UPDATE_PANE_PARAMS({ smyTab: tab });
+          renderSmyTab(body, tab);
+        });
+      });
+    } catch (e) { body.innerHTML = `<div class="mod-err">${e.message}</div>`; }
+  }
+
+  function renderSmyTab(body, tab) {
+    const inner = body.querySelector('#smyBody');
+    if (!inner) return;
+    const d = body._smyData || {};
+    switch (tab) {
+      case 'signals':  renderSmySignals(inner, d.sig);  break;
+      case 'insider':  renderSmyInsider(inner, d.ins);  break;
+      case 'congress': renderSmyCongress(inner, d.cg);  break;
+      default:         inner.innerHTML = `<div class="mod-err">Unknown tab: ${tab}</div>`;
+    }
+    attachTickerClicks(inner);
+  }
+
+  /* ── Signals tab — the legacy flow monitor, now sortable ──── */
+  const SMY_SIG_COLS = [
+    { key: 'ticker',             label: 'TICKER', type: 'str' },
+    { key: 'date',               label: 'DATE',   type: 'str' },
+    { key: 'price',              label: 'PRICE',  type: 'num' },
+    { key: 'price_change_pct',   label: 'CHG',    type: 'num' },
+    { key: 'relative_volume',    label: 'RVOL',   type: 'num' },
+    { key: 'mfi',                label: 'MFI',    type: 'num' },
+    { key: 'cmf',                label: 'CMF',    type: 'num' },
+    { key: 'score',              label: 'SCORE',  type: 'num' },
+    { key: 'signal',             label: 'SIGNAL', type: 'str' },
+  ];
+
+  function renderSmySignals(inner, d) {
+    if (!d || !d.signals) { inner.innerHTML = '<div class="mod-loading">No signals data</div>'; return; }
+    const signals = d.signals.slice();
+    const state = { sortCol: 'score', sortDir: 'desc', query: '' };
+
+    inner.innerHTML = `
+      <div class="mod-panel" data-smy-panel="signals">
+        <div class="mod-panel-title">
+          LATEST SIGNALS · <span class="mono smy-sig-count">${signals.length}</span> · hover SIGNAL cell for reason
+          <input type="search" class="smy-sig-search stk-tick-input" placeholder="filter ticker…" style="margin-left:8px;min-width:140px">
+        </div>
+        <div class="tbl-wrap" style="max-height:calc(100vh - 240px)">
+          <table class="tbl-dense">
+            <thead><tr id="smy-sig-head"></tr></thead>
+            <tbody id="smy-sig-body"></tbody>
+          </table>
+        </div>
+      </div>
+    `;
+
+    const headEl = inner.querySelector('#smy-sig-head');
+    const tbody = inner.querySelector('#smy-sig-body');
+    const countEl = inner.querySelector('.smy-sig-count');
+    const searchEl = inner.querySelector('.smy-sig-search');
+
+    function render() {
+      headEl.innerHTML = SMY_SIG_COLS.map(c => {
+        const active = c.key === state.sortCol;
+        const arrow = active ? (state.sortDir === 'desc' ? '▾' : '▴') : '▾';
+        const op = active ? '1' : '0.3';
+        return `<th class="smy-sig-th" data-col="${c.key}" style="cursor:pointer">${c.label} <span style="opacity:${op}">${arrow}</span></th>`;
+      }).join('');
+
+      const q = state.query.trim().toUpperCase();
+      let rows = signals.slice();
+      if (q) rows = rows.filter(s => (s.ticker || '').toUpperCase().includes(q));
+      const col = SMY_SIG_COLS.find(c => c.key === state.sortCol);
+      rows.sort((a, b) => {
+        const av = a[state.sortCol], bv = b[state.sortCol];
+        if (col && col.type === 'str') {
+          const cmp = String(av || '').localeCompare(String(bv || ''));
+          return state.sortDir === 'asc' ? cmp : -cmp;
+        }
+        const an = (av == null || !isFinite(av)) ? -Infinity : Number(av);
+        const bn = (bv == null || !isFinite(bv)) ? -Infinity : Number(bv);
+        return state.sortDir === 'asc' ? an - bn : bn - an;
+      });
+
+      tbody.innerHTML = rows.map(s => `
+        <tr>
+          <td class="tk clickable" data-tk="${s.ticker}">${s.ticker}</td>
+          <td class="pat">${s.date || '—'}</td>
+          <td class="mono">${fmt.num(s.price, 2)}</td>
+          <td class="mono ${pnlCls(s.price_change_pct)}">${fmt.pct(s.price_change_pct)}</td>
+          <td class="mono">${fmt.num(s.relative_volume, 1)}×</td>
+          <td class="mono">${fmt.num(s.mfi, 0)}</td>
+          <td class="mono ${pnlCls(s.cmf)}">${fmt.num(s.cmf, 2)}</td>
+          <td class="mono">${fmt.num(s.score, 0)}</td>
+          <td class="pat" title="${(s.reason || '').replace(/"/g, '&quot;')}">${(s.signal || '—').replace(/_/g, ' ')}</td>
+        </tr>`).join('') || '<tr><td colspan="9" class="empty">no matches</td></tr>';
+
+      if (countEl) countEl.textContent = q ? `${rows.length} of ${signals.length}` : String(signals.length);
+
+      inner.querySelectorAll('.smy-sig-th').forEach(th => {
+        th.addEventListener('click', () => {
+          const c = th.dataset.col;
+          if (state.sortCol === c) state.sortDir = state.sortDir === 'desc' ? 'asc' : 'desc';
+          else { state.sortCol = c; state.sortDir = (c === 'ticker' || c === 'date' || c === 'signal') ? 'asc' : 'desc'; }
+          render();
+        });
+      });
+      attachTickerClicks(inner);
+    }
+    if (searchEl) searchEl.addEventListener('input', e => { state.query = e.target.value; render(); });
+    render();
+  }
+
+  /* ── Insider tab — summary + Top Week + Latest Buys/Sales ─── */
+  function renderSmyInsider(inner, d) {
+    if (!d) { inner.innerHTML = '<div class="mod-loading">No insider-trades data</div>'; return; }
+    const sum = d.summary || {};
+    const totalB = sum.total_buy_value || 0;
+    const totalS = sum.total_sell_value || 0;
+    const net = totalB - totalS;
+    const sentimentCls = net > 0 ? 'num-up' : net < 0 ? 'num-dn' : '';
+    const ratioCls = (sum.buy_sell_ratio || 0) >= 1 ? 'num-up' : 'num-dn';
+    const topB = (sum.top_bought_tickers || []).slice(0, 5);
+    const topS = (sum.top_sold_tickers || []).slice(0, 5);
+
+    inner.innerHTML = `
+      <div class="acct-strip" style="grid-template-columns:repeat(4,1fr)">
+        <div class="acct-card">
+          <div class="acct-name">NET FLOW · 90D</div>
+          <div class="acct-val"><span class="mono ${sentimentCls}">${net >= 0 ? '+' : ''}${fmt.compact(net)}</span></div>
+          <div class="acct-meta"><span>buys ${fmt.compact(totalB)} · sells ${fmt.compact(totalS)}</span></div>
+        </div>
+        <div class="acct-card">
+          <div class="acct-name">BUY / SELL RATIO</div>
+          <div class="acct-val"><span class="mono ${ratioCls}">${sum.buy_sell_ratio != null ? sum.buy_sell_ratio.toFixed(2) + '×' : '—'}</span></div>
+          <div class="acct-meta"><span>$ buys / $ sells</span></div>
+        </div>
+        <div class="acct-card">
+          <div class="acct-name">BUYS · trades</div>
+          <div class="acct-val"><span class="mono num-up">${sum.buy_count ?? '—'}</span></div>
+          <div class="acct-meta"><span>across ${topB.length} top tickers</span></div>
+        </div>
+        <div class="acct-card">
+          <div class="acct-name">SELLS · trades</div>
+          <div class="acct-val"><span class="mono num-dn">${sum.sell_count ?? '—'}</span></div>
+          <div class="acct-meta"><span>across ${topS.length} top tickers</span></div>
+        </div>
+      </div>
+
+      <div class="mod-grid-2">
+        <div class="mod-panel">
+          <div class="mod-panel-title">TOP TICKERS · bought · 90d aggregate</div>
+          ${renderTopTickerList(topB, 'buy')}
+        </div>
+        <div class="mod-panel">
+          <div class="mod-panel-title">TOP TICKERS · sold · 90d aggregate</div>
+          ${renderTopTickerList(topS, 'sell')}
+        </div>
+      </div>
+
+      ${renderInsiderListPanel('Latest Buys', d.latest_buys || [], 'buy')}
+      ${renderInsiderListPanel('Latest Sales', d.latest_sales || [], 'sell')}
+    `;
+    wireInsiderFilters(inner);
+  }
+
+  function renderTopTickerList(list, side) {
+    if (!list.length) return '<div class="mod-loading">none</div>';
+    return `<div class="tbl-wrap"><table class="tbl-dense">
+      <thead><tr><th>TICKER</th><th class="num">TRADES</th><th class="num">VALUE</th></tr></thead>
+      <tbody>${list.map(t => `<tr>
+        <td class="tk clickable" data-tk="${t.ticker || t.symbol}">${t.ticker || t.symbol || '—'}</td>
+        <td class="mono">${t.count ?? t.trades ?? '—'}</td>
+        <td class="mono ${side === 'buy' ? 'num-up' : 'num-dn'}">${fmt.compact(t.value || t.total_value)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+  }
+
+  function renderInsiderListPanel(title, list, side) {
+    const sideClass = side === 'buy' ? 'num-up' : 'num-dn';
+    const panelId = side === 'buy' ? 'ins-buy' : 'ins-sell';
+    return `
+      <div class="mod-panel" data-insider-panel="${side}">
+        <div class="mod-panel-title">
+          ${title.toUpperCase()} · <span class="mono ins-count">${list.length}</span>
+          <input type="search" class="ins-search stk-tick-input" placeholder="filter ticker…" style="margin-left:8px;min-width:140px">
+        </div>
+        <div class="tbl-wrap" style="max-height:320px">
+          <table class="tbl-dense">
+            <thead><tr>
+              <th>DATE</th><th>TICKER</th><th>OWNER</th><th>ROLE</th>
+              <th class="num">SHARES</th><th class="num">@</th><th class="num">VALUE</th>
+              <th class="num">TOTAL HELD</th><th>SEC</th>
+            </tr></thead>
+            <tbody data-panel-tbody="${panelId}">${renderInsiderRows(list, side)}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderInsiderRows(list, side) {
+    if (!list.length) return '<tr><td colspan="9" class="empty">no trades</td></tr>';
+    const cls = side === 'buy' ? 'num-up' : 'num-dn';
+    return list.map(t => `<tr>
+      <td class="mono">${t.date || '—'}</td>
+      <td class="tk clickable" data-tk="${t.ticker}">${t.ticker}</td>
+      <td>${t.owner || '—'}</td>
+      <td class="small">${(t.relationship || '—').slice(0, 40)}</td>
+      <td class="mono">${fmt.compact(t.shares)}</td>
+      <td class="mono">${t.cost != null ? '$' + Number(t.cost).toFixed(2) : '—'}</td>
+      <td class="mono ${cls}">${fmt.compact(t.value)}</td>
+      <td class="mono">${fmt.compact(t.shares_total)}</td>
+      <td>${t.sec_link ? `<a href="${t.sec_link}" target="_blank" rel="noopener" style="color:var(--accent)">Form 4 ↗</a>` : '—'}</td>
+    </tr>`).join('');
+  }
+
+  function wireInsiderFilters(inner) {
+    inner.querySelectorAll('[data-insider-panel]').forEach(panelEl => {
+      const side = panelEl.dataset.insiderPanel;
+      const searchEl = panelEl.querySelector('.ins-search');
+      const countEl = panelEl.querySelector('.ins-count');
+      const tbody = panelEl.querySelector('tbody');
+      if (!searchEl || !tbody) return;
+      // We need the source list — re-read from body._smyData.ins
+      const rootBody = panelEl.closest('.pane-body');
+      const d = rootBody && rootBody._smyData && rootBody._smyData.ins;
+      if (!d) return;
+      const list = side === 'buy' ? (d.latest_buys || []) : (d.latest_sales || []);
+      const total = list.length;
+
+      searchEl.addEventListener('input', () => {
+        const q = searchEl.value.trim().toUpperCase();
+        const filtered = q ? list.filter(t => (t.ticker || '').toUpperCase().includes(q)) : list;
+        tbody.innerHTML = renderInsiderRows(filtered, side);
+        if (countEl) countEl.textContent = q ? `${filtered.length} of ${total}` : String(total);
+        attachTickerClicks(panelEl);
+      });
+    });
+  }
+
+  /* ── Congress tab — summary + chamber/type/notable filters ─ */
+  const CG_COLS = [
+    { key: 'date',       label: 'TX DATE',   type: 'str' },
+    { key: 'disclosed',  label: 'DISCLOSED', type: 'str' },
+    { key: 'name',       label: 'MEMBER',    type: 'str' },
+    { key: 'chamber',    label: 'CHAMBER',   type: 'str' },
+    { key: 'district',   label: 'DIST',      type: 'str' },
+    { key: 'symbol',     label: 'TICKER',    type: 'str' },
+    { key: 'type',       label: 'TX',        type: 'str' },
+    { key: 'amount',     label: 'AMOUNT',    type: 'str' },
+  ];
+
+  function renderSmyCongress(inner, d) {
+    if (!d) { inner.innerHTML = '<div class="mod-loading">No congress data</div>'; return; }
+    const sum = d.summary || {};
+    const trades = d.trades || [];
+
+    inner.innerHTML = `
+      <div class="acct-strip" style="grid-template-columns:repeat(4,1fr)">
+        <div class="acct-card">
+          <div class="acct-name">TOTAL TRADES</div>
+          <div class="acct-val"><span class="mono">${sum.totalTrades ?? trades.length}</span></div>
+          <div class="acct-meta"><span>${sum.uniqueMembers ?? '—'} unique members</span></div>
+        </div>
+        <div class="acct-card">
+          <div class="acct-name">PURCHASES / SALES</div>
+          <div class="acct-val"><span class="mono num-up">${sum.purchases ?? '—'}</span><span class="acct-slash"> / </span><span class="mono num-dn">${sum.sales ?? '—'}</span></div>
+          <div class="acct-meta"><span>type split</span></div>
+        </div>
+        <div class="acct-card">
+          <div class="acct-name">SENATE</div>
+          <div class="acct-val"><span class="mono">${sum.senate ?? '—'}</span></div>
+          <div class="acct-meta"><span>upper chamber trades</span></div>
+        </div>
+        <div class="acct-card">
+          <div class="acct-name">HOUSE</div>
+          <div class="acct-val"><span class="mono">${sum.house ?? '—'}</span></div>
+          <div class="acct-meta"><span>lower chamber trades</span></div>
+        </div>
+      </div>
+
+      <div class="mod-panel" data-smy-panel="congress">
+        <div class="mod-panel-title">
+          CONGRESS TRADES · <span class="mono smy-cg-count">${trades.length}</span>
+          <span class="fin-stmt-toggles" style="margin-left:10px">
+            <button class="hld-cg-btn smy-cg-btn" data-ch="all" type="button">ALL</button>
+            <button class="hld-cg-btn smy-cg-btn" data-ch="senate" type="button">SENATE</button>
+            <button class="hld-cg-btn smy-cg-btn" data-ch="house" type="button">HOUSE</button>
+          </span>
+          <span class="fin-stmt-toggles" style="margin-left:8px">
+            <button class="hld-cg-btn smy-cg-type-btn" data-tp="all" type="button">ALL TX</button>
+            <button class="hld-cg-btn smy-cg-type-btn" data-tp="buy" type="button">BUY</button>
+            <button class="hld-cg-btn smy-cg-type-btn" data-tp="sell" type="button">SELL</button>
+          </span>
+          <span class="fin-stmt-toggles" style="margin-left:8px">
+            <button class="hld-cg-btn smy-cg-notable-btn" data-nt="all" type="button">ALL MEMBERS</button>
+            <button class="hld-cg-btn smy-cg-notable-btn" data-nt="notable" type="button">★ NOTABLE</button>
+          </span>
+          <input type="search" class="smy-cg-search stk-tick-input" placeholder="filter name/ticker…" style="margin-left:8px;min-width:160px">
+        </div>
+        <div class="tbl-wrap" style="max-height:calc(100vh - 340px);min-height:300px">
+          <table class="tbl-dense">
+            <thead><tr id="smy-cg-head"></tr></thead>
+            <tbody id="smy-cg-body"></tbody>
+          </table>
+        </div>
+      </div>
+    `;
+    wireCongressTable(inner, trades);
+  }
+
+  function wireCongressTable(inner, trades) {
+    const panelEl = inner.querySelector('[data-smy-panel="congress"]');
+    if (!panelEl) return;
+    const tbody = panelEl.querySelector('#smy-cg-body');
+    const headEl = panelEl.querySelector('#smy-cg-head');
+    const countEl = panelEl.querySelector('.smy-cg-count');
+    const searchEl = panelEl.querySelector('.smy-cg-search');
+    const total = trades.length;
+
+    const state = { chamber: 'all', type: 'all', notable: 'all', sortCol: 'date', sortDir: 'desc', query: '' };
+
+    function styleBtns(sel, key) {
+      panelEl.querySelectorAll(sel).forEach(b => {
+        const active = b.dataset[key] === state[key === 'ch' ? 'chamber' : key === 'tp' ? 'type' : 'notable'];
+        b.classList.toggle('active', active);
+      });
+    }
+
+    function render() {
+      headEl.innerHTML = CG_COLS.map(c => {
+        const active = c.key === state.sortCol;
+        const arrow = active ? (state.sortDir === 'desc' ? '▾' : '▴') : '▾';
+        const op = active ? '1' : '0.3';
+        return `<th class="smy-cg-th" data-col="${c.key}" style="cursor:pointer">${c.label} <span style="opacity:${op}">${arrow}</span></th>`;
+      }).join('') + '<th>LINK</th>';
+
+      let rows = trades.slice();
+      if (state.chamber !== 'all') rows = rows.filter(t => t.chamber === state.chamber);
+      if (state.type === 'buy') rows = rows.filter(t => (t.type || '').toLowerCase().includes('purchase') || (t.type || '').toLowerCase().includes('buy'));
+      if (state.type === 'sell') rows = rows.filter(t => (t.type || '').toLowerCase().includes('sale') || (t.type || '').toLowerCase().includes('sell'));
+      const getNotable = window.OC_NOTABLE && window.OC_NOTABLE.getNotable;
+      if (state.notable === 'notable' && getNotable) rows = rows.filter(t => !!getNotable(t.name));
+      const q = state.query.trim().toUpperCase();
+      if (q) rows = rows.filter(t => (t.name || '').toUpperCase().includes(q) || (t.symbol || '').toUpperCase().includes(q));
+
+      const col = CG_COLS.find(c => c.key === state.sortCol);
+      rows.sort((a, b) => {
+        const av = a[state.sortCol], bv = b[state.sortCol];
+        if (col && col.type === 'str') {
+          const cmp = String(av || '').localeCompare(String(bv || ''));
+          return state.sortDir === 'asc' ? cmp : -cmp;
+        }
+        const an = (av == null || !isFinite(av)) ? -Infinity : Number(av);
+        const bn = (bv == null || !isFinite(bv)) ? -Infinity : Number(bv);
+        return state.sortDir === 'asc' ? an - bn : bn - an;
+      });
+
+      const badge = window.OC_NOTABLE && window.OC_NOTABLE.notableBadge;
+      tbody.innerHTML = rows.slice(0, 500).map(t => {
+        const txLow = (t.type || '').toLowerCase();
+        const txCls = txLow.includes('purchase') || txLow.includes('buy') ? 'num-up' : txLow.includes('sale') || txLow.includes('sell') ? 'num-dn' : '';
+        const chamberChip = t.chamber === 'senate'
+          ? '<span style="background:#1a3a5c;color:#fff;padding:1px 6px;border-radius:2px;font-size:9px;font-weight:600">SENATE</span>'
+          : t.chamber === 'house'
+            ? '<span style="background:#5c1a1a;color:#fff;padding:1px 6px;border-radius:2px;font-size:9px;font-weight:600">HOUSE</span>'
+            : (t.chamber || '—');
+        const notableHtml = badge ? badge(t.name) : '';
+        return `<tr>
+          <td class="mono">${t.date || '—'}</td>
+          <td class="mono small">${t.disclosed || '—'}</td>
+          <td>${t.name || '—'}${notableHtml}</td>
+          <td>${chamberChip}</td>
+          <td class="small">${t.district || '—'}</td>
+          <td class="tk clickable" data-tk="${t.symbol || ''}">${t.symbol || '—'}</td>
+          <td class="${txCls}">${t.type || '—'}</td>
+          <td class="mono">${t.amount || '—'}</td>
+          <td>${t.link ? `<a href="${t.link}" target="_blank" rel="noopener" style="color:var(--accent)">Filing ↗</a>` : '—'}</td>
+        </tr>`;
+      }).join('') || '<tr><td colspan="9" class="empty">no trades match filters</td></tr>';
+
+      if (countEl) countEl.textContent = `${rows.length} of ${total}${rows.length > 500 ? ' · showing top 500' : ''}`;
+      styleBtns('.smy-cg-btn', 'ch');
+      styleBtns('.smy-cg-type-btn', 'tp');
+      styleBtns('.smy-cg-notable-btn', 'nt');
+
+      panelEl.querySelectorAll('.smy-cg-th').forEach(th => {
+        th.addEventListener('click', () => {
+          const c = th.dataset.col;
+          if (state.sortCol === c) state.sortDir = state.sortDir === 'desc' ? 'asc' : 'desc';
+          else { state.sortCol = c; state.sortDir = (c === 'date' || c === 'disclosed') ? 'desc' : 'asc'; }
+          render();
+        });
+      });
+      attachTickerClicks(panelEl);
+    }
+
+    panelEl.querySelectorAll('.smy-cg-btn').forEach(b => b.addEventListener('click', () => { state.chamber = b.dataset.ch; render(); }));
+    panelEl.querySelectorAll('.smy-cg-type-btn').forEach(b => b.addEventListener('click', () => { state.type = b.dataset.tp; render(); }));
+    panelEl.querySelectorAll('.smy-cg-notable-btn').forEach(b => b.addEventListener('click', () => { state.notable = b.dataset.nt; render(); }));
+    if (searchEl) searchEl.addEventListener('input', () => { state.query = searchEl.value; render(); });
+    render();
+  }
+
+  function attachTickerClicks(body) {
+    body.querySelectorAll('.tk.clickable').forEach(el => {
+      el.addEventListener('click', () => {
+        const t = el.dataset.tk;
+        if (t && window.OC_OPEN_MODULE) window.OC_OPEN_MODULE('stock-analysis', { ticker: t });
+      });
+    });
+  }
+
+  window.OC_MODULES = window.OC_MODULES || {};
+  window.OC_MODULES['screener']    = { render: renderScreener };
+  window.OC_MODULES['sctr']        = { render: renderSCTR };
+  window.OC_MODULES['gex']         = { render: renderGEX };
+  window.OC_MODULES['smart-money'] = { render: renderSmartMoney };
+})();

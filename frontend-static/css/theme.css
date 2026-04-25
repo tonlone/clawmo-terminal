@@ -1,0 +1,100 @@
+/* terminal.clawmo.tech — theme tokens
+   Discipline: EVERY color in shell.css / module CSS must reference var(--*).
+   Never inline hex literals. P&L colors are global (never theme-override). */
+
+:root {
+  /* global, never themed */
+  --pnl-up: #10B981;
+  --pnl-dn: #EF4444;
+  --pnl-flat: #8A8A92;
+
+  /* dimensions */
+  --row-h: 22px;
+  --top-bar-h: 36px;
+  --status-bar-h: 24px;
+  --rail-w: 44px;
+  --font-ui: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', Menlo, Consolas, monospace;
+  --fs-ui: 13px;
+  --fs-data: 11px;
+  --fs-status: 10px;
+  --fs-panel-title: 12px;
+
+  /* defaults (overridden per theme below) */
+  --bg: #0A0A0B;
+  --panel: #14141A;
+  --panel-alt: #1A1A22;
+  --border: #26262E;
+  --border-strong: #3A3A44;
+  --fg: #E8E8EC;
+  --fg-dim: #8A8A92;
+  --fg-faint: #5A5A62;
+  --accent: #FF6B35;
+  --accent-dim: #A8452A;
+  --accent-bg: rgba(255, 107, 53, 0.08);
+  --focus-ring: rgba(255, 107, 53, 0.45);
+}
+
+/* A — Claw Ember (default) */
+:root[data-theme="ember"] {
+  --bg: #0A0A0B;
+  --panel: #14141A;
+  --panel-alt: #1A1A22;
+  --border: #26262E;
+  --border-strong: #3A3A44;
+  --fg: #E8E8EC;
+  --fg-dim: #8A8A92;
+  --fg-faint: #5A5A62;
+  --accent: #FF6B35;
+  --accent-dim: #A8452A;
+  --accent-bg: rgba(255, 107, 53, 0.08);
+  --focus-ring: rgba(255, 107, 53, 0.45);
+}
+
+/* B — Obsidian Cyan */
+:root[data-theme="cyan"] {
+  --bg: #0D1117;
+  --panel: #161B22;
+  --panel-alt: #1C2129;
+  --border: #2A313C;
+  --border-strong: #404854;
+  --fg: #E6EDF3;
+  --fg-dim: #7D8590;
+  --fg-faint: #484F58;
+  --accent: #00E5FF;
+  --accent-dim: #0097A7;
+  --accent-bg: rgba(0, 229, 255, 0.08);
+  --focus-ring: rgba(0, 229, 255, 0.45);
+}
+
+/* C1 — Phosphor Green */
+:root[data-theme="phosphor"] {
+  --bg: #050A05;
+  --panel: #0A140A;
+  --panel-alt: #0E1C0E;
+  --border: #1A2E1A;
+  --border-strong: #2A482A;
+  --fg: #D4F0D4;
+  --fg-dim: #6FA06F;
+  --fg-faint: #3C603C;
+  --accent: #39FF14;
+  --accent-dim: #20A10A;
+  --accent-bg: rgba(57, 255, 20, 0.06);
+  --focus-ring: rgba(57, 255, 20, 0.45);
+}
+
+/* C2 — Warm Gold */
+:root[data-theme="gold"] {
+  --bg: #0D0B08;
+  --panel: #17130D;
+  --panel-alt: #1E1913;
+  --border: #2E2720;
+  --border-strong: #48402F;
+  --fg: #EDE7D8;
+  --fg-dim: #A89B7C;
+  --fg-faint: #6B6148;
+  --accent: #E6B84A;
+  --accent-dim: #8C6F24;
+  --accent-bg: rgba(230, 184, 74, 0.08);
+  --focus-ring: rgba(230, 184, 74, 0.45);
+}

@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en" data-theme="ember">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>terminal.clawmo.tech</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%230a0c10'/><path d='M4 6 L28 6 L28 26 Z' fill='%23FF6B35'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/theme.css">
+<link rel="stylesheet" href="/css/shell.css">
+<link rel="stylesheet" href="/css/modules.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css" />
+</head>
+<body>
+<div id="app">
+
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="brand-mark">◢</span>
+      <span class="brand-name">OPENCLAW</span>
+      <span class="brand-sub">TERMINAL</span>
+    </div>
+    <button class="cmdk" id="cmdkTrigger" title="Open command palette (⌘K / Ctrl+K)">
+      <span class="cmdk-icon">⌕</span>
+      <span class="cmdk-label">Open command…</span>
+      <span class="cmdk-kbd">⌘K</span>
+    </button>
+    <div class="tape" aria-label="Ticker tape">
+      <div class="tape-inner" id="tape"></div>
+    </div>
+    <div class="topbar-right">
+      <div class="regime" id="regimePill" data-regime="bull">
+        <span class="regime-dot"></span>
+        <span class="regime-label">BULL</span>
+      </div>
+      <div class="layout-switcher" role="group" aria-label="Workspace layout">
+        <button data-layout="1"   title="Single pane (press 1)">▢</button>
+        <button data-layout="2v"  title="Two vertical panes (press 2)">▯▯</button>
+        <button data-layout="2h"  title="Two horizontal panes (press 3)">▤</button>
+        <button data-layout="quad" title="2×2 quad (press 4)">▦</button>
+      </div>
+    </div>
+  </header>
+
+  <aside class="rail" id="rail" aria-label="Module rail"></aside>
+
+  <main class="workspace" id="workspace" data-layout="1"></main>
+
+  <footer class="statusbar">
+    <span class="sb-item"><span class="sb-dot live"></span>LIVE</span>
+    <span class="sb-item sb-sep">·</span>
+    <span class="sb-item" id="sbRegime">regime: BULL</span>
+    <span class="sb-item sb-sep">·</span>
+    <span class="sb-item" id="sbSpy">SPY ———</span>
+    <span class="sb-item sb-sep">·</span>
+    <span class="sb-item" id="sbUpdate">update: ———</span>
+    <span class="sb-spacer"></span>
+    <span class="sb-item sb-kbd">⌘K</span>
+    <span class="sb-item sb-sep">·</span>
+    <label class="sb-theme">
+      lang:
+      <select id="langSelect">
+        <option value="EN">EN</option>
+        <option value="CN">中</option>
+      </select>
+    </label>
+    <span class="sb-item sb-sep">·</span>
+    <label class="sb-theme">
+      theme:
+      <select id="themeSelect">
+        <option value="ember">ember</option>
+        <option value="cyan">cyan</option>
+        <option value="phosphor">phosphor</option>
+        <option value="gold">gold</option>
+      </select>
+    </label>
+    <span class="sb-item sb-sep">·</span>
+    <span class="sb-item sb-ver">v0.2.0</span>
+  </footer>
+
+</div>
+
+<!-- Command palette overlay -->
+<div class="palette-overlay" id="paletteOverlay" hidden>
+  <div class="palette" role="dialog" aria-label="Command palette">
+    <div class="palette-input-row">
+      <span class="palette-prompt">&gt;</span>
+      <input class="palette-input" id="paletteInput" type="text" autocomplete="off" spellcheck="false"
+             placeholder="module, ticker, or command…">
+      <kbd class="palette-esc">ESC</kbd>
+    </div>
+    <div class="palette-results" id="paletteResults"></div>
+    <div class="palette-foot">
+      <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+      <span><kbd>↵</kbd> open</span>
+      <span><kbd>ESC</kbd> close</span>
+      <span class="palette-hint">try: <em>nvda</em>, <em>signals</em>, <em>theme gold</em>, <em>layout quad</em></span>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
+<script src="/js/data.js"></script>
+<script src="/js/i18n.js"></script>
+<script src="/js/charts.js"></script>
+<script src="/js/glossary.js"></script>
+<script src="/js/tooltip-auto.js"></script>
+<script src="/js/health-checks.js"></script>
+<script src="/js/notable-traders.js"></script>
+<script src="/js/app.js"></script>
+<script src="/js/modules/financials.js"></script>
+<script src="/js/modules/holdings.js"></script>
+<script src="/js/modules/signals.js"></script>
+<script src="/js/modules/breadth.js"></script>
+<script src="/js/modules/portfolio.js"></script>
+<script src="/js/modules/stock.js"></script>
+<script src="/js/modules/tables.js"></script>
+<script src="/js/modules/macro.js"></script>
+<script src="/js/modules/assets.js"></script>
+<script src="/js/modules/heatmap.js"></script>
+<script src="/js/modules/calendar.js"></script>
+<script src="/js/modules/external.js"></script>
+<script src="/js/modules/polymarket.js"></script>
+<script src="/js/modules/geo.js"></script>
+</body>
+</html>
