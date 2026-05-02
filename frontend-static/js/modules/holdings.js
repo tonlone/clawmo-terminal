@@ -501,6 +501,7 @@
     const sym = (ticker || 'AAPL').toUpperCase();
     market = market || 'US';
     const tab = initialTab || 'summary';
+    if (window.OC_UPDATE_PANE_PARAMS) window.OC_UPDATE_PANE_PARAMS({ ticker: sym, market });
 
     body.innerHTML = `
       <div class="fin-head-row">

@@ -42,6 +42,25 @@
     return lights;
   }
 
+  /* Split a series into contiguous runs (so a missing SMA day doesn't draw
+     a stray segment from before-the-gap to after-the-gap). Returns an array
+     of "x1,y1 x2,y2 ..." polyline strings. */
+  function buildRuns(pts, key, sx, sy) {
+    const runs = [];
+    let cur = [];
+    for (let i = 0; i < pts.length; i++) {
+      const v = pts[i][key];
+      if (typeof v === 'number') {
+        cur.push(`${sx(i).toFixed(1)},${sy(v).toFixed(1)}`);
+      } else if (cur.length) {
+        if (cur.length > 1) runs.push(cur.join(' '));
+        cur = [];
+      }
+    }
+    if (cur.length > 1) runs.push(cur.join(' '));
+    return runs;
+  }
+
   /* Pro-grade sparkline:
      - Price line + optional SMA200 line + target line
      - Optional volume zone (toggleable) as faint green/red bars
@@ -53,43 +72,53 @@
     opts = opts || {};
     if (!Array.isArray(chartData) || !chartData.length) return { html: '', meta: null };
     const W = opts.w || 640;
-    const padT = 4, padB = 4;
+    const padT = 6, padB = 4;
+    const padL = 50;         // left gutter for Y-axis price labels
     const rightLabelW = 46;
+    const axisB = 16;        // bottom gutter for X-axis date labels
     const showVolume = !!opts.showVolume;
     const showTrend  = opts.showTrend !== false;  // default on
 
     // Stack zones with explicit coordinates so volume/trend never overlap.
-    // Layout (top → bottom): padT · priceH · gap1 · volumeH · gap2 · trendH · padB
+    // Layout (top → bottom): padT · priceH · gap1 · volumeH · gap2 · trendH · padB · axisB
     const baseH   = opts.h || 140;  // desired PRICE-only height when volume/trend are off
     const priceH  = baseH - padT - padB;
     const gap1    = showVolume ? 4 : 0;
     const gap2    = showTrend  ? 4 : 0;
-    const volumeH = showVolume ? 22 : 0;
+    const volumeH = showVolume ? 36 : 0;
     const trendH  = showTrend  ? 8  : 0;
     const priceTop    = padT;
     const priceBottom = priceTop + priceH;
     const volumeTop   = priceBottom + gap1;
     const trendTop    = volumeTop + volumeH + gap2;
-    const H           = trendTop + trendH + padB;
+    const H           = trendTop + trendH + padB + axisB;
 
     const pts = chartData.filter(d => d && typeof d.close === 'number');
     if (!pts.length) return { html: '', meta: null };
     const closes = pts.map(d => d.close);
     let min = Math.min(...closes), max = Math.max(...closes);
+    // Extend Y-range to include SMA values so lines don't clip off the plot
+    pts.forEach(d => {
+      if (typeof d.sma_50 === 'number')  { min = Math.min(min, d.sma_50);  max = Math.max(max, d.sma_50);  }
+      if (typeof d.sma_200 === 'number') { min = Math.min(min, d.sma_200); max = Math.max(max, d.sma_200); }
+    });
     if (opts.target != null) {
       min = Math.min(min, opts.target);
       max = Math.max(max, opts.target);
     }
     if (min === max) { max = min + 1; }
+    // tiny breathing room so the price line doesn't touch the edges
+    const yPad = (max - min) * 0.04;
+    min -= yPad; max += yPad;
     // Unified cell grid: every day is a discrete cell of width `cellW`, and
     // the price line / volume bars / trend strip all reference that same grid.
     // Price line connects cell CENTERS so it stays visually in-line with the
     // vertical bars below. This eliminates the ~2-4px width mismatch that
     // happened when point-based positioning (spanning N-1 intervals) was
     // mixed with cell-based positioning (spanning N intervals).
-    const plotW = W - padT - rightLabelW;
+    const plotW = W - padL - rightLabelW;
     const cellW = plotW / pts.length;
-    const sx = (i) => padT + (i + 0.5) * cellW;
+    const sx = (i) => padL + (i + 0.5) * cellW;
     const sy = (v) => priceTop + (1 - (v - min) / (max - min)) * priceH;
 
     const path = pts.map((d, i) => `${i === 0 ? 'M' : 'L'} ${sx(i).toFixed(1)} ${sy(d.close).toFixed(1)}`).join(' ');
@@ -98,19 +127,15 @@
     const lastClose = closes[closes.length - 1];
     const firstClose = closes[0];
     const up = lastClose >= firstClose;
-    const lineColor = up ? 'var(--pnl-up)' : 'var(--pnl-dn)';
+    const lineColor = 'var(--pnl-up)';
 
     const tgtY = opts.target != null ? sy(opts.target) : null;
-    const smaPts = pts.filter(d => typeof d.sma_200 === 'number');
-    let smaPath = '';
-    if (smaPts.length > 5) {
-      smaPath = pts.map((d, i) => {
-        if (typeof d.sma_200 !== 'number') return null;
-        return `${sx(i).toFixed(1)},${sy(d.sma_200).toFixed(1)}`;
-      }).filter(x => x !== null).join(' ');
-    }
+    // SMA200 — broken into runs so missing days don't draw stray segments
+    const sma200Runs = buildRuns(pts, 'sma_200', sx, sy);
+    const sma50Runs  = buildRuns(pts, 'sma_50',  sx, sy);
 
-    // Volume zone just under the price area — bars centered WITHIN each cell
+    // Volume zone — muted pastel (low opacity) so it recedes behind price/SMAs.
+    // Visually distinct from the bold trend strip below it.
     const barW = Math.max(0.8, cellW * 0.82);
     let volumeSvg = '';
     if (showVolume) {
@@ -122,31 +147,55 @@
         const y = volumeTop + (volumeH - h);
         const prev = i > 0 ? pts[i - 1].close : d.close;
         const upDay = d.close >= prev;
-        const color = upDay ? 'rgba(74,222,128,0.55)' : 'rgba(248,113,113,0.55)';
-        const x = padT + i * cellW + (cellW - barW) / 2;
+        const color = upDay ? 'rgba(74,222,128,0.32)' : 'rgba(248,113,113,0.32)';
+        const x = padL + i * cellW + (cellW - barW) / 2;
         return `<rect x="${x.toFixed(2)}" y="${y.toFixed(1)}" width="${barW.toFixed(2)}" height="${Math.max(h, 0.6).toFixed(1)}" style="fill:${color}"></rect>`;
       }).join('');
     }
 
-    // Trend strip — one cell per day, same width + gap as volume bars so
-    // columns line up perfectly across the two stratas.
+    // Trend strip — bold saturated colors at full opacity so the strip reads
+    // as a discrete signal layer (≠ the pastel volume bars). 3-state:
+    //   3/3 align → bright green · 0/3 align → bright red · mixed → neutral grey
     let trendSvg = '';
     if (showTrend) {
       trendSvg = pts.map((d, i) => {
-        let color = '#6B7280';  // neutral
+        let color = '#3F4654';  // neutral slate (no SMA yet)
         if (typeof d.sma_50 === 'number' && typeof d.sma_200 === 'number') {
           const s1 = d.close > d.sma_50;
           const s2 = d.close > d.sma_200;
           const s3 = d.sma_50 > d.sma_200;
           const passCount = (s1 ? 1 : 0) + (s2 ? 1 : 0) + (s3 ? 1 : 0);
-          color = passCount === 3 ? '#4ADE80'
-                : passCount === 0 ? '#F87171'
-                : passCount >= 2 ? 'rgba(74,222,128,0.55)'
-                : 'rgba(248,113,113,0.55)';
+          color = passCount === 3 ? '#4ADE80'               // full bull — bright green
+                : passCount === 0 ? '#F87171'               // full bear — bright red
+                : passCount >= 2  ? 'rgba(74,222,128,0.7)' // mostly bull — soft green
+                :                   'rgba(248,113,113,0.7)';// mostly bear — soft red
         }
-        const x = padT + i * cellW + (cellW - barW) / 2;
-        return `<rect x="${x.toFixed(2)}" y="${trendTop.toFixed(1)}" width="${barW.toFixed(2)}" height="${trendH}" style="fill:${color};opacity:0.85"></rect>`;
+        const x = padL + i * cellW + (cellW - barW) / 2;
+        return `<rect x="${x.toFixed(2)}" y="${trendTop.toFixed(1)}" width="${barW.toFixed(2)}" height="${trendH}" style="fill:${color}"></rect>`;
       }).join('');
+    }
+
+    // Y-axis: 4 grid lines + price labels on left (matches stocks.clawmo.tech pattern)
+    const N_TICKS = 4;
+    let gridSvg = '';
+    for (let t = 0; t <= N_TICKS; t++) {
+      const frac = t / N_TICKS;
+      const v = max - (max - min) * frac;
+      const gy = (priceTop + frac * priceH).toFixed(1);
+      const lbl = v >= 1000 ? v.toFixed(0) : v.toFixed(2);
+      gridSvg += `<line x1="${padL}" y1="${gy}" x2="${(W - rightLabelW).toFixed(1)}" y2="${gy}" style="stroke:#21262d;stroke-width:0.5"></line>`;
+      gridSvg += `<text x="${(padL - 4).toFixed(1)}" y="${(parseFloat(gy) + 3.5).toFixed(1)}" text-anchor="end" style="font-family:monospace;font-size:9px;fill:#6e7681">${lbl}</text>`;
+    }
+
+    // X-axis: ~5 date labels along the bottom (MM-DD format)
+    let xAxisSvg = '';
+    const dateStep = Math.max(1, Math.floor(pts.length / 5));
+    const dateY = (trendTop + trendH + padB + axisB - 3).toFixed(1);
+    for (let i = 0; i < pts.length; i += dateStep) {
+      const d = pts[i];
+      if (!d.date) continue;
+      const lbl = d.date.length >= 7 ? d.date.slice(5) : d.date;
+      xAxisSvg += `<text x="${sx(i).toFixed(1)}" y="${dateY}" text-anchor="middle" style="font-family:monospace;font-size:9px;fill:#6e7681">${lbl}</text>`;
     }
 
     // Current-price tag anchored to right edge, pointing at last close
@@ -159,24 +208,30 @@
       <text x="${(tagX + tagW / 2).toFixed(1)}" y="${(tagY + 10).toFixed(1)}" text-anchor="middle" style="font-family:var(--font-mono);font-size:9.5px;font-weight:700;fill:#0a0c10">$${lastClose.toFixed(2)}</text>
     `;
 
+    const sma200Svg = sma200Runs.map(run => `<polyline class="spark-sma-200" points="${run}"></polyline>`).join('');
+    const sma50Svg  = sma50Runs .map(run => `<polyline class="spark-sma-50"  points="${run}"></polyline>`).join('');
+
     const html = `
       <svg class="sparkline" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:${H}px">
-        ${smaPath ? `<polyline class="spark-sma" points="${smaPath}"></polyline>` : ''}
-        <path class="spark-line ${up ? 'up' : 'dn'}" d="${path}"></path>
-        ${tgtY != null ? `<line class="spark-tgt" x1="0" y1="${tgtY.toFixed(1)}" x2="${W - rightLabelW}" y2="${tgtY.toFixed(1)}"></line>` : ''}
-        <circle class="spark-dot ${up ? 'up' : 'dn'}" cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="3"></circle>
+        ${gridSvg}
+        ${xAxisSvg}
+        ${sma200Svg}
+        ${sma50Svg}
+        <path class="spark-line up" d="${path}"></path>
+        ${tgtY != null ? `<line class="spark-tgt" x1="${padL}" y1="${tgtY.toFixed(1)}" x2="${W - rightLabelW}" y2="${tgtY.toFixed(1)}"></line>` : ''}
+        <circle class="spark-dot up" cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="3"></circle>
         ${volumeSvg}
         ${trendSvg}
         ${priceTag}
-        <line class="spark-cross-x" x1="0" y1="${priceTop}" x2="0" y2="${(H - padB).toFixed(1)}" style="stroke:var(--fg);stroke-width:0.5;opacity:0;pointer-events:none;stroke-dasharray:2 2"></line>
+        <line class="spark-cross-x" x1="${padL}" y1="${priceTop}" x2="${padL}" y2="${(trendTop + trendH).toFixed(1)}" style="stroke:var(--fg);stroke-width:0.5;opacity:0;pointer-events:none;stroke-dasharray:2 2"></line>
         <circle class="spark-cross-dot" cx="0" cy="0" r="3" style="fill:var(--accent);stroke:var(--fg);stroke-width:0.7;opacity:0;pointer-events:none"></circle>
-        <rect class="spark-cross-hit" x="${padT}" y="${priceTop}" width="${W - padT - rightLabelW}" height="${priceH}" style="fill:transparent;cursor:crosshair"></rect>
+        <rect class="spark-cross-hit" x="${padL}" y="${priceTop}" width="${plotW}" height="${priceH}" style="fill:transparent;cursor:crosshair"></rect>
       </svg>
     `;
     return {
       html,
       meta: {
-        W, H, padT, pts, rightLabelW,
+        W, H, padL, pts, rightLabelW,
         target: opts.target ?? null, yMin: min, yMax: max, lastClose,
         priceTop, priceH,
       },
@@ -190,10 +245,10 @@
     const dot = svg.querySelector('.spark-cross-dot');
     const hit = svg.querySelector('.spark-cross-hit');
     if (!xLine || !dot || !hit) return;
-    const { W, H, padT, pts, target, yMin, yMax, lastClose, rightLabelW = 0, priceTop, priceH } = meta;
-    const plotW = W - padT - rightLabelW;
+    const { W, H, padL = 50, pts, target, yMin, yMax, lastClose, rightLabelW = 0, priceTop, priceH } = meta;
+    const plotW = W - padL - rightLabelW;
     const cellW = plotW / pts.length;
-    const sx = (i) => padT + (i + 0.5) * cellW;   // match cell-center rendering
+    const sx = (i) => padL + (i + 0.5) * cellW;   // match cell-center rendering
     const sy = (v) => priceTop + (1 - (v - yMin) / (yMax - yMin)) * priceH;
 
     function onMove(ev) {
@@ -202,7 +257,7 @@
       const ctm = svg.getScreenCTM();
       if (!ctm) return;
       const loc = ptSvg.matrixTransform(ctm.inverse());
-      let i = Math.floor((loc.x - padT) / cellW);
+      let i = Math.floor((loc.x - padL) / cellW);
       if (i < 0) i = 0;
       if (i > pts.length - 1) i = pts.length - 1;
       const p = pts[i];
@@ -216,18 +271,29 @@
       dot.style.opacity = '1';
 
       const vsLast = lastClose ? ((p.close - lastClose) / lastClose) * 100 : null;
-      const vsSma = (typeof p.sma_200 === 'number' && p.sma_200 !== 0) ? ((p.close - p.sma_200) / p.sma_200) * 100 : null;
+      const vsSma50  = (typeof p.sma_50  === 'number' && p.sma_50  !== 0) ? ((p.close - p.sma_50)  / p.sma_50)  * 100 : null;
+      const vsSma200 = (typeof p.sma_200 === 'number' && p.sma_200 !== 0) ? ((p.close - p.sma_200) / p.sma_200) * 100 : null;
       const vsTgt = (typeof target === 'number' && target !== 0) ? ((p.close - target) / target) * 100 : null;
       const cls = (v) => v == null ? '' : v >= 0 ? 'num-up' : 'num-dn';
       const txt = (v) => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
       tooltip.innerHTML = `
         <div class="stk-tt-row"><span class="stk-tt-k">DATE</span><span class="stk-tt-v mono">${p.date || '—'}</span></div>
         <div class="stk-tt-row"><span class="stk-tt-k">CLOSE</span><span class="stk-tt-v mono">$${p.close.toFixed(2)}</span></div>
-        <div class="stk-tt-row"><span class="stk-tt-k">SMA200</span><span class="stk-tt-v mono">${typeof p.sma_200 === 'number' ? '$' + p.sma_200.toFixed(2) : '—'}</span></div>
-        <div class="stk-tt-row"><span class="stk-tt-k">vs SMA</span><span class="stk-tt-v mono ${cls(vsSma)}">${txt(vsSma)}</span></div>
+        <div class="stk-tt-row"><span class="stk-tt-k"><span class="stk-tt-sw sw-50"></span>SMA50</span><span class="stk-tt-v mono">${typeof p.sma_50 === 'number' ? '$' + p.sma_50.toFixed(2) : '—'}</span></div>
+        <div class="stk-tt-row"><span class="stk-tt-k">vs SMA50</span><span class="stk-tt-v mono ${cls(vsSma50)}">${txt(vsSma50)}</span></div>
+        <div class="stk-tt-row"><span class="stk-tt-k"><span class="stk-tt-sw sw-200"></span>SMA200</span><span class="stk-tt-v mono">${typeof p.sma_200 === 'number' ? '$' + p.sma_200.toFixed(2) : '—'}</span></div>
+        <div class="stk-tt-row"><span class="stk-tt-k">vs SMA200</span><span class="stk-tt-v mono ${cls(vsSma200)}">${txt(vsSma200)}</span></div>
         ${target != null ? `<div class="stk-tt-row"><span class="stk-tt-k">vs TGT</span><span class="stk-tt-v mono ${cls(vsTgt)}">${txt(vsTgt)}</span></div>` : ''}
         <div class="stk-tt-row"><span class="stk-tt-k">vs LAST</span><span class="stk-tt-v mono ${cls(vsLast)}">${txt(vsLast)}</span></div>
       `;
+      // Flip tooltip to opposite side of crosshair so it never blocks the cursor
+      if (i / pts.length > 0.5) {
+        tooltip.style.left = '8px';
+        tooltip.style.right = 'auto';
+      } else {
+        tooltip.style.right = '8px';
+        tooltip.style.left = 'auto';
+      }
       tooltip.style.opacity = '1';
     }
     function onLeave() {
@@ -275,6 +341,7 @@
   async function loadAndRender(body, ticker, market) {
     const sym = (ticker || 'AAPL').toUpperCase();
     market = market || 'US';
+    if (window.OC_UPDATE_PANE_PARAMS) window.OC_UPDATE_PANE_PARAMS({ ticker: sym, market });
     body.innerHTML = `
       <div class="stk-input-row">
         <form class="stk-tickform" id="stkForm">
@@ -391,7 +458,13 @@
         <div>
           <div class="mod-panel">
             <div class="mod-panel-title">
-              PRICE · 120d · close +sma200 · trend
+              <span>PRICE · 120d</span>
+              <span class="stk-legend">
+                <span class="stk-legend-item"><span class="stk-legend-sw sw-close"></span>CLOSE</span>
+                <span class="stk-legend-item"><span class="stk-legend-sw sw-50"></span>SMA50</span>
+                <span class="stk-legend-item"><span class="stk-legend-sw sw-200"></span>SMA200</span>
+                ${info.target_price != null ? `<span class="stk-legend-item"><span class="stk-legend-sw sw-tgt"></span>TARGET</span>` : ''}
+              </span>
               <span class="fin-stmt-toggles">
                 <button class="fin-mode-btn stk-vol-btn${showVol ? ' active' : ''}" data-vol="${showVol ? 'off' : 'on'}" title="Toggle volume bars">VOL ${showVol ? 'ON' : 'OFF'}</button>
                 <button class="fin-mode-btn stk-trend-btn${showTrend ? ' active' : ''}" data-trend="${showTrend ? 'off' : 'on'}" title="Toggle trend strip">TREND ${showTrend ? 'ON' : 'OFF'}</button>
@@ -458,6 +531,11 @@
             </div>
           </div>
 
+          <div class="mod-panel" id="stkAnalystSlot">
+            <div class="mod-panel-title">ANALYST COVERAGE · <span style="color:var(--fg-faint);font-weight:400">loading…</span></div>
+            <div class="stk-analyst-body" style="font-size:11px;color:var(--fg-dim);padding:6px 10px;">Fetching consensus + per-firm targets…</div>
+          </div>
+
           <div class="mod-panel">
             <div class="mod-panel-title">52W RANGE</div>
             <div class="range-wrap">
@@ -474,7 +552,7 @@
               <span>P/S</span><span class="mono">${fmt.num(m.price_to_sales, 1)}</span>
               <span>PEG</span><span class="mono">${fmt.num(m.peg_ratio, 2)}</span>
               <span>EPS</span><span class="mono">${fmt.num(info.eps, 2)}</span>
-              <span>Div yield</span><span class="mono">${info.dividend_yield != null ? (info.dividend_yield*100).toFixed(2) + '%' : '—'}</span>
+              <span>Div yield</span><span class="mono">${info.dividend_yield != null ? info.dividend_yield.toFixed(2) + '%' : '—'}</span>
               <span>Rev (B)</span><span class="mono">${fmt.num(m.revenue, 1)}</span>
               <span>Rev growth</span><span class="mono ${pctCls(m.revenue_growth)}">${fmt.pct(m.revenue_growth, 0)}</span>
               <span>Gross margin</span><span class="mono">${fmt.pct(m.gross_margin, 0)}</span>
@@ -549,6 +627,147 @@
         );
       }
     }
+
+    // Async load analyst coverage panel (CORS fetch from stocks.clawmo.tech)
+    loadAnalystCoverage(body, sym);
+  }
+
+  /* ── Analyst coverage: async populate the ANALYST COVERAGE panel ─── */
+  async function loadAnalystCoverage(body, ticker) {
+    const slot = body.querySelector('#stkAnalystSlot');
+    if (!slot) return;
+    let a = null;
+    try {
+      const resp = await fetch(`https://stocks.clawmo.tech/data/analyst/${ticker}.json`, { cache: 'no-cache' });
+      if (resp.ok) a = await resp.json();
+    } catch (e) {}
+    if (!a) {
+      slot.innerHTML = `
+        <div class="mod-panel-title">ANALYST COVERAGE</div>
+        <div class="stk-analyst-body" style="font-size:11px;color:var(--fg-faint);padding:6px 10px;">No analyst data — <span style="color:var(--fg-dim)">refreshes weekly for S&P 500 + NDX 100, daily for portfolio.</span></div>`;
+      return;
+    }
+    const c = a.consensus || {}, pt = a.price_target || {};
+    const total = (c.strong_buy || 0) + (c.buy || 0) + (c.hold || 0) + (c.sell || 0) + (c.strong_sell || 0);
+    const pct = (n) => total > 0 ? Math.round(n / total * 100) : 0;
+    const lblColor = c.score >= 4.0 ? '#4ade80' : c.score >= 3.0 ? '#facc15' : '#f87171';
+    const retClr = pt.return_potential_pct == null ? 'var(--fg-dim)'
+                : pt.return_potential_pct >= 0 ? '#4ade80' : '#f87171';
+    const recColor = (rc) => rc === 'buy' ? '#4ade80' : rc === 'sell' ? '#f87171' : rc === 'hold' ? '#facc15' : 'var(--fg-dim)';
+    const actionGlyph = (act) => act === 'upgrade' ? '<span style="color:#4ade80">▲</span>'
+                              : act === 'downgrade' ? '<span style="color:#f87171">▼</span>'
+                              : act === 'initiate' ? '<span style="color:#60a5fa">●</span>'
+                              : '';
+    const firms = (a.firms || []).slice(0, 8);
+
+    slot.innerHTML = `
+      <div class="mod-panel-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span>ANALYST COVERAGE · <b style="color:${lblColor}">${c.label || '—'}</b> · ${c.n_analysts || 0} firms</span>
+        ${a.firms && a.firms.length > 8 ? `<a href="#" class="stk-analyst-all" style="font-size:10px;color:var(--accent);text-decoration:none">all ${a.firms.length} ↗</a>` : ''}
+      </div>
+      <div style="padding:6px 10px;">
+        <div style="display:flex;gap:10px;font-size:11px;margin-bottom:6px">
+          <span title="Median 12-month price target">TGT <b class="mono">${pt.median != null ? '$' + pt.median.toFixed(2) : '—'}</b></span>
+          <span style="color:${retClr};">${pt.return_potential_pct != null ? (pt.return_potential_pct >= 0 ? '+' : '') + pt.return_potential_pct.toFixed(1) + '%' : ''}</span>
+          <span style="color:var(--fg-dim)">·</span>
+          <span title="Range">$${pt.low != null ? pt.low.toFixed(0) : '—'}–$${pt.high != null ? pt.high.toFixed(0) : '—'}</span>
+        </div>
+        <div style="display:flex;height:14px;border-radius:3px;overflow:hidden;border:1px solid var(--border);font-size:9px;font-weight:700;color:#fff;margin-bottom:6px" title="Strong Buy ${c.strong_buy} · Buy ${c.buy} · Hold ${c.hold} · Sell ${c.sell} · Strong Sell ${c.strong_sell}">
+          ${pct(c.strong_buy) > 0 ? `<span style="background:#1a7f3a;width:${pct(c.strong_buy)}%;display:flex;align-items:center;justify-content:center">${c.strong_buy}</span>` : ''}
+          ${pct(c.buy) > 0 ? `<span style="background:#2ea043;width:${pct(c.buy)}%;display:flex;align-items:center;justify-content:center">${c.buy}</span>` : ''}
+          ${pct(c.hold) > 0 ? `<span style="background:#bb8009;width:${pct(c.hold)}%;display:flex;align-items:center;justify-content:center">${c.hold}</span>` : ''}
+          ${pct(c.sell) > 0 ? `<span style="background:#da3633;width:${pct(c.sell)}%;display:flex;align-items:center;justify-content:center">${c.sell}</span>` : ''}
+          ${pct(c.strong_sell) > 0 ? `<span style="background:#8b1d1d;width:${pct(c.strong_sell)}%;display:flex;align-items:center;justify-content:center">${c.strong_sell}</span>` : ''}
+        </div>
+        ${firms.length > 0 ? `
+          <table class="tbl-dense" style="font-size:10px;width:100%">
+            <thead><tr>
+              <th style="text-align:left">FIRM</th>
+              <th style="text-align:left">REC</th>
+              <th class="num">TGT</th>
+              <th class="num">DATE</th>
+            </tr></thead>
+            <tbody>
+              ${firms.map(f => `
+                <tr>
+                  <td style="padding:2px 4px">${escapeHtml(f.firm || '—')}</td>
+                  <td style="color:${recColor(f.rec_class)};font-weight:600;padding:2px 4px">${escapeHtml(f.rec || '—')} ${actionGlyph(f.action)}</td>
+                  <td class="mono num" style="padding:2px 4px">${f.target != null ? '$' + Number(f.target).toFixed(0) : '—'}</td>
+                  <td class="mono num" style="color:var(--fg-dim);padding:2px 4px">${(f.rec_date || '').slice(5)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>` : ''}
+      </div>
+    `;
+    const allLink = slot.querySelector('.stk-analyst-all');
+    if (allLink) {
+      allLink.addEventListener('click', (ev) => { ev.preventDefault(); openAnalystOverlay(a); });
+    }
+  }
+
+  /* ── Full per-firm pop-out modal ─── */
+  function openAnalystOverlay(a) {
+    const c = a.consensus || {}, pt = a.price_target || {};
+    const recColor = (rc) => rc === 'buy' ? '#4ade80' : rc === 'sell' ? '#f87171' : rc === 'hold' ? '#facc15' : 'var(--fg-dim)';
+    const actionGlyph = (act) => act === 'upgrade' ? '<span style="color:#4ade80">▲</span>'
+                              : act === 'downgrade' ? '<span style="color:#f87171">▼</span>'
+                              : act === 'initiate' ? '<span style="color:#60a5fa">●</span>'
+                              : '';
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px';
+    overlay.innerHTML = `
+      <div style="background:var(--bg-panel);border:1px solid var(--border);border-radius:6px;max-width:900px;width:100%;max-height:85vh;overflow:auto;padding:20px;font-family:var(--font-mono)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div style="font-size:14px;font-weight:700">ANALYST COVERAGE · ${escapeHtml(a.ticker || '')} · ${(a.firms||[]).length} firms</div>
+          <button id="stkAnClose" style="background:transparent;border:1px solid var(--border);color:var(--fg);padding:4px 10px;cursor:pointer;border-radius:3px">CLOSE</button>
+        </div>
+        <div style="font-size:11px;color:var(--fg-dim);margin-bottom:12px">
+          Consensus: <b style="color:#facc15">${escapeHtml(c.label || '—')}</b> · score ${c.score != null ? c.score.toFixed(2) : '—'}/5 · ${c.n_analysts || 0} ratings · target median $${pt.median != null ? pt.median.toFixed(2) : '—'} (range $${pt.low}–$${pt.high})
+        </div>
+        <table class="tbl-dense" style="font-size:11px;width:100%">
+          <thead><tr>
+            <th style="text-align:left">FIRM</th>
+            <th style="text-align:left">ANALYST</th>
+            <th style="text-align:left">REC</th>
+            <th class="num">TARGET</th>
+            <th class="num">DATE</th>
+          </tr></thead>
+          <tbody>
+            ${(a.firms || []).map(f => `
+              <tr>
+                <td style="padding:3px 6px">${escapeHtml(f.firm || '—')}</td>
+                <td style="color:var(--fg-dim);padding:3px 6px">${escapeHtml(f.analyst || '')}</td>
+                <td style="color:${recColor(f.rec_class)};font-weight:600;padding:3px 6px">${escapeHtml(f.rec || '—')} ${actionGlyph(f.action)}</td>
+                <td class="mono num" style="padding:3px 6px">${f.target != null ? '$' + Number(f.target).toFixed(2) : '—'}</td>
+                <td class="mono num" style="color:var(--fg-dim);padding:3px 6px">${f.rec_date || ''}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        ${(a.recent_changes || []).length > 0 ? `
+          <div style="margin-top:14px;font-size:11px;font-weight:700">RECENT UPGRADES / DOWNGRADES (last 90d)</div>
+          <table class="tbl-dense" style="font-size:11px;width:100%;margin-top:6px">
+            <thead><tr><th style="text-align:left">DATE</th><th style="text-align:left">FIRM</th><th style="text-align:left">FROM</th><th style="text-align:left">TO</th><th>ACTION</th></tr></thead>
+            <tbody>
+              ${a.recent_changes.map(r => {
+                const aClr = r.action === 'upgrade' ? '#4ade80' : r.action === 'downgrade' ? '#f87171' : '#60a5fa';
+                return `<tr>
+                  <td style="color:var(--fg-dim);padding:3px 6px">${r.date}</td>
+                  <td style="padding:3px 6px">${escapeHtml(r.firm || '—')}</td>
+                  <td style="color:var(--fg-dim);padding:3px 6px">${escapeHtml(r.from || '—')}</td>
+                  <td style="padding:3px 6px">${escapeHtml(r.to || '—')}</td>
+                  <td style="color:${aClr};text-transform:capitalize;padding:3px 6px">${escapeHtml(r.action)}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>` : ''}
+        <div style="margin-top:12px;font-size:9px;color:var(--fg-faint)">FMP Premium · last fetched ${a.fetched_at || '—'}</div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', (ev) => { if (ev.target === overlay) document.body.removeChild(overlay); });
+    overlay.querySelector('#stkAnClose').addEventListener('click', () => document.body.removeChild(overlay));
   }
 
   /* ── AI panel: static qualitative topics + on-demand GLM/AI call ─── */

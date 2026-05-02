@@ -596,14 +596,14 @@
     { key: 'name',       label: 'NAME',    type: 'str', cls: '' },
     { key: 'price',      label: 'PRICE',   type: 'num', cls: 'num' },
     { key: 'chg_pct',    label: 'CHG',     type: 'num', cls: 'num' },
-    { key: 'sctr_raw',   label: 'TR SCORE', type: 'num', cls: 'num' },
+    { key: 'sctr_raw',   label: 'SCTR',    type: 'num', cls: 'num' },
     { key: 'sctr_rank',  label: '%ILE',    type: 'num', cls: 'num' },
     { key: 'rs_trend',   label: 'TREND',   type: 'str', cls: '' },
     { key: 'rs',         label: 'RS',      type: null,  cls: '' },  // sparkline, not sortable
   ];
 
   async function renderSCTR(body) {
-    body.innerHTML = `<div class="mod-loading">Loading Technical Rank…</div>`;
+    body.innerHTML = `<div class="mod-loading">Loading SCTR…</div>`;
     try {
       const d = await fetchJSON(`${BASE}/sctr.json`);
 
@@ -615,9 +615,6 @@
         <div class="mod-grid-2">
           <div>${panelShell('us', d.us)}</div>
           <div>${panelShell('tsx', d.tsx)}</div>
-        </div>
-        <div class="small" style="margin-top:6px;color:var(--fg-dim);font-size:10px">
-          Methodology inspired by <a href="https://stockcharts.com/school/doku.php?id=chart_school:technical_indicators:sctr" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;opacity:0.7">StockCharts Technical Rank (SCTR®)</a> — independently computed from public data via yfinance.
         </div>
       `;
       wireSctrPanel(body, 'us', d.us);
@@ -1301,9 +1298,9 @@
   async function renderSmartMoney(body, ctx) {
     body.innerHTML = `<div class="mod-loading">Loading smart money…</div>`;
     try {
-      // Parallel fetch — full JSON has all tickers; fallback to signals-only
+      // Parallel fetch — insider/congress are independent of signals
       const [sig, ins, cg] = await Promise.allSettled([
-        fetchJSON(`${BASE}/smart-money-full.json`).catch(() => fetchJSON(`${BASE}/smart-money.json`)),
+        fetchJSON(`${BASE}/smart-money.json`),
         fetchJSON(INSIDER_URL).catch(() => null),
         fetchJSON(CONGRESS_URL).catch(() => null),
       ]);
@@ -1323,7 +1320,7 @@
         <div class="mod-head">
           <div class="mod-title">${window.OC_TITLE('smart-money')} · INSTITUTIONAL FLOW</div>
           <div class="mod-meta">
-            ${sigData ? `<span class="chip">SCANNED · ${sigData.total_symbols || (sigData.signals || []).length}</span>` : ''}
+            ${sigData ? `<span class="chip">SIGNALS · ${(sigData.signals || []).length}</span>` : ''}
             ${insData ? `<span class="chip">INSIDER · ${(insData.summary || {}).total_trades ?? '—'}</span>` : ''}
             ${cgData  ? `<span class="chip">CONGRESS · ${(cgData.summary || {}).totalTrades ?? '—'}</span>` : ''}
             <span class="chip chip-dim">${fmt.ago(sigData?.generated_at || insData?.generated_at || cgData?.generated_at)}</span>
@@ -1363,179 +1360,32 @@
   }
 
   /* ── Signals tab — the legacy flow monitor, now sortable ──── */
-  // `gloss` keys override the textContent fallback so the auto-tooltip helper
-  // shows the *smart-money-specific* definition (not the generic "score" entry).
   const SMY_SIG_COLS = [
-    { key: 'ticker',             label: 'TICKER',  type: 'str', gloss: 'TICKER',       group: 'identity'  },
-    { key: 'tag',                label: 'TAG',     type: 'str', gloss: 'TAG',          group: 'identity'  },
-    { key: 'sector',             label: 'SECTOR',  type: 'str', gloss: 'SECTOR',       group: 'identity'  },
-    { key: 'date',               label: 'DATE',    type: 'str', gloss: 'DATE',         group: 'identity'  },
-    { key: 'price',              label: 'PRICE',   type: 'num', gloss: 'PRICE',        group: 'market'    },
-    { key: 'price_change_pct',   label: 'CHG',     type: 'num', gloss: 'CHG',          group: 'market'    },
-    { key: 'relative_volume',    label: 'RVOL',    type: 'num', gloss: 'RVOL',         group: 'composite' },
-    { key: 'mfi',                label: 'MFI',     type: 'num', gloss: 'MFI',          group: 'composite' },
-    { key: 'cmf',                label: 'CMF',     type: 'num', gloss: 'CMF',          group: 'composite' },
-    { key: 'poc_distance_pct',   label: 'POC',     type: 'num', gloss: 'SMY-POC',      group: 'composite' },
-    { key: 'insider_cluster',    label: 'CLUSTER', type: 'num', gloss: 'SMY-CLUSTER',  group: 'composite' },
-    { key: 'score',              label: 'SCORE',   type: 'num', gloss: 'SMY-SCORE',    group: 'composite' },
-    { key: 'signal',             label: 'SIGNAL',  type: 'str', gloss: 'SMY-SIGNAL',   group: 'composite' },
-    { key: 'flow_score',         label: 'FLOW⚠',  type: 'num', gloss: 'FLOW-SCORE',   group: 'wyckoff'   },
-    { key: 'flow_label',         label: 'VERDICT', type: 'str', gloss: 'ORDERLY-DIST', group: 'wyckoff'   },
-    { key: 'vol_trend_diverging',label: 'VOL DIV', type: 'num', gloss: 'VOL-DIV',      group: 'wyckoff'   },
-    { key: 'streak_up_days',     label: 'STREAK',  type: 'num', gloss: 'STREAK',       group: 'wyckoff'   },
-    { key: 'churn_bars',         label: 'CHURN',   type: 'num', gloss: 'CHURN',        group: 'wyckoff'   },
-    { key: 'etf_flow_5d_pct',    label: 'ETF 5d',  type: 'num', gloss: 'ETF-FLOW-5D',  group: 'wyckoff'   },
-    { key: 'sector_flow_5d_pct', label: 'SEC 5d',  type: 'num', gloss: 'SECTOR-FLOW',  group: 'wyckoff'   },
+    { key: 'ticker',             label: 'TICKER', type: 'str' },
+    { key: 'date',               label: 'DATE',   type: 'str' },
+    { key: 'price',              label: 'PRICE',  type: 'num' },
+    { key: 'price_change_pct',   label: 'CHG',    type: 'num' },
+    { key: 'relative_volume',    label: 'RVOL',   type: 'num' },
+    { key: 'mfi',                label: 'MFI',    type: 'num' },
+    { key: 'cmf',                label: 'CMF',    type: 'num' },
+    { key: 'score',              label: 'SCORE',  type: 'num' },
+    { key: 'signal',             label: 'SIGNAL', type: 'str' },
   ];
-  // Group headers above the column row — disambiguate the original composite (blue, OBV/CMF/MFI/RVOL) from the new Wyckoff distribution layer (red).
-  const SMY_GROUP_META = {
-    identity:  { label: '',                                       rgb: null         },
-    market:    { label: 'PRICE',                                  rgb: '107,114,128' },
-    composite: { label: 'COMPOSITE INDICATORS · original tool',   rgb: '59,130,246'  },
-    wyckoff:   { label: 'WYCKOFF v3.1 · distribution warning',    rgb: '248,113,113' },
-  };
-
-  function buildSmySectorHeatmap(signals, fullData) {
-    // Build per-sector aggregates from RADAR tickers (skip ETF/MACRO/PORTFOLIO)
-    const map = {};
-    for (const r of signals) {
-      const s = r.sector;
-      if (!s || s === '—' || s === 'ETF' || r.tag === 'MACRO' || r.is_sector_etf || r.is_market_etf) continue;
-      if (!map[s]) map[s] = { n: 0, sum: 0, ac: 0, di: 0 };
-      map[s].n++; map[s].sum += r.score;
-      if (r.score >= 65) map[s].ac++;
-      if (r.score <= 35) map[s].di++;
-    }
-    const rows = Object.entries(map)
-      .filter(([, d]) => d.n >= 3)
-      .map(([name, d]) => ({ name, avg: Math.round(d.sum / d.n), n: d.n, ac: d.ac, di: d.di }))
-      .sort((a, b) => b.avg - a.avg);
-
-    if (!rows.length) return '';
-
-    const rot_map = (fullData && fullData.sector_rotation) || {};
-    const bars = rows.map(s => {
-      const col = s.avg >= 56 ? '#4ade80' : s.avg <= 44 ? '#f87171' : '#6b7280';
-      const scol = s.avg >= 56 ? 'color:#4ade80' : s.avg <= 44 ? 'color:#f87171' : '';
-      const rot = rot_map[s.name] || null;
-      let deltaHtml = '';
-      if (rot) {
-        const sd = rot.score_delta;
-        const fd = rot.flow_delta;
-        const sdCol = sd > 0 ? '#4ade80' : sd < 0 ? '#f87171' : 'rgba(156,163,175,.4)';
-        deltaHtml += `<span style="font-size:0.55rem;margin-left:5px;color:${sdCol}" title="Score Δ vs ${rot.prev_date}: ${sd>0?'rose +'+sd+' pts (buying increasing)':sd<0?'fell '+sd+' pts (buying cooling)':'unchanged'}">score${sd>0?'+':''}${sd}</span>`;
-        if (fd !== null && fd !== undefined) {
-          // INVERTED: rising flow_score = entering distribution = bad (red)
-          const fdCol = fd > 0 ? '#f87171' : fd < 0 ? '#4ade80' : 'rgba(156,163,175,.4)';
-          deltaHtml += `<span style="font-size:0.55rem;margin-left:3px;color:${fdCol}" title="Flow warning Δ vs ${rot.prev_date}: ${fd>0?'rose +'+fd+' pts (RED = distribution warning rising — bad)':fd<0?'fell '+fd+' pts (warning easing — good)':'unchanged'}">flow${fd>0?'+':''}${fd}</span>`;
-        }
-      }
-      return `<div class="smy-sec-row" data-sector="${s.name.replace(/"/g,'&quot;')}"
-        title="${s.name}: avg ${s.avg} · ▲${s.ac} accum · ▼${s.di} distrib / ${s.n}${rot ? ` · Δ S${rot.score_delta>0?'+':''}${rot.score_delta}${rot.flow_delta!=null?' F'+(rot.flow_delta>0?'+':'')+rot.flow_delta:''}` : ''}">
-        <span class="smy-sec-name">${s.name}</span>
-        <span class="smy-sec-bar"><span style="width:${s.avg}%;background:${col}"></span></span>
-        <span class="mono" style="font-size:0.68rem;min-width:22px;text-align:right;${scol}">${s.avg}</span>
-        ${deltaHtml}
-        <span style="font-size:0.62rem;opacity:0.55;min-width:52px">▲${s.ac}&thinsp;▼${s.di}/${s.n}</span>
-      </div>`;
-    }).join('');
-
-    return `<div class="mod-panel" style="margin-bottom:6px">
-      <div class="mod-panel-title" style="font-size:0.68rem">
-        SECTOR FLOW · avg score by sector · click row to filter
-        <span class="smy-sec-active-label" style="color:#60a5fa;margin-left:6px"></span>
-        <span style="margin-left:auto;font-size:0.6rem;opacity:0.45">
-          <span style="color:#4ade80">■</span> accum (≥56) &nbsp;
-          <span style="color:#f87171">■</span> distrib (≤44) &nbsp;
-          <b>S±N</b> = score Δ vs yesterday &nbsp;·&nbsp;
-          <b>F±N</b> = distribution warning Δ (<span style="color:#f87171">red F rising = bad</span>) &nbsp;·&nbsp;
-          ▲▼ = accum/distrib count
-        </span>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:1px 12px;padding:4px 0">
-        ${bars}
-      </div>
-    </div>
-    <style>
-      .smy-sec-row{display:grid;grid-template-columns:140px 1fr 26px 54px;align-items:center;gap:5px;padding:2px 4px;border-radius:3px;cursor:pointer;transition:background .1s}
-      .smy-sec-row:hover{background:rgba(96,165,250,.07)}
-      .smy-sec-row.active{background:rgba(96,165,250,.12)}
-      .smy-sec-name{font-size:0.69rem;opacity:.8;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-      .smy-sec-row.active .smy-sec-name{opacity:1;color:#60a5fa;font-weight:600}
-      .smy-sec-bar{height:5px;background:#21262d;border-radius:3px;overflow:hidden;display:block}
-      .smy-sec-bar span{display:block;height:100%;border-radius:3px;transition:width .4s ease}
-    </style>`;
-  }
 
   function renderSmySignals(inner, d) {
     if (!d || !d.signals) { inner.innerHTML = '<div class="mod-loading">No signals data</div>'; return; }
     const signals = d.signals.slice();
-    const state = { sortCol: 'score', sortDir: 'desc', query: '', tagFilter: 'all', sectorFilter: null };
-
-    const SMY_REF_HTML = `
-      <div id="smy-ref-panel" style="display:none;background:rgba(0,0,0,.35);border:1px solid #30363d;border-radius:4px;padding:10px 12px;margin:4px 0 6px;font-size:0.67rem">
-        <div style="font-weight:700;font-size:0.69rem;opacity:0.7;letter-spacing:.05em;margin-bottom:6px">COLUMN REFERENCE</div>
-        <table style="width:100%;border-collapse:collapse">
-          <thead><tr style="opacity:0.45;font-size:0.63rem;text-transform:uppercase">
-            <th style="text-align:left;padding:1px 8px 3px 0;min-width:65px">Column</th>
-            <th style="text-align:left;padding:1px 8px 3px 0">What it measures</th>
-            <th style="text-align:left;padding:1px 8px 3px 0">How to read</th>
-            <th style="text-align:left;padding:1px 0 3px;min-width:70px">Score weight</th>
-          </tr></thead>
-          <tbody style="line-height:1.65">
-            <tr><td style="opacity:.5;padding-right:8px">TICKER</td><td style="padding-right:8px;opacity:.8">Stock symbol</td><td style="padding-right:8px;opacity:.7">Click to open full analysis page</td><td style="opacity:.4">—</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">TAG</td><td style="padding-right:8px;opacity:.8">Universe slot</td><td style="padding-right:8px;opacity:.7"><span style="color:#fbbf24">PORTFOLIO</span> your holdings · <span style="opacity:.6">MACRO</span> sector ETFs · <span style="color:#3b82f6">RADAR</span> S&amp;P 500 + ADRs</td><td style="opacity:.4">—</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">SECTOR</td><td style="padding-right:8px;opacity:.8">GICS sector</td><td style="padding-right:8px;opacity:.7">Used by sector heatmap above to group rotation signals</td><td style="opacity:.4">—</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">DATE</td><td style="padding-right:8px;opacity:.8">Bar date</td><td style="padding-right:8px;opacity:.7">Date the underlying price data closes on</td><td style="opacity:.4">—</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">PRICE / CHG</td><td style="padding-right:8px;opacity:.8">Close · day % change</td><td style="padding-right:8px;opacity:.7">$ close on DATE · green = up · red = down</td><td style="opacity:.4">—</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">RVOL</td><td style="padding-right:8px;opacity:.8">Relative volume vs SPY</td><td style="padding-right:8px;opacity:.7"><b>1.0×</b> typical · <b>&gt;1.5×</b> elevated (beyond market noise) · <b>&lt;0.7×</b> quiet. Strips out FOMC/CPI days when all volume spikes.</td><td style="opacity:.7">feeds composite</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">MFI</td><td style="padding-right:8px;opacity:.8">Money Flow Index (0–100)</td><td style="padding-right:8px;opacity:.7">Volume-weighted RSI. <b>&gt;80</b> heavy buying pressure · <b>&lt;20</b> heavy selling · 50 neutral</td><td style="opacity:.7">feeds composite</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">CMF</td><td style="padding-right:8px;opacity:.8">Chaikin Money Flow (−1 to +1)</td><td style="padding-right:8px;opacity:.7">Where price closes in daily range × volume. <b>Positive</b> = buyers in control (closing near highs) · <b>Negative</b> = sellers (closing near lows)</td><td style="opacity:.7">feeds composite</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">OBV <span style="opacity:.45;font-size:0.62rem">(hidden)</span></td><td style="padding-right:8px;opacity:.8">On-Balance Volume</td><td style="padding-right:8px;opacity:.7">Cumulative volume total — adds volume on up-days, subtracts on down-days. <b>Rising OBV</b> = institutions quietly accumulating. <b>Falling OBV</b> = distribution. Not a visible column; appears in the ▶ expand reason.</td><td style="opacity:.7">feeds composite</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">POC</td><td style="padding-right:8px;opacity:.8">% from 3-month volume modal price</td><td style="padding-right:8px;opacity:.7"><b style="color:#4ade80">Green badge</b> = within ±5% of POC (institutional cost basis). <b>Positive</b> = price above POC. <b>Negative</b> = buying below institutional avg.</td><td style="color:#4ade80">+10 in zone</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">CLUSTER</td><td style="padding-right:8px;opacity:.8">Insider buy cluster</td><td style="padding-right:8px;opacity:.7"><b style="color:#60a5fa">✓ N</b> = N insiders filed Form 4 buys ≥$250K total in 7d. Multiple insiders agreeing is the signal, not a single buy.</td><td style="color:#60a5fa">+5 if present</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">SCORE</td><td style="padding-right:8px;opacity:.8">Composite 0–100</td><td style="padding-right:8px;opacity:.7">Sum of all indicators. Additive boosts: +10 POC zone · +5 cluster</td><td style="opacity:.4">—</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">SIGNAL</td><td style="padding-right:8px;opacity:.8">Score bucket label</td><td style="padding-right:8px;opacity:.7"><span style="color:#4ade80;font-weight:700">≥80 STRONG ACCUM</span> · <span style="color:#86efac">≥65 ACCUM</span> · <span style="opacity:.5">35–65 NEUTRAL</span> · <span style="color:#fb923c">≤35 DISTRIB</span> · <span style="color:#f87171;font-weight:700">≤20 STRONG DISTRIB</span>. Hover cell for reason.</td><td style="opacity:.4">—</td></tr>
-            <tr style="border-top:1px solid #21262d"><td colspan="4" style="padding:6px 0 2px;font-size:0.62rem;letter-spacing:.05em;opacity:.5;text-transform:uppercase">v3.1 — Wyckoff distribution layer</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">FLOW⚠</td><td style="padding-right:8px;opacity:.8">Distribution warning 0–100</td><td style="padding-right:8px;opacity:.7">Inverse of SCORE. <b style="color:#fbbf24">≥30 WATCH</b> · <b style="color:#fb923c">≥50 WARNING</b> · <b style="color:#ef4444">≥60+SCORE≥65 = ORDERLY DIST</b>. Heaton signal: rising price hides smart-money exit.</td><td style="opacity:.7">composite</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">VERDICT</td><td style="padding-right:8px;opacity:.8">Combined Score + Flow⚠ tier</td><td style="padding-right:8px;opacity:.7">CLEAR · WATCH · WARNING · <span style="color:#ef4444">⚠ ORDERLY</span> (Heaton). Filter button "⚠ Orderly Dist" isolates the highest-conviction distributing names.</td><td style="opacity:.4">—</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">VOL DIV</td><td style="padding-right:8px;opacity:.8">18d vol-vs-price slope</td><td style="padding-right:8px;opacity:.7"><span style="color:#fb923c">⚠</span> = price slope &gt;0 AND volume slope &lt;−1%/day. Rally on shrinking participation = APs distributing into retail bid.</td><td style="color:#fb923c">+30 if ⚠</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">STREAK</td><td style="padding-right:8px;opacity:.8">Consecutive up-day count</td><td style="padding-right:8px;opacity:.7"><b style="color:#fbbf24">≥10 stretched</b> · <b style="color:#ef4444">≥14 extreme (4σ)</b>. SOXX hit 18 days April 2026 — probability under fair odds is 1-in-262,000.</td><td style="color:#fbbf24">+10/+20</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">CHURN</td><td style="padding-right:8px;opacity:.8">Wyckoff churn bars (10d)</td><td style="padding-right:8px;opacity:.7">Heavy vol (≥1.5× 20d avg) + tight body (&lt;30% of range) + close in lower half. <b style="color:#fb923c">≥2 in 10d</b> = supply absorbing demand at top.</td><td style="color:#fb923c">+10/+20</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">ETF 5d</td><td style="padding-right:8px;opacity:.8">ETF net flow over 5d</td><td style="padding-right:8px;opacity:.7"><b>ETFs only</b>: net creation/redemption as % of AUM. <span style="color:#ef4444">&lt;−5%</span> = APs redeeming (smart money exit). Collects daily 16:31 ET; meaningful day 6.</td><td style="color:#ef4444">+25 if &lt;−5%</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">SEC 5d</td><td style="padding-right:8px;opacity:.8">Sector ETF flow override</td><td style="padding-right:8px;opacity:.7"><b>Stocks</b>: parent sector ETF's 5d flow (e.g. SOXX for semis, XLK for tech). When sector bleeds &gt;3% AUM, conviction downgrades regardless of OBV.</td><td style="color:#fb923c">+15 if &lt;−3%</td></tr>
-          </tbody>
-        </table>
-        <div style="margin-top:7px;padding-top:6px;border-top:1px solid #21262d;opacity:.65">
-          <b>Sector heatmap row format:</b>
-          "Real Estate &nbsp;<em>[bar]</em>&nbsp; 90 &nbsp;<span style="color:#4ade80">S+4</span>&nbsp;<span style="color:#f87171">F+8</span>&nbsp; ▲30 ▼0/31" = sector · avg score · <b>Δ vs prior day</b> (S=accum score Δ green=rising; F=flow⚠ Δ <b>inverted</b>: red=distribution warning rising=bad, green=easing) · ▲accum ▼distrib/total. Bar color: <span style="color:#4ade80">green ≥56</span> · <span style="color:#f87171">red ≤44</span> · gray neutral.
-        </div>
-      </div>`;
+    const state = { sortCol: 'score', sortDir: 'desc', query: '' };
 
     inner.innerHTML = `
-      <div id="smy-sector-wrap">${buildSmySectorHeatmap(signals, d)}</div>
       <div class="mod-panel" data-smy-panel="signals">
-        ${SMY_REF_HTML}
-        <div class="mod-panel-title" style="flex-wrap:wrap;gap:6px">
-          <span>SIGNALS · <span class="mono smy-sig-count">${signals.length}</span></span>
-          <span style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
-            <button class="fin-subtab-btn active smy-tag-btn" data-smytag="all" style="padding:2px 8px;font-size:0.7rem">All</button>
-            <button class="fin-subtab-btn smy-tag-btn" data-smytag="PORTFOLIO" style="padding:2px 8px;font-size:0.7rem">Portfolio</button>
-            <button class="fin-subtab-btn smy-tag-btn" data-smytag="RADAR" style="padding:2px 8px;font-size:0.7rem">Radar</button>
-            <button class="fin-subtab-btn smy-tag-btn" data-smytag="MACRO" style="padding:2px 8px;font-size:0.7rem">Macro</button>
-            <button class="fin-subtab-btn smy-tag-btn" data-smytag="signals" style="padding:2px 8px;font-size:0.7rem">Signals Only</button>
-            <button class="fin-subtab-btn smy-tag-btn" data-smytag="pocAccum" style="padding:2px 8px;font-size:0.7rem;color:#fbbf24;border-color:rgba(251,191,36,0.4)" title="Price within ±5% of 3-month institutional cost basis AND active accumulation flow — highest-conviction combo">★ POC + Accum</button>
-            <button class="fin-subtab-btn smy-tag-btn" data-smytag="orderlyDist" style="padding:2px 8px;font-size:0.7rem;color:#ef4444;border-color:rgba(239,68,68,0.4)" title="Score ≥65 (looks like accumulation) AND Flow Warning ≥60 — Heaton signal: smart money exiting under cover of strong price action">⚠ Orderly Dist</button>
-            <input type="search" class="smy-sig-search stk-tick-input" placeholder="filter ticker…" style="min-width:120px">
-            <button class="fin-subtab-btn smy-ref-toggle" style="padding:2px 8px;font-size:0.7rem;margin-left:4px" title="Toggle column reference">?</button>
-          </span>
+        <div class="mod-panel-title">
+          LATEST SIGNALS · <span class="mono smy-sig-count">${signals.length}</span> · hover SIGNAL cell for reason
+          <input type="search" class="smy-sig-search stk-tick-input" placeholder="filter ticker…" style="margin-left:8px;min-width:140px">
         </div>
         <div class="tbl-wrap" style="max-height:calc(100vh - 240px)">
           <table class="tbl-dense">
-            <thead>
-              <tr id="smy-sig-grouphead"></tr>
-              <tr id="smy-sig-head"></tr>
-            </thead>
+            <thead><tr id="smy-sig-head"></tr></thead>
             <tbody id="smy-sig-body"></tbody>
           </table>
         </div>
@@ -1547,134 +1397,21 @@
     const countEl = inner.querySelector('.smy-sig-count');
     const searchEl = inner.querySelector('.smy-sig-search');
 
-    function escH(s) {
-      return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    }
-
-    async function runSmyAI(ticker, btn) {
-      const sig = signals.find(s => s.ticker === ticker);
-      if (!sig) return;
-      const aiOut = tbody.querySelector(`#smy-ai-out-${smyTkId(ticker)}`);
-      if (!aiOut) return;
-      btn.disabled = true;
-      btn.textContent = 'Analyzing…';
-      aiOut.style.display = 'block';
-      aiOut.innerHTML = `<div class="ai-loading" style="padding:6px 12px"><span class="ai-spin">⟳</span> Requesting AI analysis…</div>`;
-      const ctx = [
-        `Score: ${sig.score}/100, Signal: ${sig.signal}`,
-        `Price: $${sig.price} (${(sig.price_change_pct >= 0 ? '+' : '') + (sig.price_change_pct != null ? sig.price_change_pct.toFixed(2) : '—')}%)`,
-        `MFI: ${sig.mfi != null ? sig.mfi : '—'}, CMF: ${sig.cmf != null ? sig.cmf.toFixed(2) : '—'}`,
-        `OBV trend: ${sig.obv ? sig.obv.trend : '—'} (slope ${sig.obv && sig.obv.slope_normalized != null ? sig.obv.slope_normalized.toFixed(3) : '—'})`,
-        `Volume spike: ${sig.vol_spike ? sig.vol_spike.ratio.toFixed(1) : '—'}×, Relative volume: ${sig.relative_volume != null ? sig.relative_volume.toFixed(1) : '—'}×`,
-        sig.poc_zone ? `In POC zone: price within ±5% of $${sig.poc}` : `POC distance: ${sig.poc_distance_pct != null ? sig.poc_distance_pct.toFixed(1) : '—'}%`,
-        sig.insider_cluster && sig.insider_cluster_info
-          ? `Insider cluster: ${sig.insider_cluster_info.insiders} insider${sig.insider_cluster_info.insiders > 1 ? 's' : ''} bought $${sig.insider_cluster_info.value.toLocaleString()} in last 7 days`
-          : 'No recent insider cluster',
-        `Wyckoff Flow Score: ${sig.flow_score != null ? sig.flow_score : 0}/100, Verdict: ${sig.flow_label || 'CLEAR'}`,
-        `Vol-trend divergence (price up / vol down): ${sig.vol_trend && sig.vol_trend.diverging ? 'YES' : 'NO'}`,
-        `Up-streak: ${sig.streak_up_days || 0} consecutive up-days, Churn bars: ${sig.churn_bars && typeof sig.churn_bars === 'object' ? (sig.churn_bars.count || 0) : (sig.churn_bars || 0)} in last 10 sessions`,
-        sig.etf_flow_5d_pct != null ? `ETF 5d flow: ${sig.etf_flow_5d_pct >= 0 ? '+' : ''}${sig.etf_flow_5d_pct.toFixed(1)}%` : 'ETF flow: n/a',
-        sig.sector_flow_5d_pct != null ? `Sector 5d flow: ${sig.sector_flow_5d_pct >= 0 ? '+' : ''}${sig.sector_flow_5d_pct.toFixed(1)}%` : 'Sector flow: n/a',
-      ].join('. ');
-      try {
-        const resp = await fetch('https://stocks.clawmo.tech/api/ai/analyze', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          mode: 'cors',
-          credentials: 'omit',
-          body: JSON.stringify({ ticker, company_name: sig.name || ticker, topic: 'SmartMoneyV31', context: ctx, language: 'EN' }),
-        });
-        if (!resp.ok) throw new Error('HTTP ' + resp.status);
-        const data = await resp.json();
-        const reason = data.reason || data.analysis || 'No analysis returned.';
-        const now = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false });
-        aiOut.innerHTML = `
-          <div class="ai-result-head" style="padding:6px 12px 0">
-            <span class="ai-badge">AI</span>
-            <span class="ai-meta">SmartMoneySignal · EN · ${now} ET</span>
-          </div>
-          <div class="ai-text" style="padding:4px 12px 10px">${escH(reason)}</div>`;
-      } catch (e) {
-        aiOut.innerHTML = `<div style="padding:6px 12px;color:var(--red,#f87171);font-size:0.72rem">AI analysis failed: ${escH(e.message)}</div>`;
-      }
-      btn.disabled = false;
-      btn.innerHTML = '<span class="smy-ai-spark">✦</span>AI Analysis';
-    }
-
-    function smyTkId(ticker) { return ticker.replace(/[^A-Za-z0-9]/g, '_'); }
-
-    tbody.addEventListener('click', e => {
-      const expBtn = e.target.closest('.smy-exp-btn');
-      if (expBtn) {
-        const ticker = expBtn.dataset.exp;
-        const detRow = tbody.querySelector(`#smy-det-${smyTkId(ticker)}`);
-        if (!detRow) return;
-        const isOpen = detRow.style.display !== 'none';
-        detRow.style.display = isOpen ? 'none' : '';
-        expBtn.textContent = isOpen ? '▶' : '▼';
-        return;
-      }
-      const aiBtn = e.target.closest('.smy-ai-btn');
-      if (aiBtn && !aiBtn.disabled) runSmyAI(aiBtn.dataset.aiTk, aiBtn);
-    });
-
     function render() {
-      // Group header row (no click — labels only). Computed each render but cheap.
-      const groupHead = inner.querySelector('#smy-sig-grouphead');
-      if (groupHead) {
-        const groups = [];
-        for (const c of SMY_SIG_COLS) {
-          const last = groups[groups.length - 1];
-          if (last && last.group === c.group) last.count++;
-          else groups.push({ group: c.group, count: 1 });
-        }
-        groupHead.innerHTML = `<th style="width:18px;padding:0 2px;border-bottom:none;background:transparent"></th>` +
-          groups.map(({ group, count }) => {
-            const m = SMY_GROUP_META[group] || {};
-            if (!m.label) {
-              return `<th colspan="${count}" style="border-bottom:none;background:transparent"></th>`;
-            }
-            return `<th colspan="${count}" style="text-align:center;font-size:0.6rem;letter-spacing:.06em;font-weight:700;padding:3px 4px;background:rgba(${m.rgb},.08);color:rgb(${m.rgb});border-bottom:1px solid rgba(${m.rgb},.4)">${m.label}</th>`;
-          }).join('');
-      }
-
-      headEl.innerHTML = `<th style="width:18px;padding:0 2px"></th>` + SMY_SIG_COLS.map(c => {
+      headEl.innerHTML = SMY_SIG_COLS.map(c => {
         const active = c.key === state.sortCol;
         const arrow = active ? (state.sortDir === 'desc' ? '▾' : '▴') : '▾';
         const op = active ? '1' : '0.3';
-        const gloss = c.gloss ? ` data-glossary="${c.gloss}"` : '';
-        return `<th class="smy-sig-th" data-col="${c.key}"${gloss} style="cursor:pointer">${c.label} <span style="opacity:${op}">${arrow}</span></th>`;
+        return `<th class="smy-sig-th" data-col="${c.key}" style="cursor:pointer">${c.label} <span style="opacity:${op}">${arrow}</span></th>`;
       }).join('');
 
       const q = state.query.trim().toUpperCase();
       let rows = signals.slice();
-      // Tag / signal filter
-      if (state.tagFilter === 'signals') {
-        rows = rows.filter(s => s.score >= 65 || s.score <= 35 || s.is_portfolio || s.tag === 'PORTFOLIO');
-      } else if (state.tagFilter === 'pocAccum') {
-        rows = rows.filter(s => s.poc_zone && s.score >= 65);
-      } else if (state.tagFilter === 'orderlyDist') {
-        rows = rows.filter(s => s.flow_label === 'ORDERLY_DISTRIBUTION');
-      } else if (state.tagFilter !== 'all') {
-        rows = rows.filter(s => {
-          const tag = s.tag || (s.is_portfolio ? 'PORTFOLIO' : s.is_sector_etf || s.is_market_etf ? 'MACRO' : 'RADAR');
-          return tag === state.tagFilter;
-        });
-      }
-      if (state.sectorFilter) rows = rows.filter(s => s.sector === state.sectorFilter);
-      if (q) rows = rows.filter(s => (s.ticker || '').toUpperCase().includes(q) || (s.name || '').toUpperCase().includes(q));
+      if (q) rows = rows.filter(s => (s.ticker || '').toUpperCase().includes(q));
       const col = SMY_SIG_COLS.find(c => c.key === state.sortCol);
-      function getSortValue(s, key) {
-        if (key === 'vol_trend_diverging') return (s.vol_trend && s.vol_trend.diverging) ? 1 : 0;
-        if (key === 'flow_label') {
-          const rank = { ORDERLY_DISTRIBUTION: 4, DISTRIBUTION_WARNING: 3, WATCH: 2, CLEAR: 1 };
-          return rank[s.flow_label] || 0;
-        }
-        return s[key];
-      }
       rows.sort((a, b) => {
-        const av = getSortValue(a, state.sortCol), bv = getSortValue(b, state.sortCol);
-        if (col && col.type === 'str' && state.sortCol !== 'flow_label') {
+        const av = a[state.sortCol], bv = b[state.sortCol];
+        if (col && col.type === 'str') {
           const cmp = String(av || '').localeCompare(String(bv || ''));
           return state.sortDir === 'asc' ? cmp : -cmp;
         }
@@ -1683,90 +1420,18 @@
         return state.sortDir === 'asc' ? an - bn : bn - an;
       });
 
-      tbody.innerHTML = rows.map(s => {
-        const pocVal = (s.poc_distance_pct == null || !isFinite(s.poc_distance_pct))
-          ? '<span class="mono" style="opacity:0.4">—</span>'
-          : (s.poc_zone
-              ? `<span class="mono" style="background:rgba(74,222,128,0.18);padding:1px 5px;border-radius:3px" title="In zone: price within ±5% of 3M Point of Control ($${s.poc}). Same cost basis as the volume-weighted majority. +10 to score.">${s.poc_distance_pct >= 0 ? '+' : ''}${s.poc_distance_pct.toFixed(1)}%</span>`
-              : `<span class="mono" style="opacity:0.7" title="3M Point of Control: $${s.poc}. Price is ${Math.abs(s.poc_distance_pct).toFixed(1)}% ${s.poc_distance_pct >= 0 ? 'above' : 'below'} POC.">${s.poc_distance_pct >= 0 ? '+' : ''}${s.poc_distance_pct.toFixed(1)}%</span>`);
-        const ic = s.insider_cluster_info;
-        const clusterCell = s.insider_cluster && ic
-          ? `<span class="mono" style="background:rgba(96,165,250,0.18);padding:1px 5px;border-radius:3px" title="${ic.insiders} insider${ic.insiders > 1 ? 's' : ''} bought $${ic.value.toLocaleString()} in the last 7 days (latest: ${ic.latest_date}). +5 to score.">✓ ${ic.insiders}</span>`
-          : `<span class="mono" style="opacity:0.4">—</span>`;
-        const tagVal = s.tag || (s.is_portfolio ? 'PORTFOLIO' : s.is_sector_etf || s.is_market_etf ? 'MACRO' : 'RADAR');
-        const tagColor = tagVal === 'PORTFOLIO' ? 'var(--yellow)' : tagVal === 'MACRO' ? 'var(--text-muted)' : 'var(--blue-dim,#3b82f6)';
-        const tkId = s.ticker.replace(/[^A-Za-z0-9]/g, '_');
-
-        // ── v3.1 Wyckoff + ETF flow cells ───────────────────────────────
-        const fs = s.flow_score || 0;
-        const flowColor = fs >= 60 ? '#ef4444' : fs >= 30 ? '#fbbf24' : '';
-        const flowCell = `<span class="mono" style="${flowColor ? 'color:' + flowColor + ';font-weight:700' : 'opacity:0.5'}" title="Distribution warning 0–100. Inputs: 18d vol-trend divergence (+30), churn bars (+10/+20), extension streak ≥10 (+10) / ≥14 (+20), ETF flow <-5% (+25), sector flow <-3% (+15). High Score + High Flow⚠ = ORDERLY DISTRIBUTION (Heaton signal).">${fs}</span>`;
-        const verdictMap = {
-          ORDERLY_DISTRIBUTION: { c: '#ef4444', bg: 'rgba(239,68,68,0.18)', t: '⚠ ORDERLY' },
-          DISTRIBUTION_WARNING: { c: '#fb923c', bg: 'rgba(251,146,60,0.15)', t: 'WARNING' },
-          WATCH:                { c: '#fbbf24', bg: 'rgba(251,191,36,0.12)', t: 'WATCH' },
-          CLEAR:                { c: '',        bg: '',                       t: 'CLEAR' },
-        };
-        const vm = verdictMap[s.flow_label] || verdictMap.CLEAR;
-        const verdictCell = vm.c
-          ? `<span class="mono" style="background:${vm.bg};color:${vm.c};padding:1px 5px;border-radius:3px;font-weight:600;font-size:0.66rem">${vm.t}</span>`
-          : `<span class="mono" style="opacity:0.4;font-size:0.66rem">${vm.t}</span>`;
-        const volDivCell = (s.vol_trend && s.vol_trend.diverging)
-          ? `<span class="mono" style="color:#fb923c;font-weight:700" title="18d price slope ${s.vol_trend.price_slope_pct_per_day != null ? s.vol_trend.price_slope_pct_per_day.toFixed(2) : '—'}%/d positive AND volume slope ${s.vol_trend.volume_slope_pct_per_day != null ? s.vol_trend.volume_slope_pct_per_day.toFixed(2) : '—'}%/d negative >1. Wyckoff distribution.">⚠</span>`
-          : `<span class="mono" style="opacity:0.3" title="No 18-day price-up / volume-down divergence">·</span>`;
-        const streakVal = s.streak_up_days || 0;
-        const streakColor = streakVal >= 14 ? '#ef4444' : streakVal >= 10 ? '#fbbf24' : '';
-        const streakCell = `<span class="mono"${streakColor ? ' style="color:' + streakColor + ';font-weight:700"' : ' style="opacity:' + (streakVal > 0 ? '0.7' : '0.3') + '"'} title="Consecutive up-days ending today. ≥10 stretched, ≥14 extreme (4σ rare).">${streakVal}</span>`;
-        const churnVal = s.churn_bars && typeof s.churn_bars === 'object' ? (s.churn_bars.count || 0) : (s.churn_bars || 0);
-        const churnColor = churnVal >= 2 ? '#fb923c' : '';
-        const churnCell = `<span class="mono"${churnColor ? ' style="color:' + churnColor + ';font-weight:700"' : ' style="opacity:' + (churnVal > 0 ? '0.7' : '0.3') + '"'} title="Wyckoff churn bars in last 10 sessions: heavy vol + tight body + close in lower half = supply absorbing demand.">${churnVal}</span>`;
-        function _flowPctCell(v) {
-          if (v == null) return '<span class="mono" style="opacity:0.25">—</span>';
-          const c = v < -5 ? '#ef4444' : v < -2 ? '#fb923c' : v > 5 ? '#4ade80' : v > 2 ? '#86efac' : '';
-          return `<span class="mono"${c ? ' style="color:' + c + ';font-weight:600"' : ''}>${v >= 0 ? '+' : ''}${v.toFixed(1)}%</span>`;
-        }
-        const etfFlowCell    = _flowPctCell(s.etf_flow_5d_pct);
-        const sectorFlowCell = _flowPctCell(s.sector_flow_5d_pct);
-
-        return `
+      tbody.innerHTML = rows.map(s => `
         <tr>
-          <td style="width:18px;padding:0 3px;text-align:center">
-            <button class="smy-exp-btn" data-exp="${s.ticker}" title="Show signal breakdown" style="background:none;border:none;color:var(--fg-dim,#6b7280);cursor:pointer;font-size:0.65rem;padding:0 2px;line-height:1">▶</button>
-          </td>
-          <td class="tk clickable" data-tk="${s.ticker}" ${tagVal!=='MACRO'&&s.name&&s.name!==s.ticker?`title="${(s.name||'').replace(/"/g,'&quot;')}"`:''}>
-            ${s.ticker}${tagVal==='MACRO'&&s.name&&s.name!==s.ticker?`<span style="opacity:0.4;font-size:0.62rem;margin-left:4px">· ${s.name}</span>`:''}
-          </td>
-          <td class="pat" style="font-size:0.68rem;color:${tagColor}">${tagVal}</td>
-          <td class="pat" style="font-size:0.68rem;opacity:0.65">${s.sector || '—'}</td>
+          <td class="tk clickable" data-tk="${s.ticker}">${s.ticker}</td>
           <td class="pat">${s.date || '—'}</td>
           <td class="mono">${fmt.num(s.price, 2)}</td>
           <td class="mono ${pnlCls(s.price_change_pct)}">${fmt.pct(s.price_change_pct)}</td>
           <td class="mono">${fmt.num(s.relative_volume, 1)}×</td>
           <td class="mono">${fmt.num(s.mfi, 0)}</td>
           <td class="mono ${pnlCls(s.cmf)}">${fmt.num(s.cmf, 2)}</td>
-          <td>${pocVal}</td>
-          <td>${clusterCell}</td>
           <td class="mono">${fmt.num(s.score, 0)}</td>
-          <td class="pat" style="${{STRONG_ACCUMULATION:'color:#4ade80;font-weight:700',ACCUMULATION:'color:#86efac;font-weight:600',DISTRIBUTION:'color:#fb923c;font-weight:600',STRONG_DISTRIBUTION:'color:#f87171;font-weight:700'}[s.signal]||'opacity:0.5'}">${(s.signal || '—').replace(/_/g, ' ')}</td>
-          <td>${flowCell}</td>
-          <td>${verdictCell}</td>
-          <td style="text-align:center">${volDivCell}</td>
-          <td>${streakCell}</td>
-          <td>${churnCell}</td>
-          <td>${etfFlowCell}</td>
-          <td>${sectorFlowCell}</td>
-        </tr>
-        <tr class="smy-det-row" id="smy-det-${tkId}" style="display:none">
-          <td colspan="21" style="padding:0;border-bottom:1px solid var(--border);white-space:normal">
-            <div style="padding:8px 12px 8px 14px;border-left:2px solid var(--accent);background:var(--panel-alt,var(--panel));display:flex;align-items:center;gap:14px;flex-wrap:wrap;white-space:normal">
-              <span style="font-size:0.72rem;line-height:1.55;color:var(--fg);flex:1;min-width:200px;white-space:normal">${escH(s.reason || '')}</span>
-              <span style="width:1px;align-self:stretch;background:var(--border);flex-shrink:0"></span>
-              <button class="smy-ai-btn smy-ai-cta" data-ai-tk="${s.ticker}" title="Run AI deep analysis on these signals"><span class="smy-ai-spark">✦</span>AI Analysis</button>
-            </div>
-            <div class="smy-ai-out" id="smy-ai-out-${tkId}" style="display:none;white-space:normal"></div>
-          </td>
-        </tr>`;
-      }).join('') || '<tr><td colspan="21" class="empty">no matches</td></tr>';
+          <td class="pat" title="${(s.reason || '').replace(/"/g, '&quot;')}">${(s.signal || '—').replace(/_/g, ' ')}</td>
+        </tr>`).join('') || '<tr><td colspan="9" class="empty">no matches</td></tr>';
 
       if (countEl) countEl.textContent = q ? `${rows.length} of ${signals.length}` : String(signals.length);
 
@@ -1781,38 +1446,6 @@
       attachTickerClicks(inner);
     }
     if (searchEl) searchEl.addEventListener('input', e => { state.query = e.target.value; render(); });
-
-    inner.querySelectorAll('.smy-tag-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        state.tagFilter = btn.dataset.smytag;
-        if (state.tagFilter === 'pocAccum') { state.sortCol = 'score'; state.sortDir = 'desc'; }
-        inner.querySelectorAll('.smy-tag-btn').forEach(b => b.classList.toggle('active', b === btn));
-        render();
-      });
-    });
-
-    // Sector heatmap row clicks
-    inner.querySelectorAll('.smy-sec-row').forEach(row => {
-      row.addEventListener('click', () => {
-        const name = row.dataset.sector;
-        state.sectorFilter = state.sectorFilter === name ? null : name;
-        inner.querySelectorAll('.smy-sec-row').forEach(r => r.classList.toggle('active', r.dataset.sector === state.sectorFilter));
-        const lbl = inner.querySelector('.smy-sec-active-label');
-        if (lbl) lbl.textContent = state.sectorFilter ? `· ${state.sectorFilter}` : '';
-        render();
-      });
-    });
-
-    const refToggle = inner.querySelector('.smy-ref-toggle');
-    const refPanel  = inner.querySelector('#smy-ref-panel');
-    if (refToggle && refPanel) {
-      refToggle.addEventListener('click', () => {
-        const visible = refPanel.style.display !== 'none';
-        refPanel.style.display = visible ? 'none' : 'block';
-        refToggle.classList.toggle('active', !visible);
-      });
-    }
-
     render();
   }
 

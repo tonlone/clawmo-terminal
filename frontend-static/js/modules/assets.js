@@ -427,6 +427,9 @@
               <p><b>BTC Dominance</b> — Bitcoin's share of total crypto market cap. Rising = capital flowing to BTC (risk-off). Falling = altcoin rotation ("alt season"). Historical range: 40–70%.</p>
             </div>
           </div>
+          <div class="small" style="margin-top:6px;color:var(--fg-dim);font-size:10px">
+            Data: <a href="https://coingecko.com" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;opacity:0.7">CoinGecko</a> (market caps · top coins · BTC price) &middot; <a href="https://coinmetrics.io" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;opacity:0.7">CoinMetrics</a> (MVRV · hash rate) &middot; <a href="https://okx.com" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;opacity:0.7">OKX</a> (funding rate · open interest · long/short)
+          </div>
         </div>
       `;
 

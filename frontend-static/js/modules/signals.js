@@ -428,20 +428,26 @@
 
       const setupList = setups || [];
       const initialTab = window._sigTab || 'setups';
-      const state = { tab: initialTab };
+      const state = { tab: initialTab, hmSortCol: 'pf', hmSortDir: 'desc' };
       let sizer = getSizer();
       // Need detailed pattern stats (avg_win, avg_loss) for half_kelly mode.
       // Pull from backtest-results.json which has per-pattern win/loss bucket data.
       let backtestStats = {};
+      let sigMeta = null;
       try {
         const br = await fetchJSON('https://stocks.clawmo.tech/data/backtest-results.json').catch(() => null);
         if (br && Array.isArray(br.stats)) {
           br.stats.forEach(s => { if (s.signal_type) backtestStats[s.signal_type] = s; });
+          sigMeta = br.significance_meta || null;
+          if (sigMeta) sigMeta._n_psr_eligible = br.stats.length;  // PSR denominator ≠ n_tests
         }
       } catch (e) {}
       const patternStatsFor = (signalType) => backtestStats[signalType] || null;
       // Adaptive grades + scorecard data for new tabs
-      const adaptiveGrades = summary?.adaptive_grades || {};
+      const adaptiveGrades   = summary?.adaptive_grades   || {};
+      const advancedMetrics  = summary?.advanced_metrics  || {};
+      const rollingWR        = summary?.rolling_win_rates || {};
+      const qualityGates     = summary?.quality_gates     || {};
       const equityCurve = scorecard?.equity_curve || [];
       const openTrades = scorecard?.open_trades || [];
       const closedTrades = scorecard?.closed_trades || [];
@@ -692,66 +698,101 @@
         if (pf >= 0.8) return 'rgba(248,113,113,0.30)';
         return 'rgba(248,113,113,0.55)';
       }
-      const playbookPatterns = (playbook.patterns || []).slice().sort((a, b) => (b.profit_factor || 0) - (a.profit_factor || 0));
-      const heatmapRows = playbookPatterns.map(p => {
-        const overall = p.profit_factor;
-        const overallWr = p.win_rate;
-        const reg = p.by_regime || {};
-        const cell = (k) => {
-          const r = reg[k];
-          if (!r || r.count == null) return `<td style="background:rgba(140,140,140,0.05);color:var(--fg-faint);text-align:center">—</td>`;
-          const pf = r.profit_factor;
-          // Show PF prominently; sample size on a small second line so it's
-          // clearly "trade count" not "× multiplication". Wrapping in <div>s
-          // gives proper line break inside the td.
-          return `<td style="background:${pfFill(pf)};text-align:right;font-family:var(--font-mono);padding:3px 8px;line-height:1.15" title="${k}: ${r.count.toLocaleString()} historical signals · WR ${r.win_rate?.toFixed(0)}% · avg ${r.avg_return?.toFixed(2)}%">
-            <div style="font-size:13px;font-weight:700">${pf != null ? pf.toFixed(2) : '—'}</div>
-            <div style="font-size:9px;color:var(--fg-dim);font-weight:400">n=${r.count.toLocaleString()}</div>
-          </td>`;
+      const playbookPatterns = (playbook.patterns || []).slice();
+
+      function sortHeatmap(patterns, col, dir) {
+        return patterns.slice().sort((a, b) => {
+          let av, bv;
+          if (col === 'pattern') return dir === 'asc' ? (a.signal_type||'').localeCompare(b.signal_type||'') : (b.signal_type||'').localeCompare(a.signal_type||'');
+          if (col === 'grade')   return dir === 'asc' ? (a.grade||'').localeCompare(b.grade||'') : (b.grade||'').localeCompare(a.grade||'');
+          if (col === 'status') {
+            const s = x => x.quarantined ? 'Q' : x.passes_gate === false ? 'B' : 'A';
+            return dir === 'asc' ? s(a).localeCompare(s(b)) : s(b).localeCompare(s(a));
+          }
+          if (col === 'bull')    { av = a.by_regime?.BULL?.profit_factor;    bv = b.by_regime?.BULL?.profit_factor; }
+          else if (col === 'caution') { av = a.by_regime?.CAUTION?.profit_factor; bv = b.by_regime?.CAUTION?.profit_factor; }
+          else if (col === 'bear')    { av = a.by_regime?.BEAR?.profit_factor;    bv = b.by_regime?.BEAR?.profit_factor; }
+          else if (col === 'wr')  { av = a.win_rate;    bv = b.win_rate; }
+          else if (col === 'occ') { av = a.occurrences; bv = b.occurrences; }
+          else                    { av = a.profit_factor; bv = b.profit_factor; }
+          av = av ?? -Infinity; bv = bv ?? -Infinity;
+          return dir === 'asc' ? av - bv : bv - av;
+        });
+      }
+
+      function buildHeatmapContent() {
+        const col = state.hmSortCol, dir = state.hmSortDir;
+        const sorted = sortHeatmap(playbookPatterns, col, dir);
+        const arr = dir === 'desc' ? '▾' : '▴';
+        const th = (key, label, cls='', extra='') => {
+          const active = col === key;
+          return `<th class="hm-sort-th${cls ? ' '+cls : ''}" data-hm-sort="${key}" ${extra} style="cursor:pointer;user-select:none${active ? ';color:var(--accent)' : ''}">
+            ${label}${active ? `<span style="margin-left:3px;font-size:9px">${arr}</span>` : '<span style="margin-left:3px;font-size:9px;opacity:0.3">▾</span>'}
+          </th>`;
         };
-        const status = p.quarantined ? `<span class="sig-quarantine">Q-${p.quarantine_tier || ''}</span>`
-                     : p.passes_gate === false ? '<span class="sig-blocked">BLOCKED</span>'
-                     : '<span class="sig-active">active</span>';
-        return `<tr>
-          <td class="pat">${escSig(p.signal_type)}</td>
-          <td class="${'gd-' + (p.grade || '').toLowerCase()}">${p.grade || '—'}</td>
-          <td class="mono ${overall >= 1.1 ? 'num-up' : 'num-dn'}">${overall != null ? overall.toFixed(2) : '—'}</td>
-          <td class="mono">${overallWr != null ? overallWr.toFixed(0) + '%' : '—'}</td>
-          <td class="mono">${p.occurrences ?? '—'}</td>
-          ${cell('BULL')}${cell('CAUTION')}${cell('BEAR')}
-          <td>${status}</td>
-        </tr>`;
-      }).join('');
-      const heatmapContent = `
-        <div class="mod-panel">
-          <div class="mod-panel-title">SIGNAL HEATMAP · pattern × regime · profit-factor color-coded</div>
-          <div class="tbl-wrap">
-            <table class="tbl-dense">
-              <thead><tr>
-                <th rowspan="2" style="vertical-align:bottom">PATTERN</th>
-                <th rowspan="2" style="vertical-align:bottom">GD</th>
-                <th class="num" rowspan="2" style="vertical-align:bottom" data-glossary="PF">PF<br><span style="font-weight:400;color:var(--fg-dim)">overall</span></th>
-                <th class="num" rowspan="2" style="vertical-align:bottom" data-glossary="WR">WR<br><span style="font-weight:400;color:var(--fg-dim)">overall</span></th>
-                <th class="num" rowspan="2" style="vertical-align:bottom" data-glossary="OCC">OCC<br><span style="font-weight:400;color:var(--fg-dim)">total</span></th>
-                <th colspan="3" style="text-align:center;border-bottom:1px solid var(--border)">PROFIT FACTOR BY REGIME</th>
-                <th rowspan="2" style="vertical-align:bottom">STATUS</th>
-              </tr><tr>
-                <th class="num" style="font-size:9px;font-weight:400;color:#4ADE80">BULL ↗</th>
-                <th class="num" style="font-size:9px;font-weight:400;color:#fbbf24">CAUTION →</th>
-                <th class="num" style="font-size:9px;font-weight:400;color:#f87171">BEAR ↘</th>
-              </tr></thead>
-              <tbody>${heatmapRows || '<tr><td colspan="9" class="empty">no patterns</td></tr>'}</tbody>
-            </table>
+        const rows = sorted.map(p => {
+          const overall = p.profit_factor, overallWr = p.win_rate, reg = p.by_regime || {};
+          const cell = (k) => {
+            const r = reg[k];
+            if (!r || r.count == null) return `<td style="background:rgba(140,140,140,0.05);color:var(--fg-faint);text-align:center">—</td>`;
+            const pf = r.profit_factor;
+            return `<td style="background:${pfFill(pf)};text-align:right;font-family:var(--font-mono);padding:3px 8px;line-height:1.15" title="${k}: ${r.count.toLocaleString()} historical signals · WR ${r.win_rate?.toFixed(0)}% · avg ${r.avg_return?.toFixed(2)}%">
+              <div style="font-size:13px;font-weight:700">${pf != null ? pf.toFixed(2) : '—'}</div>
+              <div style="font-size:9px;color:var(--fg-dim);font-weight:400">n=${r.count.toLocaleString()}</div>
+            </td>`;
+          };
+          const status = p.quarantined ? `<span class="sig-quarantine">Q-${p.quarantine_tier || ''}</span>`
+                       : p.passes_gate === false ? '<span class="sig-blocked">BLOCKED</span>'
+                       : '<span class="sig-active">active</span>';
+          return `<tr>
+            <td class="pat">${escSig(p.signal_type)}</td>
+            <td class="${'gd-' + (p.grade || '').toLowerCase()}">${p.grade || '—'}</td>
+            <td class="mono ${overall >= 1.1 ? 'num-up' : 'num-dn'}">${overall != null ? overall.toFixed(2) : '—'}</td>
+            <td class="mono">${overallWr != null ? overallWr.toFixed(0) + '%' : '—'}</td>
+            <td class="mono">${p.occurrences ?? '—'}</td>
+            ${cell('BULL')}${cell('CAUTION')}${cell('BEAR')}
+            <td>${status}</td>
+          </tr>`;
+        }).join('');
+        return `
+          <div class="mod-panel">
+            <div class="mod-panel-title">SIGNAL HEATMAP · pattern × regime · profit-factor color-coded</div>
+            <div class="tbl-wrap">
+              <table class="tbl-dense">
+                <thead><tr>
+                  ${th('pattern', 'PATTERN', '', 'rowspan="2" style="cursor:pointer;user-select:none;vertical-align:bottom' + (col==='pattern'?';color:var(--accent)':'') + '"')}
+                  ${th('grade', 'GD', '', 'rowspan="2" style="cursor:pointer;user-select:none;vertical-align:bottom' + (col==='grade'?';color:var(--accent)':'') + '"')}
+                  ${th('pf', 'PF<br><span style="font-weight:400;color:var(--fg-dim)">overall</span>', 'num', 'rowspan="2" data-glossary="PF" style="cursor:pointer;user-select:none;vertical-align:bottom' + (col==='pf'?';color:var(--accent)':'') + '"')}
+                  ${th('wr', 'WR<br><span style="font-weight:400;color:var(--fg-dim)">overall</span>', 'num', 'rowspan="2" data-glossary="WR" style="cursor:pointer;user-select:none;vertical-align:bottom' + (col==='wr'?';color:var(--accent)':'') + '"')}
+                  ${th('occ', 'OCC<br><span style="font-weight:400;color:var(--fg-dim)">total</span>', 'num', 'rowspan="2" data-glossary="OCC" style="cursor:pointer;user-select:none;vertical-align:bottom' + (col==='occ'?';color:var(--accent)':'') + '"')}
+                  <th colspan="3" style="text-align:center;border-bottom:1px solid var(--border)">PROFIT FACTOR BY REGIME</th>
+                  ${th('status', 'STATUS', '', 'rowspan="2" style="cursor:pointer;user-select:none;vertical-align:bottom' + (col==='status'?';color:var(--accent)':'') + '"')}
+                </tr><tr>
+                  ${th('bull',    '<span style="color:#4ADE80">BULL ↗</span>',    'num', 'style="cursor:pointer;user-select:none;font-size:9px;font-weight:400' + (col==='bull'?';color:var(--accent)':'') + '"')}
+                  ${th('caution', '<span style="color:#fbbf24">CAUTION →</span>', 'num', 'style="cursor:pointer;user-select:none;font-size:9px;font-weight:400' + (col==='caution'?';color:var(--accent)':'') + '"')}
+                  ${th('bear',    '<span style="color:#f87171">BEAR ↘</span>',    'num', 'style="cursor:pointer;user-select:none;font-size:9px;font-weight:400' + (col==='bear'?';color:var(--accent)':'') + '"')}
+                </tr></thead>
+                <tbody>${rows || '<tr><td colspan="9" class="empty">no patterns</td></tr>'}</tbody>
+              </table>
+            </div>
+            <div class="chart-legend">
+              <span><span class="lg-line" style="background:rgba(74,222,128,0.55)"></span>PF ≥ 1.4 strong</span>
+              <span><span class="lg-line" style="background:rgba(74,222,128,0.35)"></span>PF ≥ 1.2 good</span>
+              <span><span class="lg-line" style="background:rgba(229,185,76,0.30)"></span>PF ≥ 1.0 marginal</span>
+              <span><span class="lg-line" style="background:rgba(248,113,113,0.30)"></span>PF &lt; 1.0 losing</span>
+              <span class="chart-note" style="display:block">
+                <span style="display:grid;grid-template-columns:1fr 1fr;gap:0.1rem 1.2rem;margin-bottom:0.35rem">
+                  <span><b>Rows</b> — patterns · <b>Columns</b> — macro regime at signal time (BULL / CAUTION / BEAR)</span>
+                  <span><b>Cell</b> — profit factor for that pattern × regime pair · blank = no trades yet</span>
+                  <span><b>PF ≥ 1.4</b> strong · <b>≥ 1.2</b> good · <b>≥ 1.0</b> marginal · <b>&lt; 1.0</b> losing</span>
+                  <span><b>n</b> — sample size · PF 1.5 on n=10 is weak evidence; PF 1.2 on n=100 is solid</span>
+                </span>
+                Click any column header to sort.
+              </span>
+            </div>
           </div>
-          <div class="chart-legend">
-            <span><span class="lg-line" style="background:rgba(74,222,128,0.55)"></span>PF ≥ 1.4 strong</span>
-            <span><span class="lg-line" style="background:rgba(74,222,128,0.35)"></span>PF ≥ 1.2 good</span>
-            <span><span class="lg-line" style="background:rgba(229,185,76,0.30)"></span>PF ≥ 1.0 marginal</span>
-            <span><span class="lg-line" style="background:rgba(248,113,113,0.30)"></span>PF &lt; 1.0 losing</span>
-            <span class="chart-note"><b>Each cell = profit factor for that pattern when fired in that regime · n = trade count (sample size).</b> BULL/CAUTION/BEAR are the macro regime at signal time (same classifier as the regime card above — 4 health-check conditions). PF &lt;1 = losing. Sample size matters: PF 1.5 with n=10 is unreliable, PF 1.2 with n=1000 is solid evidence. Regime-locked patterns (BOS, Liquidity Sweep) are only allowed to fire in named regimes.</span>
-          </div>
-        </div>
-      `;
+        `;
+      }
 
       // ── Backtest tab: per-pattern stats from pattern-playbook (all 12),
       //    enriched with advanced_metrics (Sharpe/MaxDD/AvgWin/AvgLoss only
@@ -761,6 +802,7 @@
       const advPatterns = (playbook.patterns || []).map(p => {
         const live = adv[p.signal_type] || {};
         const grad = ag[p.signal_type] || {};
+        const bs = backtestStats[p.signal_type] || {};
         return {
           signal_type: p.signal_type,
           grade: p.grade,
@@ -778,8 +820,27 @@
           regime_lock: grad.regime_lock,
           quarantined: p.quarantined,
           passes_gate: p.passes_gate,
+          // Statistical rigor — fed by backtest-results.json significance pass
+          p_mcpt: bs.p_mcpt ?? null,
+          p_fdr: bs.p_fdr ?? null,
+          psr_vs_zero: bs.psr_vs_zero ?? null,
+          psr_vs_half: bs.psr_vs_half ?? null,
         };
       }).sort((a, b) => (b.profit_factor || 0) - (a.profit_factor || 0));
+
+      const pCell  = (v) => {
+        if (v == null) return `<td class="num sig-dim" title="n too small">—</td>`;
+        const col = v < 0.05 ? 'var(--num-up)' : v < 0.10 ? 'var(--warn)' : 'var(--fg-dim)';
+        const bold = v < 0.05 ? ' font-weight:600' : '';
+        return `<td class="num mono" style="color:${col};${bold}">${v.toFixed(3)}</td>`;
+      };
+      const psrCell = (v) => {
+        if (v == null) return `<td class="num sig-dim" title="n<30, PSR not computed">—</td>`;
+        const pct = (v * 100).toFixed(0);
+        const col = v >= 0.95 ? 'var(--num-up)' : v >= 0.80 ? 'var(--warn)' : 'var(--fg-dim)';
+        const bold = v >= 0.95 ? ' font-weight:600' : '';
+        return `<td class="num mono" style="color:${col};${bold}">${pct}%</td>`;
+      };
       const backtestRows = advPatterns.map(p => {
         const status = p.quarantined ? '<span class="sig-quarantine">Q</span>'
                      : p.passes_gate === false ? '<span class="sig-blocked">BLOCK</span>'
@@ -788,38 +849,77 @@
           <tr>
             <td class="pat">${escSig(p.signal_type)} ${status}</td>
             <td class="${'gd-' + (p.grade || '').toLowerCase()}">${p.grade || '—'}</td>
-            <td class="mono">${p.backtest_count != null ? fmt.compact(p.backtest_count) : '—'}</td>
-            <td class="mono ${p.live_count > 0 ? '' : 'sig-dim'}">${p.live_count ?? 0}</td>
-            <td class="mono ${p.profit_factor >= 1.1 ? 'num-up' : 'num-dn'}">${p.profit_factor != null ? p.profit_factor.toFixed(2) : '—'}</td>
-            <td class="mono ${wrClass(p.win_rate)}">${p.win_rate != null ? p.win_rate.toFixed(0) + '%' : '—'}</td>
-            <td class="mono ${pnlClass(p.expectancy)}">${p.expectancy != null ? p.expectancy.toFixed(2) + '%' : '—'}</td>
-            <td class="mono num-up">${p.avg_win != null ? '+' + p.avg_win.toFixed(2) + '%' : '—'}</td>
-            <td class="mono num-dn">${p.avg_loss != null ? '-' + p.avg_loss.toFixed(2) + '%' : '—'}</td>
-            <td class="mono ${p.sharpe >= 0 ? 'num-up' : 'num-dn'}">${p.sharpe != null ? p.sharpe.toFixed(2) : '—'}</td>
-            <td class="mono num-dn">${p.max_drawdown != null ? '-' + p.max_drawdown.toFixed(2) + '%' : '—'}</td>
-            <td class="mono">${p.avg_hold_days != null ? p.avg_hold_days.toFixed(1) + 'd' : '—'}</td>
+            <td class="num">${p.backtest_count != null ? fmt.compact(p.backtest_count) : '—'}</td>
+            <td class="num ${p.live_count > 0 ? '' : 'sig-dim'}">${p.live_count ?? 0}</td>
+            <td class="num ${p.profit_factor >= 1.1 ? 'num-up' : 'num-dn'}">${p.profit_factor != null ? p.profit_factor.toFixed(2) : '—'}</td>
+            <td class="num ${wrClass(p.win_rate)}">${p.win_rate != null ? p.win_rate.toFixed(0) + '%' : '—'}</td>
+            <td class="num ${pnlClass(p.expectancy)}">${p.expectancy != null ? p.expectancy.toFixed(3) : '—'}</td>
+            <td class="num num-up">${p.avg_win  != null ? '+' + p.avg_win.toFixed(2)  + '%' : '—'}</td>
+            <td class="num num-dn">${p.avg_loss != null ? '-' + p.avg_loss.toFixed(2) + '%' : '—'}</td>
+            ${pCell(p.p_mcpt)}
+            ${pCell(p.p_fdr)}
+            ${psrCell(p.psr_vs_zero)}
+            ${psrCell(p.psr_vs_half)}
+            <td class="num ${p.sharpe != null && p.sharpe >= 0 ? 'num-up' : 'num-dn'}">${p.sharpe != null ? p.sharpe.toFixed(2) : '—'}</td>
+            <td class="num num-dn">${p.max_drawdown != null ? '-' + p.max_drawdown.toFixed(1) + '%' : '—'}</td>
+            <td class="num">${p.avg_hold_days != null ? p.avg_hold_days.toFixed(1) + 'd' : '—'}</td>
             <td class="mono">${p.regime_lock ? `<span class="sig-regime-lock">${escSig(p.regime_lock)}</span>` : '—'}</td>
           </tr>
         `;
       }).join('');
+
+      const sigStrip = sigMeta ? `
+        <div class="sig-rigor-strip" style="display:flex;gap:14px;flex-wrap:wrap;font-size:11px;padding:6px 10px;background:var(--bg-elev);border-bottom:1px solid var(--border);font-family:var(--font-mono)">
+          <span title="(pattern × regime) tests run with Monte Carlo permutation">TESTS <b style="color:var(--fg)">${sigMeta.n_tests}</b></span>
+          <span title="Patterns whose MCPT p remains < 0.05 after Benjamini-Hochberg FDR correction">FDR&lt;0.05 PASS <b style="color:${sigMeta.n_pass_fdr_05 > 0 ? '#4ade80' : 'var(--fg-dim)'}">${sigMeta.n_pass_fdr_05}/${sigMeta.n_tests}</b></span>
+          <span title="Patterns whose Probabilistic Sharpe Ratio shows ≥95% confidence true Sharpe > 0. Denominator = patterns with n≥30 closed trades (PSR-eligible), not total MCPT tests.">PSR&gt;0 ≥ 0.95 <b style="color:${sigMeta.n_pass_psr_zero_95 > 0 ? '#4ade80' : 'var(--fg-dim)'}">${sigMeta.n_pass_psr_zero_95}/${sigMeta._n_psr_eligible ?? sigMeta.n_tests}</b></span>
+          <span style="color:var(--fg-dim)">${escSig(sigMeta.method || '')}</span>
+        </div>
+      ` : '';
       const backtestContent = `
         <div class="mod-panel">
           <div class="mod-panel-title">BACKTEST STATISTICS · per-pattern · live + historical blend</div>
+          ${sigStrip}
           <div class="tbl-wrap">
             <table class="tbl-dense">
               <thead><tr>
                 <th>PATTERN</th><th>GD</th>
-                <th class="num">BT N</th><th class="num">LIVE N</th>
-                <th class="num">PF</th><th class="num">WR</th><th class="num">EXP</th>
-                <th class="num">AVG WIN</th><th class="num">AVG LOSS</th>
-                <th class="num">SHARPE</th><th class="num">MAX DD</th><th class="num">HOLD</th>
+                <th class="num" title="Backtest trade count">BT N</th>
+                <th class="num" title="Closed live trade count">LIVE N</th>
+                <th class="num" title="Profit Factor = gross profit / gross loss. ≥1.1 passes gate">PF</th>
+                <th class="num" title="Backtest win rate">WR</th>
+                <th class="num" title="Expectancy = (WR × avg win) − (loss% × avg loss)">EXPECT</th>
+                <th class="num" title="Average winning trade return (live)">AVG WIN</th>
+                <th class="num" title="Average losing trade return (live)">AVG LOSS</th>
+                <th class="num" title="MCPT p-value: Monte Carlo permutation test. Green &lt;0.05, yellow &lt;0.10">p(MCPT)</th>
+                <th class="num" title="FDR-adjusted p-value (Benjamini-Hochberg). Green &lt;0.05 survives multiple-testing correction">p(FDR)</th>
+                <th class="num" title="Probabilistic Sharpe Ratio vs 0: % confidence true Sharpe &gt; 0. ≥95% = strong evidence. Shown only when n≥30.">PSR&gt;0</th>
+                <th class="num" title="PSR vs benchmark 0.5: % confidence true Sharpe is meaningfully positive. Stricter test.">PSR&gt;0.5</th>
+                <th class="num" title="Annualized Sharpe (live trades)">SHARPE</th>
+                <th class="num" title="Max peak-to-trough drawdown (live)">MAX DD</th>
+                <th class="num" title="Average holding period (live)">HOLD</th>
                 <th>REGIME LOCK</th>
               </tr></thead>
-              <tbody>${backtestRows || '<tr><td colspan="13" class="empty">no backtest data</td></tr>'}</tbody>
+              <tbody>${backtestRows || '<tr><td colspan="17" class="empty">no backtest data</td></tr>'}</tbody>
             </table>
           </div>
           <div class="chart-legend">
-            <span class="chart-note"><b>BT N</b> backtest sample size (historical occurrences) · <b>LIVE N</b> live trades closed since signal-tracking went live · <b>PF</b> profit factor (gross profit / gross loss; ≥1.1 passes quality gate) · <b>WR</b> win rate · <b>EXP</b> expectancy (avg P&L per trade) · <b>AVG WIN/AVG LOSS/SHARPE/MAX DD/HOLD</b> are LIVE-ONLY metrics — only computed once a pattern has closed live trades, so most show "—" until the ledger fills. <b>REGIME LOCK</b> pattern only fires in named regime. <b>Q</b> = quarantined. <b>BLOCK</b> = fails PF gate.</span>
+            <span class="chart-note" style="display:block">
+              <span style="display:grid;grid-template-columns:1fr 1fr;gap:0.1rem 1.2rem;margin-bottom:0.35rem">
+                <span><b>BT N</b> — backtest trade count (5-year historical)</span>
+                <span><b>LIVE N</b> — closed live trades since tracking began</span>
+                <span><b>PF</b> — profit factor (gross profit ÷ gross loss). ≥1.1 passes gate</span>
+                <span><b>WR</b> — win rate %</span>
+                <span><b>EXPECT</b> — expectancy = (WR × avg win) − (loss% × avg loss). Edge per trade</span>
+                <span><b>AVG WIN / AVG LOSS</b> — live-only (— until ledger fills)</span>
+                <span><b>p(MCPT)</b> — Monte Carlo permutation p-value. Green &lt;0.05, yellow &lt;0.10</span>
+                <span><b>p(FDR)</b> — Benjamini-Hochberg adjusted p across all tests. Green &lt;0.05 survives multiple-testing correction</span>
+                <span><b>PSR&gt;0</b> — probability true Sharpe &gt; 0. Green ≥95% = strong evidence of edge. Requires n≥30</span>
+                <span><b>PSR&gt;0.5</b> — same test vs benchmark Sharpe 0.5 (meaningfully positive). Stricter</span>
+                <span><b>SHARPE / MAX DD / HOLD</b> — live-only metrics</span>
+                <span><b>REGIME LOCK</b> — pattern only fires when current regime matches · <b>Q</b> quarantined · <b>BLOCK</b> fails PF gate</span>
+              </span>
+            </span>
           </div>
         </div>
       `;
@@ -828,25 +928,80 @@
       const grades = Object.keys(adaptiveGrades).map(k => ({ signal_type: k, ...adaptiveGrades[k] }))
         .sort((a, b) => (b.blended_pf || 0) - (a.blended_pf || 0));
       const gradesRows = grades.map(g => {
-        const downCls = g.downgraded ? 'num-warn' : '';
-        return `
-          <tr>
-            <td class="pat">${escSig(g.signal_type)}</td>
-            <td class="${'gd-' + (g.grade || '').toLowerCase()}">${g.grade || '—'}</td>
-            <td class="mono ${(g.blended_pf || 0) >= 1.1 ? 'num-up' : 'num-dn'}"><b>${g.blended_pf != null ? g.blended_pf.toFixed(2) : '—'}</b></td>
-            <td class="mono ${wrClass(g.blended_wr)}">${g.blended_wr != null ? g.blended_wr.toFixed(0) + '%' : '—'}</td>
-            <td class="mono">${g.backtest_pf != null ? g.backtest_pf.toFixed(2) : '—'}</td>
-            <td class="mono">${g.backtest_wr != null ? g.backtest_wr.toFixed(0) + '%' : '—'}</td>
-            <td class="mono">${g.backtest_count != null ? fmt.compact(g.backtest_count) : '—'}</td>
-            <td class="mono ${(g.live_pf || 0) >= 1.1 ? 'num-up' : (g.live_pf != null && g.live_pf > 0) ? 'num-dn' : 'sig-dim'}">${g.live_pf != null ? g.live_pf.toFixed(2) : '—'}</td>
-            <td class="mono ${wrClass(g.live_wr)}">${g.live_wr != null ? g.live_wr.toFixed(0) + '%' : '—'}</td>
-            <td class="mono ${g.live_count > 0 ? '' : 'sig-dim'}">${g.live_count ?? 0}</td>
-            <td class="mono ${pnlClass(g.live_avg_return)}">${g.live_avg_return != null ? (g.live_avg_return >= 0 ? '+' : '') + g.live_avg_return.toFixed(2) + '%' : '—'}</td>
-            <td class="mono">${escSig(g.blend_weights || '—')}</td>
-            <td class="mono">${g.regime_lock ? `<span class="sig-regime-lock">${escSig(g.regime_lock)}</span>` : '—'}</td>
-            <td class="${downCls}" style="font-size:10px">${g.downgraded ? escSig(g.downgrade_reason || 'downgraded') : ''}</td>
-          </tr>
-        `;
+        const am  = advancedMetrics[g.signal_type] || {};
+        const rwr = rollingWR[g.signal_type] || {};
+        const blocked  = (qualityGates.blocked     || []).find(p => p.signal_type === g.signal_type);
+        const passed   = (qualityGates.passed      || []).find(p => p.signal_type === g.signal_type);
+        const locked   = (qualityGates.quarantined || []).find(p => p.signal_type === g.signal_type)
+                      || (qualityGates.locked      || []).find(p => p.signal_type === g.signal_type);
+        const isActive = passed ? true : (blocked || locked) ? false : null;
+        const inactiveReason = blocked?.reason || (locked ? 'Quarantined' : '');
+
+        // Blend hint
+        const blendColor = g.blend_weights === '100/0' ? 'var(--fg-dim)' : 'var(--yellow)';
+        const blendHint = g.blend_weights ? `<div style="font-size:9px;color:${blendColor};font-weight:400;margin-top:1px">${escSig(g.blend_weights)}</div>` : '';
+
+        // Regime lock badge
+        const allowedRegimes = g.regime_lock_allowed;
+        const lockBadge = Array.isArray(allowedRegimes) && allowedRegimes.length
+          ? `<span class="sig-pill" style="color:#fbbf24;background:rgba(251,191,36,0.15);border-color:#fbbf2444">&#128274; ${escSig(allowedRegimes.join('/'))}</span>`
+          : (Array.isArray(allowedRegimes) && allowedRegimes.length === 0
+            ? `<span class="sig-pill" style="color:#f87171;background:rgba(248,113,113,0.15);border-color:#f8717144">&#128274; none</span>`
+            : '');
+        const activeBadge = isActive === false
+          ? `<span class="sig-pill" style="color:#8b949e;background:rgba(139,148,158,0.18);border-color:#8b949e44" title="${escSig(inactiveReason)}">INACTIVE</span>`
+          : isActive === true
+            ? `<span class="sig-pill" style="color:#4ade80;background:rgba(74,222,128,0.15);border-color:#4ade8044">ACTIVE</span>`
+            : '';
+        const rowOpacity = isActive === false ? ' style="opacity:0.55"' : '';
+        const downMark   = g.downgraded ? ` <span title="${escSig(g.downgrade_reason || 'downgraded')}" style="color:var(--warn)">⚠</span>` : '';
+
+        // Live PF cell with ▲/▼ vs backtest
+        let livePfHtml;
+        if (g.live_pf == null) {
+          livePfHtml = `<td class="num sig-dim">—</td>`;
+        } else {
+          let pfCol = 'var(--fg)', pfArrow = '';
+          if (g.backtest_pf != null && g.backtest_pf > 0) {
+            if (g.live_pf >= g.backtest_pf * 1.2) { pfCol = 'var(--num-up)'; pfArrow = ' ▲'; }
+            else if (g.live_pf <= g.backtest_pf * 0.8) { pfCol = 'var(--num-dn)'; pfArrow = ' ▼'; }
+          }
+          livePfHtml = `<td class="num" style="color:${pfCol};font-weight:600">${g.live_pf.toFixed(2)}${pfArrow}</td>`;
+        }
+
+        // Decay
+        const ds = rwr.decay_score;
+        const dCol = ds == null ? 'var(--fg-dim)' : ds >= 0.75 ? 'var(--num-up)' : ds >= 0.5 ? 'var(--warn)' : ds >= 0.25 ? '#f97316' : 'var(--num-dn)';
+        const dTxt = ds != null ? ds.toFixed(2) : '—';
+
+        // Trend
+        const trendIcon = rwr.trend === 'improving' ? '<span style="color:var(--num-up)">▲</span>'
+                        : rwr.trend === 'declining'  ? '<span style="color:var(--num-dn)">▼</span>'
+                        : rwr.trend === 'stable'     ? '<span style="color:var(--fg-dim)">▬</span>' : '—';
+
+        const sharpe = am.sharpe;
+        const shCol  = sharpe == null ? 'var(--fg-dim)' : sharpe >= 1 ? 'var(--num-up)' : sharpe >= 0 ? 'var(--fg)' : 'var(--num-dn)';
+        const exp = am.expectancy;
+        const expCol = exp == null ? 'var(--fg-dim)' : exp >= 0 ? 'var(--num-up)' : 'var(--num-dn)';
+        const mdd = am.max_drawdown;
+        const tot = g.live_total_return;
+
+        return `<tr${rowOpacity}>
+          <td class="pat">${escSig(g.signal_type.replace(/_/g,' '))}${lockBadge}${activeBadge}${downMark}</td>
+          <td class="${'gd-' + (g.grade || '').toLowerCase()}" style="font-weight:700">${g.grade || '—'}${blendHint}</td>
+          <td class="num ${(g.blended_pf || 0) >= 1.1 ? 'num-up' : 'num-dn'}"><b>${g.blended_pf != null ? g.blended_pf.toFixed(2) : '—'}</b></td>
+          <td class="num">${g.backtest_pf != null ? g.backtest_pf.toFixed(2) : '—'}</td>
+          ${livePfHtml}
+          <td class="num ${wrClass(g.live_wr)}">${g.live_wr != null ? g.live_wr.toFixed(0) + '%' : '—'}</td>
+          <td class="num ${pnlClass(g.live_avg_return)}">${g.live_avg_return != null ? (g.live_avg_return >= 0 ? '+' : '') + g.live_avg_return.toFixed(2) + '%' : '—'}</td>
+          <td class="num ${pnlClass(tot)}" style="font-weight:600">${tot != null ? (tot >= 0 ? '+' : '') + tot.toFixed(1) + '%' : '—'}</td>
+          <td class="num" style="color:${expCol}">${exp != null ? (exp >= 0 ? '+' : '') + exp.toFixed(3) : '—'}</td>
+          <td class="num" style="color:${shCol}">${sharpe != null ? sharpe.toFixed(2) : '—'}</td>
+          <td class="num num-dn">${mdd != null && mdd > 0 ? '-' + mdd.toFixed(1) + '%' : '—'}</td>
+          <td class="num ${g.live_count > 0 ? '' : 'sig-dim'}">${g.live_count ?? 0}</td>
+          <td class="num" style="color:${dCol};font-weight:600">${dTxt}</td>
+          <td class="num">${trendIcon}</td>
+        </tr>`;
       }).join('');
       const gradesContent = `
         <div class="mod-panel">
@@ -854,18 +1009,42 @@
           <div class="tbl-wrap">
             <table class="tbl-dense">
               <thead><tr>
-                <th>PATTERN</th><th>GD</th>
-                <th class="num">BLEND PF</th><th class="num">BLEND WR</th>
-                <th class="num">BT PF</th><th class="num">BT WR</th><th class="num">BT N</th>
-                <th class="num">LIVE PF</th><th class="num">LIVE WR</th><th class="num">LIVE N</th><th class="num">LIVE AVG</th>
-                <th class="num">WEIGHTS</th>
-                <th>REGIME LOCK</th><th>NOTES</th>
+                <th>PATTERN</th>
+                <th>GD</th>
+                <th class="num" title="Blended PF = backtest PF weighted by blend ratio">BLEND PF</th>
+                <th class="num" title="5-year backtest Profit Factor">BT PF</th>
+                <th class="num" title="Live Profit Factor — ▲/▼ = 20%+ vs backtest">LIVE PF</th>
+                <th class="num">LIVE WR</th>
+                <th class="num">AVG RET</th>
+                <th class="num">TOTAL P&amp;L</th>
+                <th class="num" title="Expectancy = (WR × avg win) − (loss% × avg loss)">EXPECT</th>
+                <th class="num" title="Annualized Sharpe ratio. ≥1.0 excellent">SHARPE</th>
+                <th class="num" title="Max drawdown — worst peak-to-trough loss">MAX DD</th>
+                <th class="num" title="Closed live trade count">#</th>
+                <th class="num" title="Decay score = rolling Sharpe ÷ lifetime Sharpe. ≥0.75 healthy">DECAY</th>
+                <th class="num" title="Recent vs older win rate trend">TREND</th>
               </tr></thead>
               <tbody>${gradesRows || '<tr><td colspan="14" class="empty">no adaptive grades</td></tr>'}</tbody>
             </table>
           </div>
           <div class="chart-legend">
-            <span class="chart-note"><b>BLEND PF/WR</b> = the working grade (backtest + live blended by WEIGHTS column, e.g. "100/0" = pure backtest until live sample is meaningful) · <b>BT</b> = historical backtest (large sample, slow to update) · <b>LIVE</b> = live closed trades since signal-tracking went live (small sample, recent reality) · <b>REGIME LOCK</b> = pattern only allowed to fire in named regime · <b>NOTES</b> = downgrade reason if the live performance forced a grade reduction</span>
+            <span class="chart-note" style="display:block">
+              <span style="display:grid;grid-template-columns:1fr 1fr;gap:0.1rem 1.2rem;margin-bottom:0.35rem">
+                <span><b>GD</b> — letter grade (A ≥ 1.2 · B ≥ 1.1 · C ≥ 1.0 · D &lt; 1.0); ratio below = blend weight (100/0 = backtest-only)</span>
+                <span><b>BLEND PF</b> — working profit factor = backtest + live weighted blend</span>
+                <span><b>BT PF</b> — 5-year backtest profit factor</span>
+                <span><b>LIVE PF</b> — closed live trades PF · ▲/▼ = 20%+ divergence from backtest</span>
+                <span><b>LIVE WR / AVG RET</b> — live win rate and average return per closed trade</span>
+                <span><b>TOTAL P&amp;L</b> — cumulative live return across all closed trades</span>
+                <span><b>EXPECT</b> — (WR × avg win) − (loss% × avg loss) · dollar edge per trade</span>
+                <span><b>SHARPE</b> — annualised Sharpe ratio · ≥ 1.0 excellent</span>
+                <span><b>MAX DD</b> — worst peak-to-trough drawdown since tracking began</span>
+                <span><b>#</b> — closed live trade count</span>
+                <span><b>DECAY</b> — rolling ÷ lifetime Sharpe · ≥ 0.75 healthy · &lt; 0.25 degrading</span>
+                <span><b>TREND</b> — recent win rate vs earlier period win rate</span>
+              </span>
+              &#128274; regime-locked — pattern only fires in its designated regime &bull; ACTIVE/INACTIVE badge shows current status &bull; ⚠ = grade was downgraded by regime context
+            </span>
           </div>
         </div>
       `;
@@ -1154,6 +1333,9 @@
         </tr>`;
       }).join('');
       const liveContent = `
+        <div style="margin:0 0 8px 0;padding:6px 10px;background:rgba(229,185,76,0.12);border:1px solid rgba(229,185,76,0.4);border-radius:3px;font-size:11px;color:var(--fg);line-height:1.5">
+          <b style="color:#fbbf24">SIMULATION ONLY</b> &middot; No real money &middot; Paper trades automatically opened/closed from signal triggers using the Position Sizer settings above. Equity curve and P&amp;L are hypothetical.
+        </div>
         <div class="mod-panel">
           <div class="mod-panel-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <span>EQUITY CURVE · ${_eqMode === 'alpha' ? 'Strategy α (sum of return %)' : 'Portfolio $ (sized + compounded)'} · ${closedTrades.length} closed trades</span>
@@ -1163,10 +1345,10 @@
             </span>
           </div>
           <div class="chart-wrap">${buildEquityCurveChart(equityCurve, closedTrades)}</div>
-          <div class="chart-legend"><span class="chart-note">${
+          <div class="chart-legend"><span class="chart-note" style="display:block">${
             _eqMode === 'alpha'
-              ? `<b>Strategy α %</b> = sum of every closed trade&rsquo;s return percentage, ignoring sizing. Pure strategy edge: assumes equal allocation per signal. Matches the old page&rsquo;s α mode.`
-              : `starting account = <b>${fmtUsd(sizer.account)}</b> · method = <b>${escSig(sizer.method.replace(/_/g, ' '))}</b> · risk = <b>${sizer.riskPct}%</b> · walks each closed trade chronologically with your sizer applied → real account impact. <b>This is much smaller than α %</b> because Half Kelly only allocates ~2-3% per trade.`
+              ? `<b>Strategy α mode</b> — sums each closed trade&rsquo;s return % assuming equal allocation per signal, ignoring position sizing. Shows the raw edge of the strategy, not what your account actually earned. Switch to <b>Portfolio $</b> to see real account impact.`
+              : `<b>Portfolio $ mode</b> — sizes each trade using your position sizer (account: <b>${fmtUsd(sizer.account)}</b> · method: <b>${escSig(sizer.method.replace(/_/g, ' '))}</b> · risk: <b>${sizer.riskPct}%/trade</b>) then compounds chronologically through all closed trades. Significantly smaller than Strategy α because Half Kelly allocates only ~2–3% per trade.`
           }</span></div>
         </div>
         <div class="mod-panel">
@@ -1237,7 +1419,7 @@
 
       function tabContent() {
         switch (state.tab) {
-          case 'heatmap':  return heatmapContent;
+          case 'heatmap':  return buildHeatmapContent();
           case 'backtest': return backtestContent;
           case 'grades':   return gradesContent;
           case 'live':     return liveContent;
@@ -1251,7 +1433,7 @@
         { id: 'heatmap',  label: `Heatmap · ${playbookPatterns.length}` },
         { id: 'backtest', label: `Backtest · ${advPatterns.length}` },
         { id: 'grades',   label: `Grades · ${grades.length}` },
-        { id: 'live',     label: `Live Trades · ${openTrades.length + closedTrades.length}` },
+        { id: 'live',     label: `Paper Trades · ${openTrades.length + closedTrades.length}` },
         { id: 'how',      label: `How It Works` },
       ];
       const tabBtns = tabs.map(t => `<button class="sig-tab-btn${t.id === state.tab ? ' active' : ''}" data-sig-tab="${t.id}" type="button">${t.label}</button>`).join('');
@@ -1325,6 +1507,10 @@
           [data-mod-panel="sig"] .sig-regime-lock {
             font-size:9px; padding:1px 5px; border-radius:2px;
             background:rgba(167,139,250,0.20); color:#A78BFA; font-family:var(--font-mono); font-weight:700;
+          }
+          [data-mod-panel="sig"] .sig-pill {
+            display:inline-block; font-size:8px; padding:1px 4px; border-radius:2px;
+            font-family:var(--font-mono); font-weight:700; border:1px solid; margin-left:3px; vertical-align:middle;
           }
           [data-mod-panel="sig"] .sig-dim { color: var(--fg-faint); }
 
@@ -1451,6 +1637,16 @@
             selectRow(body, setupList, idx);
           });
         });
+        if (state.tab === 'heatmap') {
+          body.querySelectorAll('[data-hm-sort]').forEach(th => {
+            th.addEventListener('click', () => {
+              const col = th.dataset.hmSort;
+              if (state.hmSortCol === col) state.hmSortDir = state.hmSortDir === 'desc' ? 'asc' : 'desc';
+              else { state.hmSortCol = col; state.hmSortDir = 'desc'; }
+              repaint();
+            });
+          });
+        }
         if (state.tab === 'setups' && setupList.length > 0) {
           selectRow(body, setupList, 0);
         }

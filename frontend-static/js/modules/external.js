@@ -282,7 +282,6 @@
         <div class="mod-head" data-mod-panel="nws">
           <div class="mod-title">${window.OC_TITLE('news')} · NEWS INTEL</div>
           <div class="mod-meta">
-            <a class="chip ext-link" href="https://news.clawmo.tech/" target="_blank">open ↗</a>
             <span class="chip chip-dim">${escNws(d.generated_at_et || fmt.ago(d.generated_at))}</span>
           </div>
         </div>
@@ -690,7 +689,6 @@
         <div class="mod-head" data-mod-panel="trp">
           <div class="mod-title">${window.OC_TITLE('trump')} · TRUTH SOCIAL MARKET RISK</div>
           <div class="mod-meta">
-            <a class="chip ext-link" href="https://trumpsocial.clawmo.tech/" target="_blank">open ↗</a>
             <span class="chip chip-dim">last post ${fmt.ago(d.last_post_date)}</span>
             <span class="chip chip-dim">${fmt.ago(d.generated_at)}</span>
           </div>
@@ -1029,7 +1027,6 @@
         <div class="mod-head" data-mod-panel="twt">
           <div class="mod-title">${window.OC_TITLE('twitter')} · X SIGNAL MONITOR</div>
           <div class="mod-meta">
-            <a class="chip ext-link" href="https://news.clawmo.tech/" target="_blank">open ↗</a>
             <span class="chip chip-dim">${escNws(d.generated_at_et || fmt.ago(d.generated_at))}</span>
           </div>
         </div>
@@ -1266,7 +1263,7 @@
             </div>
           </div>
           <div class="chart-legend">
-            <span class="chart-note">forward-alpha cohort tracking from snapshot_picks.py + compute_alpha.py (22:30 ET Mon-Fri cron) · full history at <a href="https://deep-value.clawmo.tech/alpha.html" target="_blank" style="color:var(--accent)">alpha.html ↗</a></span>
+            <span class="chart-note">forward-alpha cohort tracking from snapshot_picks.py + compute_alpha.py (22:30 ET Mon-Fri cron)</span>
           </div>
         </div>
       ` : '';
@@ -1310,7 +1307,6 @@
           <div class="mod-title">${window.OC_TITLE('deep-value')} · ${idx} · DEEP VALUE PIPELINE</div>
           <div class="mod-meta">
             ${['SPY','QQQ','IWM','IWM-EXT'].map(i => `<button class="chip ${i === idx ? 'chip-unlocked' : ''} chip-btn" data-idx="${i}">${i}</button>`).join('')}
-            <a class="chip ext-link" href="https://deep-value.clawmo.tech/" target="_blank">open ↗</a>
             <span class="chip chip-dim">${fmt.ago(d.timestamp)}</span>
           </div>
         </div>

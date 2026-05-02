@@ -1,6 +1,6 @@
 /* terminal.clawmo.tech — i18n helpers
    Scope: module labels + titles. Panel titles and column headers stay English
-   per terminal convention (Bloomberg/Refinitiv also keep those English for CN locales). */
+   per terminal convention (Bloomberg also keeps those English for CN locales). */
 (function () {
   'use strict';
 

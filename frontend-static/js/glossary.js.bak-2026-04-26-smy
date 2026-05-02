@@ -100,10 +100,6 @@
     'RVOL':      { full: 'Relative Volume',          def: 'Volume ÷ average volume over prior periods; > 1 = heavy' },
     'MFI':       { full: 'Money Flow Index',         def: 'Volume-weighted RSI (0–100); > 80 overbought, < 20 oversold' },
     'CMF':       { full: 'Chaikin Money Flow',       def: 'Smart-money flow (−1 to +1); positive = accumulation' },
-    'POC':       { full: 'Point of Control',         def: 'Volume-weighted modal price over the last 3 months — where the most shares actually changed hands. A proxy for the institutional cost basis.' },
-    'POC ZONE':  { full: 'POC Zone',                 def: 'Price is within ±5% of the 3-month Point of Control — you would be entering at the same price the volume-weighted majority paid. Adds +10 to score.' },
-    'CLUSTER':   { full: 'Insider Cluster',          def: '≥2 distinct insiders bought ≥$250K total in the last 7 trading days. Stronger conviction than a single insider buy. Adds +5 to score.' },
-    'INS CLUSTER': { full: 'Insider Cluster',        def: '≥2 distinct insiders bought ≥$250K total in the last 7 trading days. Stronger conviction than a single insider buy. Adds +5 to score.' },
     'β':         { full: 'Beta',                     def: 'Sensitivity to the market; 1.0 = moves with the market' },
 
     /* ── Valuation (common-finance) ───────────────────────── */
@@ -350,24 +346,6 @@
     'YIELD':       { full: 'Yield',                   def: 'Annualized yield of the bond at the current price' },
     'MATURITY':    { full: 'Maturity',                def: 'Years until the bond principal is repaid' },
     'SIGNAL':      { full: 'Signal',                  def: 'Categorical state or indicator label' },
-
-    /* ── Smart Money module — composite score interpretation ── */
-    'SMY-SCORE':   { full: 'Smart Money Composite Score', def: '0–100 institutional flow strength. Inputs: volume spike + MFI + OBV + CMF + relative volume, with +10 for POC zone and +5 for insider cluster. ≥80 strong accumulation, ≥65 accumulation, ≤35 distribution, ≤20 strong distribution.' },
-    'SMY-SIGNAL':  { full: 'Smart Money Signal Label', def: 'Categorical bucket for the composite score: STRONG ACCUMULATION (≥80), ACCUMULATION (≥65), NEUTRAL (50–64), DISTRIBUTION (≤35), STRONG DISTRIBUTION (≤20). Hover the cell for the full reason.' },
-    'SMY-POC':     { full: 'Distance from 3M Point of Control (%)', def: 'Signed % from price to 3-month POC. 0 = at the institutional cost basis. Negative = price below POC (you would buy cheaper than the volume-weighted average). |distance| ≤ 5% triggers POC ZONE and a +10 score boost.' },
-    'SMY-CLUSTER': { full: 'Insider Cluster Flag',    def: '✓ when ≥2 insiders bought ≥$250K of this ticker in the last 7 days. — when no cluster detected. Source: latest_buys in insider-trades.json.' },
-    /* ── v3.1 Wyckoff distribution + ETF flow ── */
-    'FLOW-SCORE':  { full: 'Distribution Warning Score', def: 'v3.1: 0–100 distribution warning. High Flow⚠ + high Score = ORDERLY DISTRIBUTION (Heaton signal). Inputs: 18d vol-vs-price slope divergence, Wyckoff churn bars, extension streak, ETF flow %.' },
-    'ORDERLY-DIST':{ full: 'Orderly Distribution',       def: 'Smart money distributing while keeping price elevated. Detected when accumulation Score ≥65 AND Flow Warning ≥60 simultaneously. Classic Heaton/Wyckoff late-stage distribution.' },
-    'VOL-DIV':     { full: 'Volume Trend Divergence',    def: '18-day price slope positive AND volume slope negative >1%/day. Rally on shrinking participation — APs distributing into retail bid. Rising price + falling volume = demand exhaustion.' },
-    'CHURN':       { full: 'Wyckoff Churn Bars',         def: 'Heavy volume (≥1.5× 20d avg) + tight body/range (<30%) + close in lower half. Supply absorbing demand at top. ≥2 in 10 sessions = late-stage warning.' },
-    'STREAK':      { full: 'Up-Day Streak',              def: 'Consecutive up-days ending today. ≥10 = stretched (late-stage), ≥14 = extreme (4σ rare). SOXX hit 18 days in April 2026 — the probability under fair odds is 1-in-262,000.' },
-    'ETF-FLOW-5D': { full: 'ETF 5-Day Net Flow',         def: 'ETFs only: net creation/redemption as % of AUM over 5 days. Negative = APs redeeming = smart money exit. <−5% = significant outflow. Collects daily 16:31 ET; meaningful from day 7.' },
-    'SECTOR-FLOW': { full: 'Sector ETF Flow Override',   def: 'For stocks: 5-day flow on the parent sector ETF (e.g. SOXX for semis, XLK for tech). When sector bleeds >3% AUM, individual stock conviction downgrades one tier regardless of OBV.' },
-    'SECTOR-ROTATION': { full: 'Sector Rotation Δ (S/F)', def: 'Day-over-day delta in the heatmap. S±N = accumulation score change vs prior day (green=rising, red=falling). F±N = distribution warning change — INVERTED color: rising F = sector entering distribution (red=bad), falling F = warning easing (green=good). Available from day 2 onward.' },
-
-    'TAG':         { full: 'Universe Tag',            def: 'PORTFOLIO = your holdings · MACRO = sector/market ETFs · RADAR = S&P 500 + top 50 foreign ADRs by market cap' },
-    'SECTOR':      { full: 'GICS Sector',             def: 'Global Industry Classification Standard sector (e.g. Technology, Healthcare, Financials). Useful for spotting which sectors are seeing institutional flows.' },
 
     /* ── Trump Monitor ───────────────────────────────────── */
     'SHARE':       { full: 'Share of Total',             def: '% of all signals in the 60-day window accounted for by this signal type' },

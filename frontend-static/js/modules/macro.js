@@ -1322,6 +1322,9 @@
               <p><b>Dividend Yield</b> — Annual dividends per share ÷ price. Cash return to shareholders. Declining over time as companies shift to buybacks over direct payouts. Mean ~${fmt.num(mv.dividend_yield?.mean, 2)}%.</p>
               <p><b>Equity Risk Premium (ERP)</b> — Earnings Yield minus 10Y Treasury yield. Extra compensation stocks offer over risk-free bonds. Negative ERP = bonds yield more than stocks (historically rare; suggests stocks expensive relative to bonds).</p>
             </div>
+            <div class="small" style="margin-top:6px;color:var(--fg-dim);font-size:10px">
+              Data: <a href="https://multpl.com" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;opacity:0.7">Multpl.com</a> (S&amp;P P/E · CAPE · earnings yield · dividend yield) &middot; FRED / Federal Reserve (Buffett Indicator · ERP)
+            </div>
           </div>
         </div>
       `;

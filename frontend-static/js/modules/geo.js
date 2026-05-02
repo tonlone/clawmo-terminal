@@ -5,6 +5,55 @@
   const BASE = 'https://stocks.clawmo.tech/data';
 
   let _map = null;
+  let _currentRegion = 'gulf';
+  let _geoBody = null;
+
+  const GEO_REGIONS = {
+    gulf: {
+      label: 'Gulf / Hormuz',
+      desc:  'Persian Gulf · Strait of Hormuz · Gulf of Oman',
+      heroNarrative: 'Coverage: W Persian Gulf · E Gulf / Strait of Hormuz · Gulf of Oman (3 VesselFinder tiles). ~21% of global seaborne oil + 20% of LNG transits Hormuz.',
+      contextHtml: `
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Strait of Hormuz</b> — a 33km-wide chokepoint between Oman and Iran through which ~21% of global oil trade and ~20% of LNG passes. This module covers the full upstream/downstream picture: the Persian Gulf loading terminals and Gulf of Oman transit lanes.</p>
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">What to watch:</b> SFL pings below 800, tanker share falling sharply, or military vessels massing near the strait signal disruption risk. Normal is 1500–2500 SFL pings across all three tiles.</p>
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Portfolio impact:</b> Disruption → oil spike (OXY, XOM, CVX) + shipping premium (tanker ETFs) + defense bid (LMT, RTX). Sustained closure pushes crude +20–40% within days.</p>`,
+      marinetraffic: 'https://www.marinetraffic.com/en/ais/home/centerx:55.4/centery:25.9/zoom:7',
+      center: [26, 55], zoom: 6,
+    },
+    arabian_sea: {
+      label: 'Arabian Sea',
+      desc:  'W Arabian Sea · Pakistan coast · India west coast',
+      heroNarrative: 'Coverage: NW Arabian Sea + Pakistan coast + India west coast. Primary corridor for Gulf LNG/crude moving east toward Indian subcontinent terminals.',
+      contextHtml: `
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Arabian Sea</b> — the first leg after Gulf of Oman for tankers heading to India, Pakistan, and onward. India is the world's 3rd-largest LNG importer and a major crude buyer from the Gulf.</p>
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Key ports:</b> Mundra (Gujarat), JNPT (Mumbai), Kochi, Karachi — watch for unusual congestion or vessel diversions signalling demand shifts or port disruption.</p>
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Portfolio impact:</b> India LNG demand surge (Petronet, GAIL) · tanker utilisation (TK, DHT) · Red Sea / Gulf of Aden disruptions reroute vessels through this corridor adding days and freight cost.</p>`,
+      marinetraffic: 'https://www.marinetraffic.com/en/ais/home/centerx:67/centery:17/zoom:5',
+      center: [17, 67], zoom: 5,
+    },
+    indian_ocean: {
+      label: 'Indian Ocean',
+      desc:  'India east coast · Bay of Bengal · Strait of Malacca',
+      heroNarrative: 'Coverage: India east coast + Bay of Bengal + Andaman Sea + Malacca Strait. The funnel through which virtually all Middle East energy flows to East Asian buyers.',
+      contextHtml: `
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Strait of Malacca</b> — 2.8km at its narrowest; the second-most strategic chokepoint after Hormuz, carrying ~25% of global trade including ~15 million barrels/day of oil and a large share of LNG bound for Japan, China, and South Korea.</p>
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Bay of Bengal</b> — transit lane for Myanmar, Bangladesh, and eastern India energy imports. Track LNG carriers bound for Dahej, Hazira, and Mundra regasification terminals.</p>
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Portfolio impact:</b> Malacca congestion signals Asia demand acceleration · piracy / weather delays add freight premium · diversion around Lombok Strait adds ~3 days of cost.</p>`,
+      marinetraffic: 'https://www.marinetraffic.com/en/ais/home/centerx:90/centery:8/zoom:5',
+      center: [8, 90], zoom: 4,
+    },
+    asia_pacific: {
+      label: 'Asia-Pacific',
+      desc:  'South China Sea · East China Sea · Japan & Korea',
+      heroNarrative: 'Coverage: South China Sea + Taiwan Strait + East China Sea + Japan/Korea approaches. Final-mile delivery region for ~45% of global seaborne LNG.',
+      contextHtml: `
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Asia-Pacific LNG demand</b> — Japan, China, and South Korea collectively import ~45% of global seaborne LNG. Unusually high tanker density signals demand pull; low density can precede spot price weakness.</p>
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Taiwan Strait & South China Sea</b> — geopolitically sensitive waterways. Military activity or vessel diversions here have immediate impact on freight rates and energy security risk premiums.</p>
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Portfolio impact:</b> LNG demand surge (QatarEnergy partners, Woodside) · tanker oversupply signals pricing pressure · Taiwan tensions → Asia risk premium across tech + energy.</p>`,
+      marinetraffic: 'https://www.marinetraffic.com/en/ais/home/centerx:125/centery:25/zoom:5',
+      center: [25, 125], zoom: 4,
+    },
+  };
 
   /* Traffic regime based on total SFL pings across all three tiles */
   function trafficRegime(totalSfl) {
@@ -263,15 +312,62 @@
     });
   }
 
+  /* ── Region selector + skeleton ── */
   async function renderGeo(body) {
+    _geoBody = body;
     if (_map) { try { _map.remove(); } catch (_) {} _map = null; }
 
-    body.innerHTML = `<div class="mod-loading">Loading Gulf AIS data…</div>`;
+    const regionBtns = Object.entries(GEO_REGIONS).map(([id, r]) => {
+      const a = id === _currentRegion;
+      return `<button class="geo-region-btn" data-region="${id}" type="button"
+        style="font-size:10px;font-weight:600;letter-spacing:.04em;padding:3px 10px;border-radius:3px;cursor:pointer;
+               background:var(--${a ? 'panel-alt' : 'panel'});border:1px solid var(--${a ? 'accent' : 'panel-alt'});
+               color:var(--${a ? 'fg' : 'fg-dim'})">${r.label}${id === 'gulf'
+        ? ' <span style="font-size:8px;opacity:.5;font-weight:400">DEFAULT</span>' : ''}</button>`;
+    }).join('');
+
+    body.innerHTML = `
+      <div id="geo-region-bar" style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:8px 12px;
+           background:var(--panel);border-bottom:1px solid var(--panel-alt)">
+        <span style="font-size:10px;letter-spacing:.08em;color:var(--fg-dim);font-weight:600;margin-right:4px">REGION</span>
+        ${regionBtns}
+        <span style="margin-left:auto;font-size:9px;color:var(--fg-faint)">Non-default: on-demand fetch · 2h cache</span>
+      </div>
+      <div id="geo-region-content"></div>`;
+
+    body.querySelectorAll('.geo-region-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.region === _currentRegion) return;
+        _currentRegion = btn.dataset.region;
+        body.querySelectorAll('.geo-region-btn').forEach(b => {
+          const a = b.dataset.region === _currentRegion;
+          b.style.background  = `var(--${a ? 'panel-alt' : 'panel'})`;
+          b.style.borderColor = `var(--${a ? 'accent'    : 'panel-alt'})`;
+          b.style.color       = `var(--${a ? 'fg'        : 'fg-dim'})`;
+        });
+        _loadRegion(document.getElementById('geo-region-content'));
+      });
+    });
+
+    _loadRegion(document.getElementById('geo-region-content'));
+  }
+
+  /* ── Region content loader ── */
+  async function _loadRegion(contentEl) {
+    if (_map) { try { _map.remove(); } catch (_) {} _map = null; }
+    const rCfg = GEO_REGIONS[_currentRegion];
+    const isGulf = _currentRegion === 'gulf';
+
+    contentEl.innerHTML = `<div class="mod-loading">Loading ${rCfg.label} AIS data…</div>`;
     let d;
     try {
-      d = await fetchJSON(`${BASE}/hormuz.json`);
+      if (isGulf) {
+        d = await fetchJSON(`${BASE}/hormuz.json`);
+      } else {
+        d = await fetchJSON(`https://stocks.clawmo.tech/api/geo/region/${_currentRegion}`);
+      }
     } catch (e) {
-      body.innerHTML = `<div class="mod-error">Failed to load Gulf AIS data.<br><small>${e.message}</small></div>`;
+      contentEl.innerHTML = `<div class="mod-error">Failed to load ${rCfg.label} AIS data.<br><small>${e.message}</small></div>`;
       return;
     }
 
@@ -292,14 +388,16 @@
       : (d.as_of || '');
 
     /* ── State hero ── */
-    const heroCls = reg.cls === 'num-up' ? 'brd-hero-healthy'
-                  : reg.cls === 'num-warn' ? 'brd-hero-caution'
-                  : 'brd-hero-risk';
+    const heroCls = isGulf
+      ? (reg.cls === 'num-up' ? 'brd-hero-healthy' : reg.cls === 'num-warn' ? 'brd-hero-caution' : 'brd-hero-risk')
+      : 'brd-hero-healthy';
+    const heroTag   = isGulf ? 'PERSIAN GULF + HORMUZ + GULF OF OMAN · TRAFFIC REGIME' : `${rCfg.desc.toUpperCase()} · VESSEL ACTIVITY`;
+    const heroScore = isGulf ? `<span class="brd-state-score mono ${reg.cls}">${reg.label}</span>` : '';
     const hero = `
       <div class="brd-state-hero ${heroCls}">
         <div class="brd-state-headline">
-          <span class="brd-state-tag">PERSIAN GULF + HORMUZ + GULF OF OMAN · TRAFFIC REGIME</span>
-          <span class="brd-state-score mono ${reg.cls}">${reg.label}</span>
+          <span class="brd-state-tag">${heroTag}</span>
+          ${heroScore}
         </div>
         <div class="brd-state-stats">
           <span class="chip"><span class="mono">${s.total_sfl ?? '—'}</span> AIS pings</span>
@@ -307,7 +405,7 @@
           <span class="chip"><span class="mono num-warn">${s.tankers ?? '—'}</span> tankers (${tankerPct}%)</span>
           <span class="chip"><span class="mono">${withCog}</span> with heading</span>
         </div>
-        <div class="brd-state-narrative">Coverage: W Persian Gulf · E Gulf / Strait of Hormuz · Gulf of Oman (3 VesselFinder tiles merged). ~21% of global seaborne oil + 20% of LNG transits Hormuz. Data: ${asOfET}.</div>
+        <div class="brd-state-narrative">${rCfg.heroNarrative} Data: ${asOfET}.</div>
       </div>
     `;
 
@@ -341,18 +439,7 @@
         </button>`)
       .join('');
 
-    const mapPanel = `
-      <div class="mod-panel" style="padding:0;overflow:hidden">
-        <div class="mod-panel-title" style="padding:8px 12px">VESSEL POSITIONS · PERSIAN GULF + STRAIT OF HORMUZ + GULF OF OMAN
-          <span style="float:right;font-size:10px;color:var(--fg-dim);font-weight:400">▲ nose = heading</span>
-        </div>
-        <div class="geo-map-wrap">
-          <div id="geo-map-canvas" style="height:400px;width:100%"></div>
-        </div>
-        <div class="geo-map-legend">
-          ${btns}
-          <span style="margin-left:auto;font-size:9px;color:var(--fg-faint)">${vessels.length} vessels · click type to toggle · dot = details</span>
-        </div>
+    const transitFilterHtml = isGulf ? `
         <div class="geo-map-legend geo-map-legend-flow">
           <span class="geo-legend-label">TRANSIT FILTER</span>
           <button class="geo-flow-btn" data-flow="entering" style="--geo-btn-color:#fb923c">
@@ -364,14 +451,32 @@
             → Leaving <span style="color:var(--fg-faint)">(${leavingCount})</span>
           </button>
           <span style="margin-left:auto;font-size:9px;color:var(--fg-faint)">click to isolate · click again to reset</span>
+        </div>` : '';
+
+    const mapPanelTitle = isGulf
+      ? 'VESSEL POSITIONS · PERSIAN GULF + STRAIT OF HORMUZ + GULF OF OMAN'
+      : `VESSEL POSITIONS · ${rCfg.desc.toUpperCase()}`;
+
+    const mapPanel = `
+      <div class="mod-panel" style="padding:0;overflow:hidden">
+        <div class="mod-panel-title" style="padding:8px 12px">${mapPanelTitle}
+          <span style="float:right;font-size:10px;color:var(--fg-dim);font-weight:400">▲ nose = heading</span>
         </div>
+        <div class="geo-map-wrap">
+          <div id="geo-map-canvas" style="height:400px;width:100%"></div>
+        </div>
+        <div class="geo-map-legend">
+          ${btns}
+          <span style="margin-left:auto;font-size:9px;color:var(--fg-faint)">${vessels.length} vessels · click type to toggle · dot = details</span>
+        </div>
+        ${transitFilterHtml}
       </div>
     `;
 
-    /* ── 7-day tanker sparkline ── */
+    /* ── 7-day tanker sparkline (Gulf only — history not stored for on-demand regions) ── */
     const sparkData = history.map(h => h.tankers || 0);
     const spark = OC_CHART.sparkline(sparkData, { w: 120, h: 22, color: 'var(--num-warn)' });
-    const sparkBlock = sparkData.length >= 2 ? `
+    const sparkBlock = (isGulf && sparkData.length >= 2) ? `
       <div style="display:flex;align-items:center;gap:10px;margin:6px 0 10px 0;padding:6px 10px;background:var(--bg-2);border-radius:4px;width:fit-content">
         <span style="font-size:10px;color:var(--fg-dim);letter-spacing:.05em">TANKERS · 7D TREND</span>
         ${spark}
@@ -476,20 +581,20 @@
     /* ── Context panel ── */
     const sw = d.bbox?.sw || {};
     const ne = d.bbox?.ne || {};
+    const bboxStr = (sw.lat != null) ? `[${sw.lat}°N ${sw.lon}°E – ${ne.lat}°N ${ne.lon}°E]` : '';
     const context = `
       <div class="mod-panel">
-        <div class="mod-panel-title">WHY THIS MATTERS · GEOPOLITICAL SHIPPING RISK</div>
+        <div class="mod-panel-title">COVERAGE & MARKET CONTEXT · ${rCfg.label.toUpperCase()}</div>
         <div style="padding:10px 12px;font-size:12px;line-height:1.7;color:var(--fg-dim)">
-          <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Strait of Hormuz</b> — a 33km-wide chokepoint between Oman and Iran through which ~21% of global oil trade and ~20% of LNG passes. This module covers the full upstream/downstream picture: the Persian Gulf loading terminals and Gulf of Oman transit lanes.</p>
-          <p style="margin:0 0 6px 0"><b style="color:var(--fg)">What to watch:</b> SFL pings below 800, tanker share falling sharply, or military vessels massing near the strait signal disruption risk. Normal is 1500–2500 SFL pings across all three tiles.</p>
-          <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Portfolio impact:</b> Disruption → oil spike (OXY, XOM, CVX) + shipping premium (tanker ETFs) + defense bid (LMT, RTX). Sustained closure pushes crude +20–40% within days.</p>
-          <p style="margin:0"><b style="color:var(--fg)">Data source:</b> VesselFinder public AIS (mp2 + sfl, 3 tiles) · updated every 30 min · bbox [${sw.lat ?? '21.0'}°N ${sw.lon ?? '47.5'}°E – ${ne.lat ?? '30.5'}°N ${ne.lon ?? '64.5'}°E].
-          <a href="https://www.marinetraffic.com/en/ais/home/centerx:55.4/centery:25.9/zoom:7" target="_blank" rel="noopener" style="color:var(--accent);margin-left:6px">MarineTraffic map ↗</a></p>
+          ${rCfg.contextHtml}
+          <p style="margin:0"><b style="color:var(--fg)">Data source:</b> VesselFinder public AIS (mp2 + sfl${isGulf ? ', 3 tiles' : ''}) · ${isGulf ? 'updated 4× daily · ' : 'on-demand fetch · 2h cache · '}${bboxStr}.
+          <a href="${rCfg.marinetraffic}" target="_blank" rel="noopener" style="color:var(--accent);margin-left:6px">MarineTraffic map ↗</a></p>
+          <p style="margin:4px 0 0 0;font-size:10px;opacity:0.6">AIS data from <a href="https://vesselfinder.com" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">VesselFinder</a> — for research and educational use only, subject to <a href="https://www.vesselfinder.com/terms" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">their terms of service</a>. Not for commercial redistribution.</p>
         </div>
       </div>
     `;
 
-    body.innerHTML = hero + mapPanel
+    contentEl.innerHTML = hero + mapPanel
       + '<div id="geo-detail-panel" class="geo-detail-panel" hidden></div>'
       + sparkBlock + typeTable + vesselTable + context;
     initGeoMap(vessels, d.bbox);
@@ -861,6 +966,7 @@
   };
 
   async function beforeRefreshGeo() {
+    if (_currentRegion !== 'gulf') return;
     try {
       await fetch('https://stocks.clawmo.tech/api/geo/refresh', { method: 'POST' });
     } catch (_) { /* network error — render will use cached file */ }

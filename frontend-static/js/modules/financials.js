@@ -145,7 +145,18 @@
         } else {
           txt = $money(raw);
         }
-        return `<td class="mono${i === 0 ? ' latest-col' : ''}">${txt}</td>`;
+        // Inline YoY for parent / highlight rows in dollar mode
+        let yoyHtml = '';
+        if ((line.parent || line.highlight) && !line.fmt && raw != null) {
+          const prev = priorPeriodFor(sorted, i, period);
+          const prevVal = prev ? prev[line.key] : null;
+          const yv = yoy(raw, prevVal);
+          if (yv != null) {
+            const yc = yv >= 0 ? 'num-up' : 'num-dn';
+            yoyHtml = `<span class="fin-yoy-sub ${yc}">${yv >= 0 ? '+' : ''}${yv.toFixed(1)}%</span>`;
+          }
+        }
+        return `<td class="mono${i === 0 ? ' latest-col' : ''}">${txt}${yoyHtml}</td>`;
       }).join('');
       return `<tr class="${cls.join(' ')}" data-field="${line.key}"${labelTt}><td class="fin-line-label">${line.label}</td>${cells}</tr>`;
     }).join('');
@@ -229,9 +240,30 @@
     }, 80);
   }
 
+  /* ── Chart configs for statement tabs ───────────────────── */
+  const STMT_CHART_CONF = {
+    income: { series: [
+      { key: 'revenue',          name: 'Sales / Revenue',   color: '#A78BFA' },
+      { key: 'grossProfit',      name: 'Gross Profit',      color: '#4ADE80' },
+      { key: 'operatingIncome',  name: 'Operating Income',  color: '#60A5FA' },
+      { key: 'netIncome',        name: 'Net Income',        color: '#F87171' },
+    ]},
+    balance: { series: [
+      { key: 'totalAssets',              name: 'Total Assets',      color: '#60A5FA' },
+      { key: 'totalLiabilities',         name: 'Total Liabilities', color: '#F87171' },
+      { key: 'totalStockholdersEquity',  name: 'Total Equity',      color: '#A78BFA' },
+    ]},
+    cashflow: { series: [
+      { key: 'operatingCashFlow',                      name: 'Cash from Ops',       color: '#4ADE80' },
+      { key: 'netCashProvidedByInvestingActivities',   name: 'Cash from Investing', color: '#60A5FA' },
+      { key: 'netCashProvidedByFinancingActivities',   name: 'Cash from Financing', color: '#FB923C' },
+      { key: 'freeCashFlow',                           name: 'Free Cash Flow',      color: '#A78BFA' },
+    ]},
+  };
+
   /* ── Line definitions ────────────────────────────────────── */
   const INCOME_LINES = [
-    { key: 'revenue',                                     label: 'Revenue',                parent: true,  border: 'purple' },
+    { key: 'revenue',                                     label: 'Sales / Revenue',        parent: true,  border: 'purple' },
     { key: 'costOfRevenue',                               label: 'Cost of Revenue',        child: true },
     { key: 'grossProfit',                                 label: 'Gross Profit',           parent: true,  border: 'teal' },
     { key: 'researchAndDevelopmentExpenses',              label: 'R&D',                    child: true,   glossary: 'R&D' },
@@ -273,14 +305,14 @@
     { key: 'depreciationAndAmortization',              label: 'D&A',                          child: true,   glossary: 'D&A' },
     { key: 'stockBasedCompensation',                   label: 'Stock-Based Comp',             child: true,   glossary: 'SBC' },
     { key: 'changeInWorkingCapital',                   label: 'Δ Working Capital',            child: true },
-    { key: 'operatingCashFlow',                        label: 'Operating Cash Flow',          parent: true,  border: 'green', highlight: true },
+    { key: 'operatingCashFlow',                        label: 'Cash from Operations',         parent: true,  border: 'green', highlight: true },
     { key: 'capitalExpenditure',                       label: 'CapEx',                        child: true,   glossary: 'CapEx' },
     { key: 'acquisitionsNet',                          label: 'Acquisitions',                 child: true },
-    { key: 'netCashProvidedByInvestingActivities',     label: 'Investing CF',                 parent: true,  border: 'blue' },
+    { key: 'netCashProvidedByInvestingActivities',     label: 'Cash from Investing',          parent: true,  border: 'blue' },
     { key: 'commonDividendsPaid',                      label: 'Dividends Paid',               child: true },
     { key: 'commonStockRepurchased',                   label: 'Buybacks',                     child: true },
     { key: 'netDebtIssuance',                          label: 'Debt Issuance (net)',          child: true },
-    { key: 'netCashProvidedByFinancingActivities',     label: 'Financing CF',                 parent: true,  border: 'orange' },
+    { key: 'netCashProvidedByFinancingActivities',     label: 'Cash from Financing',          parent: true,  border: 'orange' },
     { key: 'freeCashFlow',                             label: 'Free Cash Flow',               parent: true,  border: 'purple', highlight: true },
     { key: 'netChangeInCash',                          label: 'Net Δ Cash',                   parent: true },
   ];
@@ -300,43 +332,250 @@
   ];
 
   /* ── Tab renderers ───────────────────────────────────────── */
+
+  function renderKeyFinancialsTable(a, ps) {
+    if (!a || !a.years || !a.years.length) return '';
+    const years = a.years;
+    const lastIdx = years.length - 1;
+    const ttm = a.ttm || {};
+    const hasTTM = Object.keys(ttm).length > 0;
+
+    function kfFmt(v, type) {
+      if (v == null || (typeof v === 'number' && isNaN(v))) return '—';
+      switch (type) {
+        case 'currency': return $money(v);
+        case 'percent':  return (v * 100).toFixed(1) + '%';
+        case 'growth':   return (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%';
+        case 'eps':      return '$' + Number(v).toFixed(2);
+        case 'ratio':    return Number(v).toFixed(1) + 'x';
+        case 'shares':   return fmt.compact(v);
+        default:         return String(v);
+      }
+    }
+    function kfCls(v, type) {
+      if (v == null) return '';
+      if (type === 'growth' || type === 'percent') return pctCls(v);
+      return '';
+    }
+
+    const sections = [
+      { label: 'REVENUE & PROFITABILITY', rows: [
+        { label: 'Revenue',          field: 'revenue',           type: 'currency', ttmField: 'revenue' },
+        { label: 'Rev Growth',       field: 'revenue_growth',    type: 'growth',   ttmField: null },
+        { label: 'Gross Profit',     field: 'gross_profit',      type: 'currency', ttmField: null },
+        { label: 'Gross Margin',     field: 'gross_margin',      type: 'percent',  ttmField: 'gross_margin' },
+        { label: 'Operating Income', field: 'operating_income',  type: 'currency', ttmField: null },
+        { label: 'Operating Margin', field: 'operating_margin',  type: 'percent',  ttmField: 'operating_margin' },
+        { label: 'Net Income',       field: 'net_income',        type: 'currency', ttmField: null },
+        { label: 'Net Margin',       field: 'net_margin',        type: 'percent',  ttmField: 'net_margin' },
+        { label: 'EPS (Diluted)',    field: 'eps_diluted',       type: 'eps',      ttmField: null },
+      ]},
+      { label: 'PER SHARE', source: 'ps', rows: [
+        { label: 'Revenue / Share',    field: 'revenue_per_share',          type: 'eps' },
+        { label: 'EPS (Diluted)',      field: 'eps_diluted',                type: 'eps' },
+        { label: 'Div / Share',        field: 'dividend_per_share',         type: 'eps' },
+        { label: 'FCF / Share',        field: 'fcf_per_share',              type: 'eps' },
+        { label: 'OCF / Share',        field: 'ocf_per_share',              type: 'eps' },
+        { label: 'Book Value / Share', field: 'book_value_per_share',       type: 'eps' },
+        { label: 'Cash / Share',       field: 'cash_per_share',             type: 'eps' },
+      ]},
+      { label: 'CASH FLOW', rows: [
+        { label: 'Operating Cash Flow', field: 'operating_cash_flow', type: 'currency', ttmField: null },
+        { label: 'CapEx',               field: 'capex',               type: 'currency', ttmField: null },
+        { label: 'Free Cash Flow',      field: 'free_cash_flow',      type: 'currency', ttmField: null },
+        { label: 'FCF Margin',          field: 'fcf_margin',          type: 'percent',  ttmField: null },
+      ]},
+      { label: 'BALANCE SHEET', rows: [
+        { label: 'Total Assets',         field: 'total_assets',         type: 'currency', ttmField: null },
+        { label: 'Total Debt',           field: 'total_debt',           type: 'currency', ttmField: null },
+        { label: 'Cash & Equivalents',   field: 'cash_and_investments', type: 'currency', ttmField: null },
+        { label: 'Net Debt',             field: 'net_debt',             type: 'currency', ttmField: null },
+        { label: 'Shareholders Equity',  field: 'shareholders_equity',  type: 'currency', ttmField: null },
+      ]},
+      { label: 'RETURNS & VALUATION', rows: [
+        { label: 'ROE',       field: 'roe',            type: 'percent', ttmField: 'roe' },
+        { label: 'ROA',       field: 'roa',            type: 'percent', ttmField: 'roa' },
+        { label: 'ROIC',      field: 'roic',           type: 'percent', ttmField: 'roic' },
+        { label: 'P/E',       field: 'pe_ratio',       type: 'ratio',   ttmField: 'pe_ratio' },
+        { label: 'P/S',       field: 'ps_ratio',       type: 'ratio',   ttmField: 'ps_ratio' },
+        { label: 'EV/EBITDA', field: 'ev_ebitda',      type: 'ratio',   ttmField: 'ev_ebitda' },
+        { label: 'Div Yield', field: 'dividend_yield', type: 'percent', ttmField: 'dividend_yield' },
+      ]},
+    ];
+
+    const totalCols = 1 + (hasTTM ? 1 : 0) + years.length;
+    let thead = '<tr><th class="fin-line-label">METRIC</th>';
+    if (hasTTM) thead += '<th class="num fin-kf-ttm">TTM</th>';
+    for (let yi = lastIdx; yi >= 0; yi--) {
+      thead += `<th class="num${yi === lastIdx ? ' latest-col' : ''}">FY${years[yi]}</th>`;
+    }
+    thead += '</tr>';
+
+    let tbody = '';
+    sections.forEach((sec) => {
+      tbody += `<tr class="fin-kf-hdr"><td colspan="${totalCols}">${sec.label}</td></tr>`;
+      if (sec.source === 'ps') {
+        sec.rows.forEach((row) => {
+          const vals = (ps && ps[row.field]) || [];
+          tbody += `<tr><td class="fin-line-label">${row.label}</td>`;
+          if (hasTTM) {
+            const v = vals.length > 0 ? vals[0] : null;
+            const c = kfCls(v, row.type);
+            tbody += `<td class="mono fin-kf-ttm${c ? ' ' + c : ''}">${kfFmt(v, row.type)}</td>`;
+          }
+          // ps.field[1] = oldest year (matches a.years[0]), ps.field[N] = most recent (matches a.years[lastIdx])
+          for (let yi = lastIdx; yi >= 0; yi--) {
+            const psIdx = yi + 1;
+            const v = psIdx < vals.length ? vals[psIdx] : null;
+            const c = kfCls(v, row.type);
+            tbody += `<td class="mono${yi === lastIdx ? ' latest-col' : ''}${c ? ' ' + c : ''}">${kfFmt(v, row.type)}</td>`;
+          }
+          tbody += '</tr>';
+        });
+      } else {
+        sec.rows.forEach((row) => {
+          const vals = a[row.field] || [];
+          tbody += `<tr><td class="fin-line-label">${row.label}</td>`;
+          if (hasTTM) {
+            const v = row.ttmField ? ttm[row.ttmField] : null;
+            const c = kfCls(v, row.type);
+            tbody += `<td class="mono fin-kf-ttm${c ? ' ' + c : ''}">${kfFmt(v, row.type)}</td>`;
+          }
+          for (let yi = lastIdx; yi >= 0; yi--) {
+            const v = yi < vals.length ? vals[yi] : null;
+            const c = kfCls(v, row.type);
+            tbody += `<td class="mono${yi === lastIdx ? ' latest-col' : ''}${c ? ' ' + c : ''}">${kfFmt(v, row.type)}</td>`;
+          }
+          tbody += '</tr>';
+        });
+      }
+    });
+
+    return `
+      <div class="mod-panel">
+        <div class="mod-panel-title">KEY FINANCIALS · 10Y</div>
+        <div class="tbl-wrap">
+          <table class="tbl-dense fin-kf-table">
+            <thead>${thead}</thead>
+            <tbody>${tbody}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderQuarterlyTables(q) {
+    if (!q || !q.quarters || !q.quarters.length) return '';
+
+    function makeQTable(title, values, growths, type) {
+      let rows = '';
+      for (let i = q.quarters.length - 1; i >= 0; i--) {
+        const v = values?.[i];
+        const g = growths?.[i];
+        const gCls = g != null ? pctCls(g) : '';
+        const gTxt = g != null ? (g >= 0 ? '+' : '') + (g * 100).toFixed(1) + '%' : '—';
+        const vTxt = v == null ? '—' : type === 'eps' ? '$' + Number(v).toFixed(2) : $money(v);
+        rows += `<tr>
+          <td class="mono">${q.quarters[i]}</td>
+          <td class="mono">${vTxt}</td>
+          <td class="mono ${gCls}">${gTxt}</td>
+        </tr>`;
+      }
+      const col2 = type === 'eps' ? 'EPS' : 'REVENUE';
+      return `
+        <div class="mod-panel">
+          <div class="mod-panel-title">${title}</div>
+          <div class="tbl-wrap">
+            <table class="tbl-dense">
+              <thead><tr><th>QUARTER</th><th class="num">${col2}</th><th class="num">YoY</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
+    return `<div class="fin-qtr-grid">
+      ${makeQTable('QUARTERLY REVENUE', q.revenue, q.revenue_yoy_growth, 'currency')}
+      ${makeQTable('QUARTERLY EPS', q.eps_diluted, q.eps_yoy_growth, 'eps')}
+    </div>`;
+  }
+
+  function renderCapStructureCards(cs) {
+    if (!cs || !cs.market_cap) return '';
+    const ndStyle = cs.net_debt != null
+      ? (cs.net_debt < 0 ? ' style="color:var(--pnl-up)"' : cs.net_debt > 0 ? ' style="color:var(--pnl-dn)"' : '')
+      : '';
+    const items = [
+      { label: 'MARKET CAP',      val: $money(cs.market_cap),              style: '' },
+      { label: 'ENTERPRISE VALUE', val: $money(cs.enterprise_value),        style: '' },
+      { label: 'TOTAL DEBT',      val: $money(cs.total_debt),              style: '' },
+      { label: 'CASH & EQUIV',    val: $money(cs.cash_and_investments),    style: '' },
+      { label: 'NET DEBT',        val: $money(cs.net_debt),                style: ndStyle },
+      { label: 'DEBT / EQUITY',   val: $num(cs.debt_equity, 2) + 'x',     style: '' },
+      { label: 'INT COVERAGE',    val: $num(cs.interest_coverage, 1) + 'x', style: '' },
+    ];
+
+    const debt   = cs.total_debt || 0;
+    const cash   = cs.cash_and_investments || 0;
+    const equity = Math.max(0, (cs.market_cap || 0) - debt - cash);
+    const total  = debt + equity + cash;
+    let stackedBar = '';
+    if (total > 0) {
+      const dPct = (debt / total * 100).toFixed(1);
+      const ePct = (equity / total * 100).toFixed(1);
+      const cPct = (cash / total * 100).toFixed(1);
+      stackedBar = `<div class="fin-cap-bar">
+        ${debt > 0 ? `<div class="fin-cap-seg fin-cap-debt" style="width:${dPct}%">Debt&nbsp;${dPct}%</div>` : ''}
+        ${equity > 0 ? `<div class="fin-cap-seg fin-cap-equity" style="width:${ePct}%">Equity&nbsp;${ePct}%</div>` : ''}
+        ${cash > 0 ? `<div class="fin-cap-seg fin-cap-cash" style="width:${cPct}%">Cash&nbsp;${cPct}%</div>` : ''}
+      </div>`;
+    }
+
+    return `
+      <div class="mod-panel">
+        <div class="mod-panel-title">CAPITAL STRUCTURE</div>
+        <div class="fin-cap-cards">
+          ${items.map((it) => `
+            <div class="fin-kpi">
+              <div class="fin-kpi-lbl">${it.label}</div>
+              <div class="fin-kpi-val mono"${it.style}>${it.val}</div>
+            </div>
+          `).join('')}
+        </div>
+        ${stackedBar}
+      </div>
+    `;
+  }
+
   function renderSummary(d) {
     const a = d.annual || {};
+    const ps = d.per_share || {};
     const years = a.years || [];
     const profile = d.profile || {};
     const cs = d.capital_structure || {};
     const gr = d.growth_rates || {};
+    const q = d.quarterly || {};
 
     const latestIdx = years.length - 1;
     const latest = {
-      revenue:    a.revenue?.[latestIdx],
-      netIncome:  a.net_income?.[latestIdx],
-      fcf:        a.free_cash_flow?.[latestIdx],
-      gm:         a.gross_margin?.[latestIdx],
-      om:         a.operating_margin?.[latestIdx],
-      nm:         a.net_margin?.[latestIdx],
-      roe:        null,  // from ratios
-      roa:        null,
+      revenue:   a.revenue?.[latestIdx],
+      netIncome: a.net_income?.[latestIdx],
+      fcf:       a.free_cash_flow?.[latestIdx],
+      nm:        a.net_margin?.[latestIdx],
     };
     const rtab = d.ratios || {};
     if (rtab.profitability) {
-      const ps = rtab.profitability;
-      latest.roe = ps.roe?.[ps.roe?.length - 1];
-      latest.roa = ps.roa?.[ps.roa?.length - 1];
-    }
-
-    function growthCell(g) {
-      if (!g) return '—';
-      if (g.rate_1y == null && g['1y'] == null) return '—';
-      const v = g.rate_1y != null ? g.rate_1y : g['1y'];
-      return v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%';
+      const rp = rtab.profitability;
+      latest.roe = rp.roe?.[rp.roe?.length - 1];
+      latest.roa = rp.roa?.[rp.roa?.length - 1];
     }
 
     return `
       <div class="fin-summary-strip">
         <div class="fin-kpi">
-          <div class="fin-kpi-lbl">REVENUE (LAST FY)</div>
-          <div class="fin-kpi-val mono">${$money(latest.revenue)}</div>
+          <div class="fin-kpi-lbl">REVENUE (TTM)</div>
+          <div class="fin-kpi-val mono">${a.ttm?.revenue != null ? $money(a.ttm.revenue) : $money(latest.revenue)}</div>
           <div class="fin-kpi-sub mono ${pctCls(gr.revenue?.['1y'])}">${$pct(gr.revenue?.['1y'])} yoy</div>
         </div>
         <div class="fin-kpi">
@@ -359,7 +598,14 @@
           <div class="fin-kpi-val mono">${latest.roe != null ? (latest.roe * 100).toFixed(1) + '%' : '—'} · ${latest.roa != null ? (latest.roa * 100).toFixed(1) + '%' : '—'}</div>
           <div class="fin-kpi-sub mono">debt/eq ${$num(cs.debt_equity, 2)}</div>
         </div>
+        <div class="fin-kpi" id="finAnalystKpi" data-fin-analyst-kpi>
+          <div class="fin-kpi-lbl">ANALYST CONSENSUS</div>
+          <div class="fin-kpi-val mono" style="color:var(--fg-faint);font-size:14px">…</div>
+          <div class="fin-kpi-sub mono" style="color:var(--fg-faint)">loading</div>
+        </div>
       </div>
+
+      ${renderKeyFinancialsTable(a, ps)}
 
       <div class="mod-grid-2 fin-summary-grid">
         <div class="mod-panel">
@@ -386,18 +632,37 @@
           <table class="tbl-dense">
             <thead><tr><th>METRIC</th><th>1Y</th><th>3Y</th><th>5Y</th><th>10Y</th></tr></thead>
             <tbody>
-              ${['revenue','eps','net_income','fcf','dividend'].map((m) => {
-                const g = gr[m] || {};
-                const cell = (v) => v == null ? '<td class="mono">—</td>' : `<td class="mono ${pctCls(v)}">${(v >= 0 ? '+' : '') + (v * 100).toFixed(1)}%</td>`;
-                return `<tr>
-                  <td>${m.toUpperCase().replace('_', ' ')}</td>
-                  ${cell(g['1y'])}${cell(g['3y'])}${cell(g['5y'])}${cell(g['10y'])}
-                </tr>`;
-              }).join('')}
+              ${(() => {
+                // growth_rates.dividend is always null from the API — compute from per_share instead
+                const divVals = (ps.dividend_per_share || []).slice(1); // drop TTM (index 0), keep FY values
+                function divCagr(n) {
+                  const len = divVals.length;
+                  if (len < n + 1) return null;
+                  const recent = divVals[len - 1];
+                  const base   = divVals[len - 1 - n];
+                  if (!recent || !base || base <= 0) return null;
+                  return Math.pow(recent / base, 1 / n) - 1;
+                }
+                const computedDivGr = { '1y': divCagr(1), '3y': divCagr(3), '5y': divCagr(5), '10y': divCagr(10) };
+
+                return ['revenue','eps','net_income','fcf','dividend'].map((m) => {
+                  const g = m === 'dividend' ? computedDivGr : (gr[m] || {});
+                  const cell = (v) => v == null ? '<td class="mono">—</td>' : `<td class="mono ${pctCls(v)}">${(v >= 0 ? '+' : '') + (v * 100).toFixed(1)}%</td>`;
+                  const label = m === 'net_income' ? 'NET INCOME' : m === 'fcf' ? 'FCF' : m.toUpperCase();
+                  return `<tr>
+                    <td>${label}</td>
+                    ${cell(g['1y'])}${cell(g['3y'])}${cell(g['5y'])}${cell(g['10y'])}
+                  </tr>`;
+                }).join('');
+              })()}
             </tbody>
           </table>
         </div>
       </div>
+
+      ${renderQuarterlyTables(q)}
+
+      ${renderCapStructureCards(cs)}
 
       ${profile.description ? `
       <div class="mod-panel">
@@ -423,35 +688,43 @@
     mode = mode || 'dollar';
     const { lines, data: stmtData } = statementFor(d, tabId, period);
     const title = (tabId === 'income' ? 'INCOME STATEMENT' : tabId === 'balance' ? 'BALANCE SHEET' : 'CASH FLOW') +
-      (period === 'annual' ? ' · 10Y' : ' · 8Q');
+      (period === 'annual' ? ' · 10Y ANNUAL' : ' · 8Q QUARTERLY');
 
     if (!stmtData.length) return `<div class="mod-loading">No ${period} ${tabId} data available</div>`;
 
-    // Bar chart headline
-    const highlightLine = lines.find((l) => l.highlight) || lines[0];
+    // Multi-series grouped bar chart
     const sortedAsc = [...stmtData].sort((a, b) => {
       const ad = a.date || a.fiscalYear || '';
       const bd = b.date || b.fiscalYear || '';
       return ad < bd ? -1 : ad > bd ? 1 : 0;
     });
     const xLabels = sortedAsc.map((p) => labelPeriod(p, period));
-    const headlineVals = sortedAsc.map((p) => p[highlightLine.key]);
+    const chartConf = STMT_CHART_CONF[tabId];
+    let chartHtml = '';
+    if (chartConf && window.OC_CHART && window.OC_CHART.groupedBars) {
+      const series = chartConf.series.map((s) => ({
+        name:   s.name,
+        color:  s.color,
+        values: sortedAsc.map((p) => p[s.key] != null ? p[s.key] : null),
+      }));
+      chartHtml = window.OC_CHART.groupedBars(series, xLabels);
+    }
 
     return `
       <div class="mod-panel">
-        <div class="mod-panel-title">${title} · HEADLINE: ${highlightLine.label}</div>
-        <div class="fin-chart-wrap">${yearlyBars(xLabels, headlineVals)}</div>
+        <div class="mod-panel-title">${title}</div>
+        <div class="fin-chart-wrap">${chartHtml}</div>
       </div>
 
       <div class="mod-panel">
         <div class="mod-panel-title">
-          ${title}
+          ${title} · DETAIL
           <span class="fin-stmt-toggles">
             <button class="fin-period-btn${period === 'annual' ? ' active' : ''}" data-period="annual">ANN</button>
             <button class="fin-period-btn${period === 'quarterly' ? ' active' : ''}" data-period="quarterly">QTR</button>
             <span class="fin-toggle-sep">│</span>
-            <button class="fin-mode-btn${mode === 'dollar' ? ' active' : ''}" data-mode="dollar">$</button>
-            <button class="fin-mode-btn${mode === 'yoy' ? ' active' : ''}" data-mode="yoy">YoY %</button>
+            <button class="fin-mode-btn${mode === 'dollar' ? ' active' : ''}" data-mode="dollar">$ + YoY</button>
+            <button class="fin-mode-btn${mode === 'yoy' ? ' active' : ''}" data-mode="yoy">YoY % only</button>
           </span>
         </div>
         <div class="tbl-wrap" id="fin-stmt-wrap">
@@ -1007,11 +1280,16 @@
     const cs = d.capital_structure || {};
     const a = d.annual || {};
     const shares = a.shares_outstanding?.[a.shares_outstanding.length - 1] || 0;
-    const debt = cs.total_debt || 0;
-    const cash = cs.cash_and_investments || 0;
+    // Convert financials from reporting currency to USD if needed
+    const fxRate = (d.reporting_currency && d.reporting_currency !== 'USD' && d.usd_fx_rate)
+      ? d.usd_fx_rate : 1.0;
+    const debt = (cs.total_debt || 0) * fxRate;
+    const cash = (cs.cash_and_investments || 0) * fxRate;
 
-    const baseFcf = resolveBaseFcf(d, inputs.baseFcfMode, fmp);
-    if (baseFcf == null) return null;
+    const _rawFcf = resolveBaseFcf(d, inputs.baseFcfMode, fmp);
+    if (_rawFcf == null) return null;
+    // FMP projections are assumed already in USD; historical FCF needs conversion
+    const baseFcf = inputs.baseFcfMode === 'fmpNextYear' ? _rawFcf : _rawFcf * fxRate;
 
     // Project years=N FCF growing at growthRate, fading each year toward terminalGrowth
     // at fadeRate. Growth_i = growth_{i-1} * (1 - fade) + terminal * fade.
@@ -1046,9 +1324,12 @@
     const fmp = window._finDcfFmp || null;
     const inputs = window._finDcfInputs || (window._finDcfInputs = defaultDcfInputs(d));
     const result = dcfCalc(d, inputs, fmp);
-    const curPrice = d.capital_structure?.market_cap && d.annual?.shares_outstanding
-      ? d.capital_structure.market_cap / (d.annual.shares_outstanding[d.annual.shares_outstanding.length - 1] || 1)
-      : null;
+    // Prefer FMP's stockPrice (USD) over market_cap/shares which returns JPY for foreign ADRs like SONY
+    const curPrice = fmp?.stockPrice != null
+      ? fmp.stockPrice
+      : (d.capital_structure?.market_cap && d.annual?.shares_outstanding
+          ? d.capital_structure.market_cap / (d.annual.shares_outstanding[d.annual.shares_outstanding.length - 1] || 1)
+          : null);
     const upside = (result && curPrice) ? ((result.fairValue - curPrice) / curPrice) * 100 : null;
     const fmpUpside = (fmp && fmp.dcfValue && fmp.stockPrice) ? ((fmp.dcfValue - fmp.stockPrice) / fmp.stockPrice) * 100 : null;
 
@@ -1097,7 +1378,12 @@
       return `<th class="num">${(w * 100).toFixed(1)}%</th>`;
     }).join('');
 
+    const fxBadge = (d.reporting_currency && d.reporting_currency !== 'USD')
+      ? `<div class="fin-dcf-fx-note">Financials in ${d.reporting_currency}${d.usd_fx_rate ? ' → USD @ ' + d.usd_fx_rate.toFixed(5) : ' · FX rate unavailable, Your Model disabled'}</div>`
+      : '';
+
     return `
+      ${fxBadge}
       <div class="fin-dcf-compare">
         <div class="fin-dcf-card fin-dcf-fmp">
           <div class="fin-dcf-card-lbl">WALL STREET DCF · FMP</div>
@@ -1312,6 +1598,11 @@
     try {
       const fmp = await fetchJSON(`${API}/${encodeURIComponent(ticker)}/fmp-dcf`, { ttl: 30 * 60 * 1000 });
       window._finDcfFmp = fmp;
+      // Pre-populate WACC from FMP's CAPM value the first time (if user hasn't changed it)
+      const defaultW = defaultDcfInputs(d).wacc;
+      if (fmp?.wacc && fmp.wacc > 3 && fmp.wacc < 20 && window._finDcfInputs?.wacc === defaultW) {
+        window._finDcfInputs.wacc = fmp.wacc / 100;
+      }
     } catch (e) {
       window._finDcfFmp = null;
     }
@@ -1320,12 +1611,12 @@
     if (activeTab === 'dcf') rerenderDCF(body, d);
   }
 
-  function renderTab(tab, d) {
+  function renderTab(tab, d, period) {
     switch (tab) {
       case 'summary':   return renderSummary(d);
-      case 'income':    return renderStatementTab(d, 'income');
-      case 'balance':   return renderStatementTab(d, 'balance');
-      case 'cashflow':  return renderStatementTab(d, 'cashflow');
+      case 'income':    return renderStatementTab(d, 'income',   period);
+      case 'balance':   return renderStatementTab(d, 'balance',  period);
+      case 'cashflow':  return renderStatementTab(d, 'cashflow', period);
       case 'ratios':    return renderRatios(d);
       case 'valuation': return renderValuation(d, window._finValMode || 'normalized');
       case 'health':    return renderHealth(d);
@@ -1417,6 +1708,7 @@
     const sym = (ticker || 'AAPL').toUpperCase();
     market = market || 'US';
     const tab = initialTab || 'summary';
+    if (window.OC_UPDATE_PANE_PARAMS) window.OC_UPDATE_PANE_PARAMS({ ticker: sym, market });
 
     body.innerHTML = `
       <div class="fin-head-row">
@@ -1496,6 +1788,38 @@
       attachDCFUI(body, d);
       loadFmpDcf(body, d, sym);
     }
+    if (tab === 'summary') {
+      loadFinAnalystKpi(body, sym);
+    }
+  }
+
+  /* ── Async populate the ANALYST CONSENSUS KPI tile on the summary tab ── */
+  async function loadFinAnalystKpi(body, ticker) {
+    const tile = body.querySelector('#finAnalystKpi');
+    if (!tile) return;
+    let a = null;
+    try {
+      const resp = await fetch(`https://stocks.clawmo.tech/data/analyst/${ticker}.json`, { cache: 'no-cache' });
+      if (resp.ok) a = await resp.json();
+    } catch (e) {}
+    if (!a) {
+      tile.innerHTML = `
+        <div class="fin-kpi-lbl">ANALYST CONSENSUS</div>
+        <div class="fin-kpi-val mono" style="color:var(--fg-faint);font-size:14px">—</div>
+        <div class="fin-kpi-sub mono" style="color:var(--fg-faint)">no coverage</div>`;
+      return;
+    }
+    const c = a.consensus || {}, pt = a.price_target || {};
+    const lblColor = c.score >= 4.0 ? '#4ade80' : c.score >= 3.0 ? '#facc15' : '#f87171';
+    const retClr = pt.return_potential_pct == null ? 'var(--fg-dim)'
+                : pt.return_potential_pct >= 0 ? '#4ade80' : '#f87171';
+    const retTxt = pt.return_potential_pct != null
+      ? (pt.return_potential_pct >= 0 ? '+' : '') + pt.return_potential_pct.toFixed(1) + '%'
+      : '—';
+    tile.innerHTML = `
+      <div class="fin-kpi-lbl">ANALYST CONSENSUS</div>
+      <div class="fin-kpi-val mono" style="color:${lblColor};font-size:15px" title="Score ${c.score != null ? c.score.toFixed(2) : '—'}/5 · ${c.n_analysts || 0} analysts">${c.label || '—'}</div>
+      <div class="fin-kpi-sub mono" title="Median 12-month target / current">${pt.median != null ? '$' + pt.median.toFixed(2) : '—'} <span style="color:${retClr}">${retTxt}</span> · n=${c.n_analysts || 0}</div>`;
   }
 
   function attachForm(body) {
@@ -1514,11 +1838,13 @@
     body.querySelectorAll('.fin-subtab-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         const tab = btn.dataset.fintab;
+        // Read period BEFORE re-render so Health QTR/ANN carries into the statement tab
+        const { period } = currentStatementState(body);
         body.querySelectorAll('.fin-subtab-btn').forEach((b) => b.classList.toggle('active', b === btn));
         const bodyEl = body.querySelector('#finBody');
         // Cancel any pending highlight-remove timer (its rows are about to be wiped)
         if (body._hcTimeout) { clearTimeout(body._hcTimeout); body._hcTimeout = null; }
-        if (bodyEl) bodyEl.innerHTML = renderTab(tab, d);
+        if (bodyEl) bodyEl.innerHTML = renderTab(tab, d, period);
         attachStatementToggles(body, d);
         attachPeerClicks(body);
         attachHealthHandlers(body, d);

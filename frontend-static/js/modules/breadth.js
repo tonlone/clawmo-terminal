@@ -244,6 +244,60 @@
     hit.addEventListener('mouseleave', onLeave);
   }
 
+  /* Bipolar mini-sparkline for QQQ−SPY gap series (positive blue / negative green).
+     Series is oldest → newest. */
+  function gapSparkline(series, opts) {
+    const W = opts?.w || 100, H = opts?.h || 22;
+    const pts = (series || []).map(v => (typeof v === 'number' && isFinite(v)) ? v : null);
+    const valid = pts.filter(v => v != null);
+    if (valid.length < 2) return '';
+    const absMax = Math.max(8, ...valid.map(Math.abs));
+    const xStep = pts.length > 1 ? W / (pts.length - 1) : 0;
+    const yMid = H / 2;
+    const yScale = (v) => yMid - (v / absMax) * (H / 2 - 1);
+    let path = '';
+    pts.forEach((v, i) => {
+      if (v == null) return;
+      const x = i * xStep;
+      const y = yScale(v);
+      path += (path ? ' L' : 'M') + x.toFixed(1) + ',' + y.toFixed(1);
+    });
+    const last = pts[pts.length - 1];
+    const color = last == null ? '#8b949e' : (last > 0 ? '#60a5fa' : (last < 0 ? '#4ade80' : '#8b949e'));
+    return `
+      <svg class="gap-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:${H}px;display:block">
+        <line x1="0" y1="${yMid}" x2="${W}" y2="${yMid}" stroke="rgba(139,148,158,0.4)" stroke-width="0.5" stroke-dasharray="2,2"/>
+        <path d="${path}" fill="none" stroke="${color}" stroke-width="1.4" stroke-linejoin="round"/>
+      </svg>`;
+  }
+
+  /* Classify the rotation regime for a single day given SPY and QQQ breadth. */
+  function classifyRotation(spy, qqq) {
+    if (spy == null || qqq == null) return { reg: 'na', label: '—', cls: '' };
+    if (spy < 30 && qqq < 30) return { reg: 'riskoff', label: 'RISK-OFF',     cls: 'num-dn' };
+    const gap = qqq - spy;
+    if (gap > 5)  return { reg: 'tech',    label: 'TECH LEADING',   cls: 'num-up' };
+    if (gap < -5) return { reg: 'broad',   label: 'BROAD LEADING',  cls: 'num-up-soft' };
+    return            { reg: 'aligned', label: 'ALIGNED',        cls: '' };
+  }
+
+  /* GICS sector → group classifier shared with leaders/laggards panel. */
+  const BRD_SECTOR_GROUP = {
+    'Information Technology': 'tech',
+    'Communication Services': 'tech',
+    'Consumer Discretionary': 'tech',
+    'Consumer Staples': 'defensive',
+    'Utilities': 'defensive',
+    'Health Care': 'defensive',
+    'Real Estate': 'defensive',
+    'Energy': 'cyclical',
+    'Financials': 'cyclical',
+    'Industrials': 'cyclical',
+    'Materials': 'cyclical'
+  };
+  const BRD_GROUP_LABEL = { tech: 'Tech / Growth', defensive: 'Defensive', cyclical: 'Cyclical / Value' };
+  const BRD_GROUP_TAG = { tech: 'TECH', defensive: 'DEF', cyclical: 'CYC' };
+
   /* Mini sparkline for a sector's breadth score over N days. */
   function sectorSparkline(series, opts) {
     const W = opts?.w || 80, H = opts?.h || 18;
@@ -377,6 +431,31 @@
             <div class="acct-val"><span class="mono ${breadthCls(latest50.qqq_breadth)}">${latest50.qqq_breadth != null ? latest50.qqq_breadth + '%' : '—'}</span></div>
             <div class="acct-meta"><span>above 50-day MA</span></div>
           </div>
+          ${(() => {
+            // QQQ−SPY GAP card: rotation regime + 30d sparkline.
+            const spy = latest50.sp500_breadth, qqq = latest50.qqq_breadth;
+            const haveBoth = spy != null && qqq != null;
+            const gap = haveBoth ? (qqq - spy) : null;
+            const sign = gap == null ? '' : (gap > 0 ? '+' : '');
+            const rot = classifyRotation(spy, qqq);
+            const gapCls = gap == null ? '' : Math.abs(gap) <= 5 ? '' : (gap > 0 ? 'num-up' : 'num-up-soft');
+            // 30d gap series, oldest → newest
+            const gapSeries = (data['50'] || [])
+              .slice(0, 30).slice().reverse()
+              .map(d => (d.sp500_breadth != null && d.qqq_breadth != null) ? (d.qqq_breadth - d.sp500_breadth) : null);
+            const spark = gapSparkline(gapSeries, { w: 100, h: 18 });
+            return `
+              <div class="acct-card">
+                <div class="acct-name">QQQ−SPY GAP · 50D</div>
+                <div class="acct-val">
+                  <span class="mono ${gapCls}">${gap != null ? sign + gap.toFixed(1) + 'pp' : '—'}</span>
+                </div>
+                <div class="acct-meta" style="display:flex;align-items:center;gap:6px;justify-content:space-between">
+                  <span class="${rot.cls}">${rot.label}</span>
+                  ${spark ? `<span style="flex:1;max-width:100px">${spark}</span>` : ''}
+                </div>
+              </div>`;
+          })()}
           <div class="acct-card">
             <div class="acct-name">SECTORS ≥ 50%</div>
             <div class="acct-val"><span class="mono">${sectorsTotal ? sectorsAbove + ' / ' + sectorsTotal : '—'}</span></div>
@@ -453,6 +532,9 @@
           </div>
         </div>
 
+        ${renderRotationRibbon(data, 63)}
+        ${renderLeadersLaggards(data, latest50)}
+        ${renderSectorDonut(br)}
         ${renderHistoricalHeatShell(data, sectors)}
         ${renderIndustryShell(industries)}
       `;
@@ -551,6 +633,265 @@
           <b>4% movers</b> count stocks with ≥4% daily gain/loss — spikes signal momentum thrust regime.
           <b>Ratios</b> sum up/down 4% movers over N days; ≥1.5 = up thrust, ≤0.67 = down thrust.
           <b>25%·M / 50%·M</b> stocks up/down ≥25% or ≥50% over the last month — extreme trend-following participation.
+          <br>Data: <a href="https://stockbee.blogspot.com" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;opacity:0.6">Stockbee Market Monitor</a> — used with attribution.
+        </div>
+      </div>
+    `;
+  }
+
+  /* Bloomberg-style sector donut: slice size = SPX sector weight,
+     color = 1-day ETF % change. Data from br.sector_changes. */
+  function renderSectorDonut(br) {
+    const sc = br.sector_changes || {};
+    if (!Object.keys(sc).length) return '';
+    const latest = ((br.data || br)['50'] || []).slice(-1)[0] || {};
+    const spyChange = latest.spy_change ?? null;
+
+    const WEIGHT = {
+      'Information Technology': 31.8, 'Financials': 13.0, 'Health Care': 12.4,
+      'Consumer Discretionary': 10.0, 'Communication Services': 8.9, 'Industrials': 8.3,
+      'Consumer Staples': 5.5, 'Energy': 3.8, 'Utilities': 2.6, 'Materials': 2.4, 'Real Estate': 2.3,
+    };
+    const SHORT = {
+      'Information Technology': 'Info Tech', 'Financials': 'Financials', 'Health Care': 'Health Care',
+      'Consumer Discretionary': 'Cons Discr', 'Communication Services': 'Comm Svc',
+      'Industrials': 'Industrials', 'Consumer Staples': 'Cons Stpl',
+      'Energy': 'Energy', 'Utilities': 'Utilities', 'Materials': 'Materials', 'Real Estate': 'Real Estate',
+    };
+    const TINY = {
+      'Utilities': 'XLU', 'Materials': 'XLB', 'Real Estate': 'XLRE',
+    };
+
+    const chgColor = (v) => v == null ? '#6b7280' : v > 0 ? '#22c55e' : v < 0 ? '#ef4444' : '#6b7280';
+    const fmt = (v) => v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+    const d2r = (deg) => (deg - 90) * Math.PI / 180;
+
+    const sectors = Object.entries(WEIGHT)
+      .map(([name, w]) => ({ name, weight: w, change: sc[name]?.change ?? null }))
+      .sort((a, b) => b.weight - a.weight);
+    const total = sectors.reduce((s, x) => s + x.weight, 0);
+
+    const W = 700, H = 480, cx = W / 2, cy = H / 2;
+    const R2 = 140, R1 = 92, RC = 75;
+    const GAP = 0.7;
+
+    const arcPath = (s, e, r1, r2) => {
+      const a1 = d2r(s), a2 = d2r(e);
+      const x1 = cx + r2 * Math.cos(a1), y1 = cy + r2 * Math.sin(a1);
+      const x2 = cx + r2 * Math.cos(a2), y2 = cy + r2 * Math.sin(a2);
+      const x3 = cx + r1 * Math.cos(a2), y3 = cy + r1 * Math.sin(a2);
+      const x4 = cx + r1 * Math.cos(a1), y4 = cy + r1 * Math.sin(a1);
+      const lg = (e - s) > 180 ? 1 : 0;
+      return `M${x1.toFixed(1)},${y1.toFixed(1)} A${r2},${r2},0,${lg},1,${x2.toFixed(1)},${y2.toFixed(1)} L${x3.toFixed(1)},${y3.toFixed(1)} A${r1},${r1},0,${lg},0,${x4.toFixed(1)},${y4.toFixed(1)} Z`;
+    };
+
+    let slices = '', labels = '';
+    let angle = 0;
+    sectors.forEach(sec => {
+      const span = (sec.weight / total) * 360;
+      const sa = angle + GAP / 2, ea = angle + span - GAP / 2;
+      const mid = (sa + ea) / 2;
+      angle += span;
+
+      const col = chgColor(sec.change);
+      slices += `<path d="${arcPath(sa, ea, R1, R2)}" fill="${col}" stroke="#0d1117" stroke-width="1.5"/>`;
+
+      const tiny = span < 12;
+      const LR = R2 + (tiny ? 28 : 20);
+      const LT = LR + 8;
+      const ma = d2r(mid);
+      const lx1 = cx + (R2 + 3) * Math.cos(ma), ly1 = cy + (R2 + 3) * Math.sin(ma);
+      const lx2 = cx + LR * Math.cos(ma),       ly2 = cy + LR * Math.sin(ma);
+      const tx  = cx + LT * Math.cos(ma),        ty  = cy + LT * Math.sin(ma);
+      const anch = tx > cx + 8 ? 'start' : tx < cx - 8 ? 'end' : 'middle';
+      const label = tiny ? (TINY[sec.name] || sec.name.split(' ')[0]) : SHORT[sec.name];
+      const fsize = tiny ? 8.5 : 9.5;
+      labels += `
+        <line x1="${lx1.toFixed(1)}" y1="${ly1.toFixed(1)}" x2="${lx2.toFixed(1)}" y2="${ly2.toFixed(1)}" stroke="${col}" stroke-width="0.8" opacity="0.65"/>
+        <text x="${tx.toFixed(1)}" y="${(ty - 3.5).toFixed(1)}" text-anchor="${anch}" font-size="${fsize}" fill="#d1d5db" font-family="system-ui,sans-serif">${label}</text>
+        <text x="${tx.toFixed(1)}" y="${(ty + 7.5).toFixed(1)}" text-anchor="${anch}" font-size="${fsize}" fill="${col}" font-family="'JetBrains Mono',monospace,system-ui">${fmt(sec.change)}</text>`;
+    });
+
+    const centerCol = chgColor(spyChange);
+    const dataDate = sc[Object.keys(sc)[0]]?.date || '';
+    return `
+      <div class="mod-panel">
+        <div class="mod-panel-title">SPX SECTOR PERFORMANCE · ${dataDate} · SIZED BY S&amp;P 500 WEIGHT</div>
+        <div style="display:flex;justify-content:center;overflow:visible">
+          <svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px;overflow:visible;display:block">
+            ${slices}
+            <circle cx="${cx}" cy="${cy}" r="${RC}" fill="${centerCol}" opacity="0.82"/>
+            <text x="${cx}" y="${cy - 8}" text-anchor="middle" font-size="11" fill="#fff" font-family="system-ui,sans-serif" font-weight="600" opacity="0.85">S&amp;P 500</text>
+            <text x="${cx}" y="${cy + 10}" text-anchor="middle" font-size="14" fill="#fff" font-family="'JetBrains Mono',monospace,system-ui" font-weight="700">${fmt(spyChange)}</text>
+            ${labels}
+          </svg>
+        </div>
+        <div style="font-size:9px;color:var(--muted);text-align:center;margin-top:2px">Slice size = S&amp;P 500 sector weight · Color = 1-day % change (ETF proxy: XLK XLV XLF XLY XLC XLI XLP XLE XLRE XLB XLU)</div>
+      </div>`;
+  }
+
+  /* Detect whether the regime has shifted in the most recent N days.
+     Returns { currentReg, streak, priorReg } when streak ≥ 3 consecutive
+     days in a new regime, else null.
+     cells: chronological array (oldest first). */
+  function detectRegimeShift(cells) {
+    if (cells.length < 5) return null;
+    const currentReg = cells[cells.length - 1].reg;
+    if (currentReg === 'na') return null;
+    let streakStart = cells.length - 1;
+    while (streakStart > 0) {
+      const prev = cells[streakStart - 1].reg;
+      if (prev === currentReg || prev === 'na') streakStart--;
+      else break;
+    }
+    const streak = cells.length - streakStart;
+    if (streak < 3) return null;
+    let priorReg = null;
+    for (let i = streakStart - 1; i >= 0; i--) {
+      if (cells[i].reg !== 'na' && cells[i].reg !== currentReg) { priorReg = cells[i].reg; break; }
+    }
+    if (!priorReg) return null;
+    return { currentReg, streak, priorReg };
+  }
+
+  function renderRegimeTransitionAlert(shift) {
+    if (!shift) return '';
+    const { currentReg, streak, priorReg } = shift;
+    const LABEL = { tech: 'TECH LEADING', broad: 'BROAD LEADING', aligned: 'ALIGNED', riskoff: 'RISK-OFF' };
+    const from = priorReg, to = currentReg;
+    let interp = '';
+    if (to === 'riskoff')                          interp = 'Broad deterioration — both indices weakening. Reduce risk exposure.';
+    else if (from === 'riskoff')                   interp = 'Risk-off easing — breadth recovering. Wait for confirmation above 40%.';
+    else if (from === 'tech' && to === 'aligned')  interp = 'Growth leadership fading — rotation likely in early stages.';
+    else if (from === 'aligned' && to === 'tech')  interp = 'Tech/growth re-asserting leadership — momentum favours growth names.';
+    else if (from === 'tech' && to === 'broad')    interp = 'Sharp tech→value rotation. Cyclicals and defensives leading.';
+    else if (from === 'broad' && to === 'tech')    interp = 'Value rotation reversing — growth re-taking breadth leadership.';
+    else if (from === 'aligned' && to === 'broad') interp = 'Broadening rotation underway — cyclicals/value gaining vs growth.';
+    else if (from === 'broad' && to === 'aligned') interp = 'Broad rotation pausing — regime stabilising, watch sector 5D deltas.';
+    else interp = 'Regime transition in progress — confirm with sector 5D deltas.';
+    const icon = to === 'riskoff' ? '⚠' : streak >= 5 ? '↻' : '→';
+    return `<div class="brd-shift-alert brd-shift-${to}">
+      <span class="brd-shift-icon">${icon}</span>
+      <span class="brd-shift-body">
+        <b>Regime shift:</b> ${LABEL[from]} → <b>${LABEL[to]}</b> · ${streak} consecutive days
+        <span class="brd-shift-interp">${interp}</span>
+      </span>
+    </div>`;
+  }
+
+  /* Historical rotation regime ribbon — every day classified into one of
+     {tech, broad, aligned, riskoff} based on QQQ−SPY breadth gap, rendered
+     as a horizontal time-axis bar so the dominant regime over the window is
+     visually obvious. Range default 63 td (3M) to match stocks-app /breadth.html. */
+  function renderRotationRibbon(data, days) {
+    const N = days || 63;
+    const rows = (data['50'] || []).slice(0, N).slice().reverse();  // chronological
+    if (!rows.length) return '';
+    const cells = rows.map(r => {
+      const reg = classifyRotation(r.sp500_breadth, r.qqq_breadth).reg;
+      return { date: r.date, reg };
+    });
+    const counts = { tech: 0, broad: 0, aligned: 0, riskoff: 0, na: 0 };
+    cells.forEach(c => { counts[c.reg] = (counts[c.reg] || 0) + 1; });
+    const total = cells.length;
+    const pct = (n) => total ? Math.round((n / total) * 100) : 0;
+    const first = cells[0]?.date || '—';
+    const last = cells[cells.length - 1]?.date || '—';
+    const mid = cells[Math.floor(cells.length / 2)]?.date || '';
+    const ribbonHTML = cells.map(c =>
+      `<div class="brd-ribbon-cell ${c.reg}" title="${c.date} · ${c.reg.toUpperCase()}"></div>`
+    ).join('');
+
+    const shift = detectRegimeShift(cells);
+    return `
+      <div class="mod-panel">
+        <div class="mod-panel-title">HISTORICAL ROTATION REGIME · ${total} trading days</div>
+        ${renderRegimeTransitionAlert(shift)}
+        <div class="brd-ribbon">${ribbonHTML}</div>
+        <div class="brd-ribbon-axis"><span>${first}</span><span>${mid}</span><span>${last}</span></div>
+        <div class="brd-ribbon-legend">
+          <span><i class="tech"></i>Tech leading (gap &gt;+5pp)</span>
+          <span><i class="broad"></i>Broad leading (gap &lt;−5pp)</span>
+          <span><i class="aligned"></i>Aligned (±5pp)</span>
+          <span><i class="riskoff"></i>Risk-off (both &lt;30%)</span>
+        </div>
+        <div class="brd-ribbon-stats">
+          Days in regime · Tech <b>${pct(counts.tech)}%</b> · Broad <b>${pct(counts.broad)}%</b> · Aligned <b>${pct(counts.aligned)}%</b> · Risk-off <b>${pct(counts.riskoff)}%</b>
+        </div>
+      </div>
+    `;
+  }
+
+  /* Leaders / Laggards panel — top-3 vs bottom-3 sectors today with 5d Δ
+     and a plain-language rotation interpretation derived from the dominant
+     style group at each end of the ranking. */
+  function renderLeadersLaggards(data, latest50) {
+    const sectors = latest50?.sectors || {};
+    const items = Object.entries(sectors)
+      .filter(([, v]) => typeof v === 'number')
+      .map(([name, v]) => ({ name, val: v, group: BRD_SECTOR_GROUP[name] || 'cyclical' }));
+    if (items.length < 3) return '';
+    const prior = (data['50'] || [])[5] || (data['50'] || []).slice(-1)[0] || {};
+    items.forEach(it => {
+      const p = prior?.sectors?.[it.name];
+      it.delta = (typeof p === 'number') ? +(it.val - p).toFixed(1) : null;
+    });
+    const sorted = items.slice().sort((a, b) => b.val - a.val);
+    const top = sorted.slice(0, 3);
+    const bot = sorted.slice(-3).reverse();
+
+    // Dominant style at each end → rotation interpretation
+    const tally = arr => arr.reduce((m, it) => (m[it.group] = (m[it.group] || 0) + 1, m), {});
+    const dominant = (counts) => Object.entries(counts).sort((a, b) => b[1] - a[1])[0] || ['', 0];
+    const [topGrp, topGrpN] = dominant(tally(top));
+    const [botGrp, botGrpN] = dominant(tally(bot));
+    let interp;
+    if (topGrpN >= 2 && botGrpN >= 2 && topGrp !== botGrp) {
+      interp = `Money rotating <b>out of ${BRD_GROUP_LABEL[botGrp]}</b> and <b>into ${BRD_GROUP_LABEL[topGrp]}</b>.`;
+      if (topGrp === 'tech' && botGrp === 'defensive')      interp += ' Risk-on posture — growth bid, defensives sold.';
+      else if (topGrp === 'defensive' && botGrp === 'tech') interp += ' Risk-off / late-cycle — investors hiding in non-cyclicals.';
+      else if (topGrp === 'cyclical' && botGrp === 'tech')  interp += ' Reflation / value rotation — bond-sensitive sectors leading growth.';
+      else if (topGrp === 'tech' && botGrp === 'cyclical')  interp += ' Growth re-leadership — secular themes outpacing cyclical/value.';
+    } else {
+      interp = `Mixed leadership — no single style dominates the top or bottom of the sector ranking.`;
+    }
+
+    const renderRow = (it) => {
+      const tagCls = it.group === 'tech' ? 'num-up-soft' : it.group === 'defensive' ? 'num-warn' : '';
+      const dlt = it.delta == null ? '—' :
+        `<span class="mono ${it.delta >= 0 ? 'num-up' : 'num-dn'}">${it.delta >= 0 ? '+' : ''}${it.delta}pp</span>`;
+      return `<tr>
+        <td class="lbl">${it.name} <span class="chip ${tagCls}" style="font-size:8px;padding:1px 4px;margin-left:4px">${BRD_GROUP_TAG[it.group]}</span></td>
+        <td class="cell ${breadthCls(it.val)}">${it.val}</td>
+        <td class="mono">${dlt}</td>
+      </tr>`;
+    };
+
+    return `
+      <div class="mod-panel">
+        <div class="mod-panel-title">SECTOR LEADERS &amp; LAGGARDS · ${latest50.date || '—'}</div>
+        <div class="mod-grid-2">
+          <div>
+            <div class="mod-panel-subtitle" style="font-size:10px;color:var(--muted);margin-bottom:4px;letter-spacing:0.04em">LEADERS · top 3 by % above 50D MA</div>
+            <div class="tbl-wrap">
+              <table class="tbl-dense tbl-heat">
+                <thead><tr><th>SECTOR</th><th>%&gt;50MA</th><th>5D Δ</th></tr></thead>
+                <tbody>${top.map(renderRow).join('')}</tbody>
+              </table>
+            </div>
+          </div>
+          <div>
+            <div class="mod-panel-subtitle" style="font-size:10px;color:var(--muted);margin-bottom:4px;letter-spacing:0.04em">LAGGARDS · bottom 3 by % above 50D MA</div>
+            <div class="tbl-wrap">
+              <table class="tbl-dense tbl-heat">
+                <thead><tr><th>SECTOR</th><th>%&gt;50MA</th><th>5D Δ</th></tr></thead>
+                <tbody>${bot.map(renderRow).join('')}</tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:8px;padding:6px 10px;background:var(--panel);border:1px dashed var(--border);font-size:11px;color:var(--fg)">
+          ${interp}
         </div>
       </div>
     `;
@@ -590,7 +931,7 @@
       </style>
       <div class="mod-panel" data-breadth-panel="industry">
         <div class="mod-panel-title">
-          INDUSTRY PERFORMANCE · Finviz groups · <span class="ind-count mono">${industries.length}</span>
+          INDUSTRY PERFORMANCE · <a href="https://finviz.com/groups.ashx" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;opacity:0.7">Finviz groups</a> · <span class="ind-count mono">${industries.length}</span>
           <span style="margin-left:10px">
             <button class="ind-view-btn" data-view="heatmap" type="button">HEATMAP</button>
             <button class="ind-view-btn" data-view="bars" type="button">BARS</button>

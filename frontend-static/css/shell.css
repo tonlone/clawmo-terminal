@@ -399,7 +399,8 @@ html, body {
 
 .pane-body {
   flex: 1;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 14px 16px;
   font-family: var(--font-ui);
   font-size: 13px;

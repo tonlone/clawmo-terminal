@@ -12,8 +12,8 @@
     { id: 'screener',       code: 'SCR', fkey: 4,  label: 'Screener',       labelCN: '選股器',   group: 'Core',     src: 'stocks.clawmo.tech/screener.html', pdfExportable: true, pdfNeedsTicker: false },
     { id: 'breadth',        code: 'BRD', fkey: 5,  label: 'Market Breadth', labelCN: '市場廣度', group: 'Core',     src: 'stocks.clawmo.tech/breadth.html', pdfExportable: true, pdfNeedsTicker: false },
     { id: 'signals',        code: 'SIG', fkey: 6,  label: 'Signals',        labelCN: '交易信號', group: 'Core',     src: 'stocks.clawmo.tech/signals.html', pdfExportable: true, pdfNeedsTicker: false },
-    { id: 'sctr',           code: 'SCT', fkey: 7,  label: 'SCTR',           labelCN: 'SCTR排名', group: 'Tools',    src: 'stocks.clawmo.tech/sctr.html', pdfExportable: true, pdfNeedsTicker: false },
-    { id: 'deep-value',     code: 'DVL', fkey: 8,  label: 'Deep Value',     labelCN: '深度價值', group: 'Tools',    src: 'deep-value.clawmo.tech' },
+    { id: 'sctr',           code: 'SCT', fkey: 7,  label: 'Tech Rank',      labelCN: '技術排名', group: 'Tools',    src: 'stocks.clawmo.tech/sctr.html', pdfExportable: true, pdfNeedsTicker: false },
+    { id: 'deep-value',     code: 'DVL', fkey: 8,  label: 'Deep Value',     labelCN: '深度價值', group: 'Tools',    src: 'deep-value.clawmo.tech', pdfExportable: true, pdfNeedsTicker: false },
     { id: 'gex',            code: 'GEX', fkey: 9,  label: 'GEX',            labelCN: '伽瑪曝險', group: 'Tools',    src: 'stocks.clawmo.tech/gex.html', pdfExportable: true, pdfNeedsTicker: false },
     { id: 'smart-money',    code: 'SMY', fkey: 10, label: 'Smart Money',    labelCN: '機構資金', group: 'Tools',    src: 'stocks.clawmo.tech/smart-money.html', pdfExportable: true, pdfNeedsTicker: false },
     { id: 'heatmap',        code: 'HMP', fkey: 11, label: 'Heatmap',        labelCN: '熱力圖',   group: 'Market',   src: 'stocks.clawmo.tech/heatmap.html' },
@@ -29,7 +29,8 @@
     { id: 'twitter',        code: 'TWT', fkey: null, label: 'X Signals',     labelCN: 'X信號',    group: 'External', src: 'news.clawmo.tech (x_signals)' },
     { id: 'trump',          code: 'TRP', fkey: null, label: 'Trump Monitor', labelCN: '川普監察', group: 'External', src: 'trumpsocial.clawmo.tech' },
     { id: 'polymarket',     code: 'POL', fkey: null, label: 'Polymarket',    labelCN: '預測市場', group: 'External', src: 'polymarket.com' },
-    { id: 'portfolio',      code: 'PTF', fkey: null, label: 'Portfolio',    labelCN: '投資組合', group: 'Private',  src: 'stocks.clawmo.tech/portfolio.html' },
+    { id: 'cycles',         code: 'CYC', fkey: null, label: 'Geocosmic',     labelCN: '天體週期', group: 'Research', src: 'stocks.clawmo.tech/cycles.html' },
+    { id: 'portfolio',      code: 'PTF', fkey: null, label: 'Portfolio',    labelCN: '投資組合', group: 'Private',  src: 'stocks.clawmo.tech/portfolio.html', hidden: true },
   ];
 
   const MODULE_BY_ID = Object.fromEntries(MODULES.map(m => [m.id, m]));
@@ -112,6 +113,7 @@
     rail.innerHTML = '';
     let currentGroup = null;
     MODULES.forEach(m => {
+      if (m.hidden) return;
       if (m.group !== currentGroup) {
         if (currentGroup !== null) {
           const sep = document.createElement('div');
@@ -488,6 +490,7 @@
       signals:        ()     => `https://stocks.clawmo.tech/api/pdf/terminal/signals`,
       'stock-analysis': (t)  => `https://stocks.clawmo.tech/api/pdf/stock/${encodeURIComponent(t)}`,
       breadth:        ()     => `https://stocks.clawmo.tech/api/pdf/terminal/breadth`,
+      'deep-value':   ()     => `https://stocks.clawmo.tech/api/pdf/terminal/deep-value`,
       'smart-money':  ()     => `https://stocks.clawmo.tech/api/pdf/terminal/smart-money`,
       sentiment:      ()     => `https://stocks.clawmo.tech/api/pdf/terminal/sentiment`,
       recession:      ()     => `https://stocks.clawmo.tech/api/pdf/terminal/recession`,
@@ -669,6 +672,7 @@
   function buildCandidates() {
     const items = [];
     MODULES.forEach(m => {
+      if (m.hidden) return;
       items.push({
         kind: 'module',
         group: m.group,

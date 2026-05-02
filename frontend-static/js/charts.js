@@ -191,5 +191,85 @@
     }).join('') + `</div>`;
   }
 
-  window.OC_CHART = { overlayNorm, lineAbs, sparkline, rankBars, smoothPath, COLORS };
+  /* Grouped vertical bar chart — multiple series per period, each series a
+     distinct color.  Used by the FIN module statement tabs.
+     series: [{name, color, values[]}]   values aligned to labels[]
+     opts:   {w, h, vFmt}  */
+  function groupedBars(series, labels, opts) {
+    opts = opts || {};
+    const W = opts.w || 900, H = opts.h || 230;
+    const padL = 56, padR = 14, padT = 28, padB = 22;
+    const plotW = W - padL - padR;
+    const plotH = H - padT - padB;
+
+    if (!labels || !labels.length || !series || !series.length) return '';
+
+    const flat = [];
+    series.forEach(s => (s.values || []).forEach(v => {
+      if (typeof v === 'number' && isFinite(v)) flat.push(v);
+    }));
+    if (!flat.length) return '';
+
+    const hasNeg = flat.some(v => v < 0);
+    const maxAbs = Math.max(...flat.map(Math.abs), 1);
+    const zeroY  = hasNeg ? padT + plotH / 2 : padT + plotH;
+    const span   = hasNeg ? plotH / 2 : plotH;
+
+    const vFmt = opts.vFmt || ((v) => {
+      const a = Math.abs(v);
+      if (a >= 1e12) return '$' + (v / 1e12).toFixed(1) + 'T';
+      if (a >= 1e9)  return '$' + (v / 1e9).toFixed(1)  + 'B';
+      if (a >= 1e6)  return '$' + (v / 1e6).toFixed(1)  + 'M';
+      return '$' + v.toFixed(0);
+    });
+
+    const n = labels.length;
+    const m = series.length;
+    const groupW = plotW / n;
+    const usable = groupW * 0.78;
+    const bw     = usable / m;
+    const gPad   = (groupW - usable) / 2;
+
+    const parts = [];
+
+    // Y gridlines + labels (5 ticks)
+    for (let t = 0; t <= 4; t++) {
+      const frac = t / 4;
+      const ty   = padT + plotH * frac;
+      const val  = hasNeg ? maxAbs * (1 - 2 * frac) : maxAbs * (1 - frac);
+      parts.push(`<line class="oc-grid" x1="${padL}" y1="${ty.toFixed(1)}" x2="${(W - padR)}" y2="${ty.toFixed(1)}"/>`);
+      parts.push(`<text class="oc-ylabel" x="${(padL - 3)}" y="${(ty + 3).toFixed(1)}">${vFmt(val)}</text>`);
+    }
+
+    // Zero line
+    parts.push(`<line class="oc-zero" x1="${padL}" y1="${zeroY.toFixed(1)}" x2="${(W - padR)}" y2="${zeroY.toFixed(1)}"/>`);
+
+    // Bars + x labels
+    labels.forEach((lbl, gi) => {
+      const gx0 = padL + gi * groupW + gPad;
+      series.forEach((s, si) => {
+        const v = (s.values || [])[gi];
+        if (v == null || !isFinite(v)) return;
+        const h  = Math.abs(v) / maxAbs * span;
+        const bx = gx0 + si * bw;
+        const by = v >= 0 ? zeroY - h : zeroY;
+        parts.push(`<rect x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${(bw - 1.2).toFixed(1)}" height="${Math.max(h, 0.5).toFixed(1)}" style="fill:${s.color};opacity:0.85"/>`);
+      });
+      const lx = padL + gi * groupW + groupW / 2;
+      parts.push(`<text class="oc-xlabel" x="${lx.toFixed(1)}" y="${(H - 5)}" text-anchor="middle">${lbl}</text>`);
+    });
+
+    // Legend (top, left-aligned)
+    let lx = padL;
+    series.forEach(s => {
+      parts.push(`<rect x="${lx.toFixed(1)}" y="9" width="8" height="6" style="fill:${s.color};opacity:0.9"/>`);
+      lx += 11;
+      parts.push(`<text class="oc-xlabel" x="${lx.toFixed(1)}" y="15" text-anchor="start">${s.name}</text>`);
+      lx += s.name.length * 5.4 + 10;
+    });
+
+    return `<svg class="oc-chart fin-grouped-bars" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${parts.join('')}</svg>`;
+  }
+
+  window.OC_CHART = { overlayNorm, lineAbs, sparkline, rankBars, smoothPath, groupedBars, COLORS };
 })();

@@ -264,7 +264,7 @@
   align-items: start;
 }
 @media (max-width: 1100px) {
-  .mod-grid-2 { grid-template-columns: 1fr; }
+  .mod-grid-2 { grid-template-columns: minmax(0, 1fr); }
 }
 
 .mod-panel {
@@ -457,6 +457,67 @@
 .sector-spark.spark-up path  { stroke: var(--pnl-up); }
 .sector-spark.spark-dn path  { stroke: var(--pnl-dn); }
 .sector-spark.spark-mid path { stroke: var(--fg-faint); }
+
+/* Historical rotation regime ribbon */
+.brd-ribbon {
+  display: flex;
+  height: 14px;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.brd-ribbon-cell { flex: 1; min-width: 0; }
+.brd-ribbon-cell.tech    { background: rgba(96, 165, 250, 0.55); }
+.brd-ribbon-cell.broad   { background: rgba(74, 222, 128, 0.55); }
+.brd-ribbon-cell.aligned { background: rgba(139, 148, 158, 0.45); }
+.brd-ribbon-cell.riskoff { background: rgba(248, 113, 113, 0.60); }
+.brd-ribbon-cell.na      { background: rgba(255, 255, 255, 0.04); }
+.brd-ribbon-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--fg-dim);
+  margin-top: 3px;
+  font-family: var(--font-mono);
+}
+.brd-ribbon-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 10px;
+  color: var(--fg-dim);
+  margin-top: 6px;
+}
+.brd-ribbon-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.brd-ribbon-legend i {
+  display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+}
+.brd-ribbon-legend i.tech    { background: rgba(96, 165, 250, 0.55); }
+.brd-ribbon-legend i.broad   { background: rgba(74, 222, 128, 0.55); }
+.brd-ribbon-legend i.aligned { background: rgba(139, 148, 158, 0.45); }
+.brd-ribbon-legend i.riskoff { background: rgba(248, 113, 113, 0.60); }
+.brd-ribbon-stats {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+}
+.brd-ribbon-stats b { color: var(--fg); }
+
+/* Regime transition alert */
+.brd-shift-alert {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 6px 10px; margin-bottom: 8px; border-radius: 4px;
+  border-left: 3px solid; font-size: 11px; line-height: 1.45;
+}
+.brd-shift-alert.brd-shift-tech    { background: rgba(96,165,250,0.10); border-color: #60a5fa; }
+.brd-shift-alert.brd-shift-broad   { background: rgba(74,222,128,0.10); border-color: #4ade80; }
+.brd-shift-alert.brd-shift-aligned { background: rgba(139,148,158,0.08); border-color: #8b949e; }
+.brd-shift-alert.brd-shift-riskoff { background: rgba(248,113,113,0.12); border-color: #f87171; }
+.brd-shift-icon { font-size: 13px; flex-shrink: 0; line-height: 1.45; }
+.brd-shift-body b { color: var(--fg); }
+.brd-shift-interp { display: block; font-size: 10.5px; color: var(--fg-dim); margin-top: 2px; }
 
 /* Valuation tile sparkline */
 .val-tile-spark { margin-top: 8px; }
@@ -829,7 +890,7 @@
 .spark-wrap { padding: 8px 10px; position: relative; }
 .sparkline { width: 100%; height: 140px; display: block; }
 .stk-tooltip {
-  position: absolute; top: 12px; right: 16px;
+  position: absolute; top: 12px;
   background: rgba(10, 12, 16, 0.92);
   border: 1px solid var(--border);
   border-radius: 2px;
@@ -844,8 +905,47 @@
   z-index: 2;
 }
 .stk-tt-row { display: flex; justify-content: space-between; gap: 10px; line-height: 1.5; }
-.stk-tt-k { color: var(--fg-faint); letter-spacing: 0.06em; }
+.stk-tt-k { color: var(--fg-faint); letter-spacing: 0.06em; display: inline-flex; align-items: center; gap: 5px; }
 .stk-tt-v { color: var(--fg); }
+.stk-tt-sw {
+  display: inline-block;
+  width: 8px; height: 2px;
+  border-radius: 1px;
+  vertical-align: middle;
+}
+.stk-tt-sw.sw-50  { background: #fb923c; }
+.stk-tt-sw.sw-200 { background: #f87171; }
+
+/* PRICE panel inline legend — chip per series, professional and dense */
+.stk-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: 12px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--fg-dim);
+  font-weight: 400;
+}
+.stk-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.stk-legend-sw {
+  display: inline-block;
+  width: 14px; height: 2px;
+  border-radius: 1px;
+}
+.stk-legend-sw.sw-close { background: var(--pnl-up); height: 2px; }
+.stk-legend-sw.sw-50    { background: #fb923c; }
+.stk-legend-sw.sw-200   { background: #f87171; }
+.stk-legend-sw.sw-tgt {
+  background: linear-gradient(to right, var(--accent) 0 4px, transparent 4px 7px, var(--accent) 7px 11px, transparent 11px 14px);
+  height: 1px;
+}
 .sparkline .spark-line {
   fill: none;
   stroke: var(--accent);
@@ -853,12 +953,21 @@
 }
 .sparkline .spark-line.up { stroke: var(--pnl-up); }
 .sparkline .spark-line.dn { stroke: var(--pnl-dn); }
-.sparkline .spark-sma {
+.sparkline .spark-sma-200 {
   fill: none;
-  stroke: var(--fg-faint);
-  stroke-width: 1;
-  stroke-dasharray: 3 3;
-  opacity: 0.5;
+  stroke: #f87171;
+  stroke-width: 1.1;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  opacity: 0.85;
+}
+.sparkline .spark-sma-50 {
+  fill: none;
+  stroke: #fb923c;
+  stroke-width: 1.1;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  opacity: 0.9;
 }
 .sparkline .spark-tgt {
   stroke: var(--accent);
@@ -1310,6 +1419,30 @@
   background: var(--accent-bg); color: var(--accent);
   border-color: var(--accent-dim); font-weight: 600;
 }
+.fin-subtab-btn[data-smytag="pocAccum"],
+.fin-subtab-btn[data-smytag="pocAccum"].active { color: #fbbf24; border-color: rgba(251,191,36,0.4); }
+.fin-subtab-btn[data-smytag="pocAccum"].active { background: rgba(251,191,36,0.12); }
+
+/* SMY expand-row AI Analysis CTA — distinct from filter chips */
+.smy-ai-cta {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent-dim);
+  border-radius: 3px;
+  padding: 3px 10px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  letter-spacing: 0.04em;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.smy-ai-cta:hover { background: var(--accent-bg); border-color: var(--accent); }
+.smy-ai-cta:disabled { opacity: 0.55; cursor: wait; }
+.smy-ai-cta .smy-ai-spark { margin-right: 5px; opacity: 0.85; }
+
 .fin-body { padding: 0 12px 20px; }
 
 /* Summary KPI strip */
@@ -1333,6 +1466,45 @@
 
 .fin-chart-wrap { padding: 10px 8px 8px; width: 100%; }
 .fin-barchart { width: 100%; height: 140px; display: block; }
+.fin-grouped-bars { height: 230px; }
+.fin-yoy-sub { display: block; font-size: 9px; opacity: 0.85; }
+
+/* Key Financials 10Y table */
+.fin-kf-table { min-width: 700px; }
+.fin-kf-hdr td {
+  background: var(--panel-alt); color: var(--fg-faint);
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.1em;
+  padding: 5px 8px; border-top: 1px solid var(--border); font-weight: 600;
+}
+.fin-kf-ttm {
+  background: rgba(96,165,250,0.07); color: var(--accent);
+  font-weight: 600; border-left: 1px solid var(--accent-dim);
+  border-right: 1px solid var(--accent-dim);
+}
+
+/* Quarterly tables side-by-side */
+.fin-qtr-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;
+}
+@media (max-width: 700px) { .fin-qtr-grid { grid-template-columns: 1fr; } }
+
+/* Capital Structure cards + stacked bar */
+.fin-cap-cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px; padding: 10px 12px 8px;
+}
+.fin-cap-bar {
+  display: flex; height: 26px; margin: 4px 12px 12px; border-radius: 2px;
+  overflow: hidden; font-size: 9px; font-family: var(--font-mono);
+}
+.fin-cap-seg {
+  display: flex; align-items: center; justify-content: center;
+  color: #000; font-weight: 600; overflow: hidden; white-space: nowrap;
+  transition: width 0.3s ease;
+}
+.fin-cap-debt   { background: #F87171; }
+.fin-cap-equity { background: #60A5FA; }
+.fin-cap-cash   { background: #4ADE80; }
 
 .fin-legend {
   display: flex; gap: 14px; font-size: 10px; color: var(--fg-faint);
@@ -1510,6 +1682,11 @@
 }
 
 /* ── FIN DCF ─────────────────────────────────────────────── */
+.fin-dcf-fx-note {
+  font-size: 10px; color: var(--fg-faint); background: var(--panel);
+  border: 1px solid var(--border); border-radius: 3px;
+  padding: 4px 10px; margin-bottom: 8px; letter-spacing: 0.02em;
+}
 .fin-dcf-compare {
   display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 10px;
 }
