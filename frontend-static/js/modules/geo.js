@@ -1,8 +1,9 @@
-/* GEO — Persian Gulf + Strait of Hormuz + Gulf of Oman AIS monitor */
+/* GEO — Global AIS vessel monitor (Hormuz + Americas) */
 (() => {
   'use strict';
   const { fetchJSON, fmt } = window.OC_DATA;
   const BASE = 'https://stocks.clawmo.tech/data';
+  const API  = 'https://stocks.clawmo.tech';
 
   let _map = null;
   let _currentRegion = 'gulf';
@@ -15,7 +16,7 @@
       heroNarrative: 'Coverage: W Persian Gulf · E Gulf / Strait of Hormuz · Gulf of Oman (3 VesselFinder tiles). ~21% of global seaborne oil + 20% of LNG transits Hormuz.',
       contextHtml: `
         <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Strait of Hormuz</b> — a 33km-wide chokepoint between Oman and Iran through which ~21% of global oil trade and ~20% of LNG passes. This module covers the full upstream/downstream picture: the Persian Gulf loading terminals and Gulf of Oman transit lanes.</p>
-        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">What to watch:</b> SFL pings below 800, tanker share falling sharply, or military vessels massing near the strait signal disruption risk. Normal is 1500–2500 SFL pings across all three tiles.</p>
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">What to watch:</b> Tanker count dropping sharply below its 60-day baseline (BELOW NORMAL status), tanker share of total vessels falling, or military vessels massing near the strait signal disruption risk. The ABOVE/BELOW NORMAL status is data-driven — calculated from a rolling 60-day μ ± 1σ of tanker counts, updated 4× daily.</p>
         <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Portfolio impact:</b> Disruption → oil spike (OXY, XOM, CVX) + shipping premium (tanker ETFs) + defense bid (LMT, RTX). Sustained closure pushes crude +20–40% within days.</p>`,
       marinetraffic: 'https://www.marinetraffic.com/en/ais/home/centerx:55.4/centery:25.9/zoom:7',
       center: [26, 55], zoom: 6,
@@ -52,6 +53,46 @@
         <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Portfolio impact:</b> LNG demand surge (QatarEnergy partners, Woodside) · tanker oversupply signals pricing pressure · Taiwan tensions → Asia risk premium across tech + energy.</p>`,
       marinetraffic: 'https://www.marinetraffic.com/en/ais/home/centerx:125/centery:25/zoom:5',
       center: [25, 125], zoom: 4,
+    },
+    // ── Americas cron-tracked regions ──────────────────────────────────────
+    gulf_mexico: {
+      label: 'Gulf of Mexico',
+      desc:  'Houston/Galveston · New Orleans · Yucatan Channel',
+      heroNarrative: 'Coverage: W Gulf (Houston/Galveston/Corpus Christi) · E Gulf (New Orleans/Tampa/Florida Straits) · Yucatan Channel approach. Primary US crude export and LNG loading corridor.',
+      contextHtml: `
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Gulf of Mexico</b> — the principal US export basin. The Houston Ship Channel and LOOP (Louisiana Offshore Oil Port) handle the majority of US crude exports; Sabine Pass and Freeport are the two largest US LNG export terminals. Tanker departures here are a leading indicator of US export volumes.</p>
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Yucatan Channel</b> — the 200km-wide passage between Mexico and Cuba through which most Gulf traffic enters/exits toward the Atlantic and Caribbean. High inbound traffic signals loading activity ahead.</p>
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Portfolio impact:</b> Outbound tanker surge → US crude/LNG export uptick (OXY, COP, LNG equity) · Florida Straits congestion → freight rate bump · Hurricane season June–Nov disrupts entire Gulf basin.</p>`,
+      marinetraffic: 'https://www.marinetraffic.com/en/ais/home/centerx:-90/centery:27/zoom:6',
+      center: [27, -90], zoom: 5,
+      cronTracked: true, dataUrl: '/geo-gulf_mexico.json',
+      flowEntering: '← Entering port', flowLeaving: '→ Leaving port',
+    },
+    panama: {
+      label: 'Panama Canal',
+      desc:  'Gulf of Panama (Pacific) · Caribbean approach (Atlantic)',
+      heroNarrative: 'Coverage: Gulf of Panama (Pacific entrance) + Caribbean approach (Atlantic entrance). ~5% of global seaborne trade, ~40M tonnes of LNG per year transits the Expanded Canal.',
+      contextHtml: `
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Panama Canal</b> — the 80km shortcut between the Pacific and Atlantic. The Expanded Canal (2016) can handle Neopanamax vessels: up to 366m × 49m, including large LNG carriers and Suezmax tankers. ~14,000 transits/year, ~$3B in annual tolls.</p>
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Drought risk</b> — the Canal uses Gatun Lake freshwater for its locks. Severe drought (2023–2024) cut daily transits from 36 to ~22, adding weeks to Pacific↔Atlantic voyages and spiking LNG freight rates. Watch vessel count drops as an early drought signal.</p>
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Portfolio impact:</b> Canal congestion → higher tanker day-rates (FLNG, TK, DHT) · LNG freight spike · alternate Cape Horn or Suez routes add 7–14 days of cost · US LNG exports to Asia slow.</p>`,
+      marinetraffic: 'https://www.marinetraffic.com/en/ais/home/centerx:-79.9/centery:9.1/zoom:9',
+      center: [9, -80], zoom: 7,
+      cronTracked: true, dataUrl: '/geo-panama.json',
+      flowEntering: '← Atl→Pac', flowLeaving: '→ Pac→Atl',
+    },
+    venezuela: {
+      label: 'Venezuela',
+      desc:  'Maracaibo · Puerto La Cruz · Punta Cardón',
+      heroNarrative: 'Coverage: W Venezuelan coast (Maracaibo exit, José/Punta Cardón) · E Venezuelan coast (Orinoco delta + Trinidad approaches). Primary Venezuelan crude export corridor and sanctions-monitoring zone.',
+      contextHtml: `
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Venezuelan crude exports</b> — Venezuela holds the world's largest proven oil reserves (~300Gb) but production has fallen from 3.5Mb/d (1998) to ~0.9Mb/d today. Lake Maracaibo is the historic heart; José Terminal (Anzoátegui) now handles the majority of exports to China via PDVSA-CNOOC swap agreements.</p>
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Sanctions & dark fleet</b> — US OFAC sanctions restrict direct US purchases. Much Venezuelan crude moves via ship-to-ship (STS) transfers at sea, AIS transponder off. Visible tanker traffic here represents only a fraction of actual exports — gaps in vessel count can signal sanction-evasion upticks.</p>
+        <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Portfolio impact:</b> Export surge → marginal bearish crude signal · sanctions enforcement → supply shock risk · Trinidad LNG (Shell Atlantic LNG) — watch tank-vessel departures near Dragon Field.</p>`,
+      marinetraffic: 'https://www.marinetraffic.com/en/ais/home/centerx:-70/centery:11/zoom:7',
+      center: [11, -70], zoom: 6,
+      cronTracked: true, dataUrl: '/geo-venezuela.json',
+      flowEntering: '← Arriving', flowLeaving: '→ Departing',
     },
   };
 
@@ -146,22 +187,174 @@
   }
 
   /*
-   * Transit flow classification: entering or leaving the Persian Gulf.
+   * Transit flow classification — region-aware.
+   * Uses _currentRegion global so no call-site changes needed.
    *
-   * Only meaningful for vessels in the Hormuz approach corridor (lon > ~51°E).
-   * Vessels deep in the Persian Gulf (lon < 51°E) are at port or doing
-   * intra-Gulf runs — not Hormuz transits.
-   *
-   * COG ranges (bearing clockwise from North):
-   *   Entering (westbound toward Gulf) : 225°–315°
-   *   Leaving  (eastbound away from Gulf): 45°–135°
-   *   N/S/diagonal (port manoeuvres, intra-Gulf) : everything else → '—'
+   * Gulf/Hormuz:    lon > 51°E; W=Entering, E=Leaving
+   * Gulf of Mexico: NW/N/NE = entering port; S/SE/SW = leaving
+   * Panama:         NE (Pac→Atl) vs SW (Atl→Pac)
+   * Venezuela:      N/NE = departing loaded; S/SW = arriving in ballast
    */
   function transitFlow(lon, cog) {
-    if (cog == null || lon == null || lon < 51) return { text: '—', cls: '' };
-    if (cog >= 45  && cog <= 135) return { text: '→ Leaving',  cls: 'num-up'   };
-    if (cog >= 225 && cog <= 315) return { text: '← Entering', cls: 'num-warn' };
+    if (cog == null) return { text: '—', cls: '' };
+    const region = _currentRegion || 'gulf';
+
+    if (region === 'gulf') {
+      if (lon == null || lon < 51) return { text: '—', cls: '' };
+      if (cog >= 45  && cog <= 135) return { text: '→ Leaving',  cls: 'num-up'   };
+      if (cog >= 225 && cog <= 315) return { text: '← Entering', cls: 'num-warn' };
+      return { text: '—', cls: '' };
+    }
+
+    if (region === 'gulf_mexico') {
+      // Entering US Gulf: heading W/NW/N/NE (COG 270–360 or 0–90)
+      if ((cog >= 270) || (cog <= 90))  return { text: '← Entering port', cls: 'num-warn' };
+      if (cog > 90 && cog < 270)        return { text: '→ Leaving port',   cls: 'num-up'  };
+      return { text: '—', cls: '' };
+    }
+
+    if (region === 'panama') {
+      // Pac→Atl: heading NE (COG 0–90); Atl→Pac: heading SW (180–270)
+      if (cog >= 0   && cog <= 90)  return { text: '→ Pac→Atl', cls: 'num-up'   };
+      if (cog >= 180 && cog <= 270) return { text: '← Atl→Pac', cls: 'num-warn' };
+      return { text: '—', cls: '' };
+    }
+
+    if (region === 'venezuela') {
+      // Departing loaded: heading N/NE (315–360 or 0–45)
+      if ((cog >= 315) || (cog <= 45))  return { text: '→ Departing', cls: 'num-up'   };
+      // Arriving in ballast: heading S/SW (135–225)
+      if (cog >= 135 && cog <= 225)     return { text: '← Arriving',  cls: 'num-warn' };
+      return { text: '—', cls: '' };
+    }
+
     return { text: '—', cls: '' };
+  }
+
+  /* ── History baseline (computed from embedded history array) ── */
+  function computeBaseline(history) {
+    if (!history || history.length < 5) return null;
+    const vals = history.map(h => h.tankers || 0);
+    const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+    const sigma = Math.sqrt(vals.reduce((a, v) => a + (v - mean) ** 2, 0) / vals.length);
+    return {
+      mean:            Math.round(mean * 10) / 10,
+      sigma:           Math.round(sigma * 10) / 10,
+      high_threshold:  mean + sigma,
+      low_threshold:   Math.max(0, mean - sigma),
+    };
+  }
+
+  /* ── Daily aggregate helper — collapses intraday snapshots to one avg per calendar day ── */
+  function dailyAggregate(history) {
+    const byDay = {};
+    for (const h of history) {
+      const day = h.ts.slice(0, 10);
+      if (!byDay[day]) byDay[day] = { ts: h.ts, tankers: [], total: [] };
+      byDay[day].tankers.push(h.tankers || 0);
+      byDay[day].total.push(h.total || 0);
+    }
+    return Object.keys(byDay).sort().map(day => ({
+      ts:      byDay[day].ts,
+      tankers: Math.round(byDay[day].tankers.reduce((a,b)=>a+b,0) / byDay[day].tankers.length),
+      total:   Math.round(byDay[day].total.reduce((a,b)=>a+b,0)   / byDay[day].total.length),
+    }));
+  }
+
+  /* ── History chart: tankers + total over time with ±1σ band ── */
+  function geoHistoryChart(history) {
+    if (!history || history.length < 2) {
+      return `<div style="padding:8px 10px;font-size:11px;color:var(--fg-faint);font-style:italic">
+        Building baseline — needs a few days of cron snapshots (${(history||[]).length} so far, need ≥5).</div>`;
+    }
+    const baseline  = computeBaseline(history);   // uses all raw snapshots for accurate μ/σ
+    const snapshots = history.length;             // raw count for label
+    const chartData = history.length > 14 ? dailyAggregate(history) : history;
+    const n = chartData.length;
+    const daySpan = history.length >= 2
+      ? Math.max(1, Math.round((new Date(history[history.length-1].ts) - new Date(history[0].ts)) / 86400000) + 1)
+      : history.length;
+    const W = 520, H = 90, padL = 30, padR = 8, padT = 6, padB = 20;
+
+    const tankers = chartData.map(h => h.tankers || 0);
+    const totals  = chartData.map(h => h.total   || 0);
+    let yMin = Math.min(...tankers, ...(baseline ? [baseline.low_threshold] : []));
+    let yMax = Math.max(...totals,  ...(baseline ? [baseline.high_threshold]: []));
+    const yPad = Math.max(1, (yMax - yMin) * 0.12);
+    yMin = Math.max(0, yMin - yPad); yMax += yPad;
+
+    const sx = i => padL + (i / Math.max(1, n - 1)) * (W - padL - padR);
+    const sy = v => padT + (1 - (v - yMin) / (yMax - yMin)) * (H - padT - padB);
+
+    // ±1σ band + mean line
+    let bandSvg = '';
+    if (baseline) {
+      const bY1 = sy(baseline.high_threshold).toFixed(1);
+      const bY2 = sy(baseline.low_threshold).toFixed(1);
+      const bH  = (sy(baseline.low_threshold) - sy(baseline.high_threshold)).toFixed(1);
+      const bW  = W - padL - padR;
+      bandSvg = `<rect x="${padL}" y="${bY1}" width="${bW}" height="${bH}" fill="rgba(245,158,11,0.10)"/>`;
+      const mY  = sy(baseline.mean).toFixed(1);
+      bandSvg += `<line x1="${padL}" y1="${mY}" x2="${W - padR}" y2="${mY}" stroke="rgba(245,158,11,0.35)" stroke-width="1" stroke-dasharray="3 3"/>`;
+    }
+
+    // Smooth paths
+    const sp = OC_CHART.smoothPath;
+    const totalPath  = sp(totals.map((v,i)  => ({ x: sx(i), y: sy(v) })));
+    const tankerPath = sp(tankers.map((v,i) => ({ x: sx(i), y: sy(v) })));
+
+    // X labels — show up to 6 date ticks
+    const step = Math.max(1, Math.floor(n / 5));
+    let xLabels = '';
+    const _fmtTs = ts => { const d = new Date(ts); return `${d.getMonth()+1}/${d.getDate()}`; };
+    for (let i = 0; i < n; i += step) {
+      xLabels += `<text x="${sx(i).toFixed(1)}" y="${H - 4}" text-anchor="middle" class="oc-xlabel">${_fmtTs(chartData[i].ts)}</text>`;
+    }
+    if ((n - 1) % step !== 0) {
+      xLabels += `<text x="${sx(n-1).toFixed(1)}" y="${H - 4}" text-anchor="middle" class="oc-xlabel">${_fmtTs(chartData[n-1].ts)}</text>`;
+    }
+
+    // Y labels (3 ticks)
+    const yTicks = [Math.round(yMax - yPad), Math.round((yMin + yMax) / 2), Math.round(yMin + yPad)];
+    const yLabels = yTicks.map(v =>
+      `<text x="${padL - 3}" y="${(sy(v)+3).toFixed(1)}" text-anchor="end" class="oc-xlabel">${v}</text>`
+    ).join('');
+
+    // Grid lines
+    const grid = yTicks.map(v =>
+      `<line x1="${padL}" y1="${sy(v).toFixed(1)}" x2="${W-padR}" y2="${sy(v).toFixed(1)}" class="oc-grid"/>`
+    ).join('');
+
+    // Status badge
+    const cur = tankers[n - 1];
+    let statusHtml = '';
+    if (baseline) {
+      const [lbl, cls] = cur > baseline.high_threshold ? ['ABOVE NORMAL','num-dn']
+                       : cur < baseline.low_threshold  ? ['BELOW NORMAL','num-warn']
+                       : ['NORMAL','num-up'];
+      statusHtml = `<span class="mono ${cls}" style="font-size:9px;margin-left:6px">${lbl}</span>`;
+    }
+
+    return `
+      <div style="margin:6px 0 10px 0;padding:8px 10px;background:var(--panel);border-radius:4px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;flex-wrap:wrap">
+          <span style="font-size:10px;color:var(--fg-dim);letter-spacing:.05em">TANKERS · ${daySpan}d HISTORY (${n} daily avg · ${snapshots} snapshots)</span>
+          ${baseline ? `<span class="mono" style="font-size:9px;color:var(--fg-faint)">μ=${baseline.mean} ±${baseline.sigma}</span>${statusHtml}` : ''}
+          <span style="margin-left:auto;display:flex;align-items:center;gap:5px">
+            <span style="width:10px;height:2px;background:rgba(148,163,184,0.45);display:inline-block;vertical-align:middle"></span>
+            <span style="font-size:9px;color:var(--fg-faint)">total</span>
+            <span style="width:10px;height:2px;background:#f59e0b;display:inline-block;vertical-align:middle"></span>
+            <span style="font-size:9px;color:var(--fg-faint)">tankers</span>
+            ${baseline ? `<span style="width:10px;height:8px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.3);display:inline-block;vertical-align:middle"></span><span style="font-size:9px;color:var(--fg-faint)">±1σ</span>` : ''}
+          </span>
+        </div>
+        <svg class="oc-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;max-width:${W}px;height:${H}px">
+          ${grid}${bandSvg}
+          <path d="${totalPath}"  style="fill:none;stroke:rgba(148,163,184,0.4);stroke-width:1;stroke-dasharray:3 2"/>
+          <path d="${tankerPath}" style="fill:none;stroke:#f59e0b;stroke-width:1.6"/>
+          ${xLabels}${yLabels}
+        </svg>
+      </div>`;
   }
 
   /*
@@ -207,9 +400,11 @@
     _vesselByMmsi = {};
     _flowFilter   = 'all';
 
+    const rCenter = GEO_REGIONS[_currentRegion]?.center || [26.5, 56.0];
+    const rZoom   = GEO_REGIONS[_currentRegion]?.zoom   || 6;
     _map = L.map('geo-map-canvas', {
-      center: [26.5, 56.0],
-      zoom: 6,
+      center: rCenter,
+      zoom: rZoom,
       zoomControl: true,
       attributionControl: true,
     });
@@ -227,8 +422,8 @@
 
     function vesselFlowCode(v) {
       const f = transitFlow(v.lon, v.cog);
-      if (f.text === '← Entering') return 'entering';
-      if (f.text === '→ Leaving')  return 'leaving';
+      if (f.text.startsWith('←')) return 'entering';
+      if (f.text.startsWith('→')) return 'leaving';
       return 'none';
     }
 
@@ -246,18 +441,20 @@
       _vesselByMmsi[v.mmsi] = v;
       const color = vesselColor(v.ship_type);
       const icon  = makeVesselIcon(color, v.cog);
-      const flow  = vesselFlowCode(v);
-      const flowBadge = flow === 'entering' ? '<span style="color:#fb923c"> ← Entering</span>'
-                      : flow === 'leaving'  ? '<span style="color:#4ade80"> → Leaving</span>'
-                      : '';
+      const ft    = transitFlow(v.lon, v.cog);
+      const flow  = ft.text.startsWith('←') ? 'entering' : ft.text.startsWith('→') ? 'leaving' : 'none';
+      const flowBadge = ft.text !== '—' && ft.text !== ''
+        ? `<span style="color:${flow === 'entering' ? '#fb923c' : '#4ade80'}"> ${ft.text}</span>`
+        : '';
       const flg   = vesselFlag(v.mmsi);
+      const lonStr = v.lon < 0 ? `${(-v.lon).toFixed(4)}°W` : `${v.lon.toFixed(4)}°E`;
       const popup =
         `<b style="color:${color}">${v.name || '—'}</b>${flowBadge}<br>` +
         `<span style="color:#94a3b8">${v.ship_type}</span>` +
         (flg ? ` · <span style="color:#94a3b8">${flg.name}</span>` : '') + `<br>` +
         (v.cog != null ? `COG: ${compassStr(v.cog)}<br>` : '') +
         `MMSI: <span style="color:#64748b">${v.mmsi}</span><br>` +
-        `${v.lat.toFixed(4)}°N &nbsp;${v.lon.toFixed(4)}°E`;
+        `${v.lat.toFixed(4)}°N &nbsp;${lonStr}`;
       const type   = v.ship_type || 'Unknown';
       const marker = L.marker([v.lat, v.lon], { icon }).bindPopup(popup);
       marker.on('click', () => {
@@ -331,7 +528,7 @@
            background:var(--panel);border-bottom:1px solid var(--panel-alt)">
         <span style="font-size:10px;letter-spacing:.08em;color:var(--fg-dim);font-weight:600;margin-right:4px">REGION</span>
         ${regionBtns}
-        <span style="margin-left:auto;font-size:9px;color:var(--fg-faint)">Non-default: on-demand fetch · 2h cache</span>
+        <span style="margin-left:auto;font-size:9px;color:var(--fg-faint)">Americas: 4× daily · Middle East: on-demand · 2h cache</span>
       </div>
       <div id="geo-region-content"></div>`;
 
@@ -357,14 +554,21 @@
     if (_map) { try { _map.remove(); } catch (_) {} _map = null; }
     const rCfg = GEO_REGIONS[_currentRegion];
     const isGulf = _currentRegion === 'gulf';
+    const isCronTracked = !!rCfg.cronTracked;
 
     contentEl.innerHTML = `<div class="mod-loading">Loading ${rCfg.label} AIS data…</div>`;
     let d;
     try {
       if (isGulf) {
         d = await fetchJSON(`${BASE}/hormuz.json`);
+      } else if (isCronTracked) {
+        try {
+          d = await fetchJSON(`${BASE}${rCfg.dataUrl}`);
+        } catch (_) {
+          d = await fetchJSON(`${API}/api/geo/region/${_currentRegion}`);
+        }
       } else {
-        d = await fetchJSON(`https://stocks.clawmo.tech/api/geo/region/${_currentRegion}`);
+        d = await fetchJSON(`${API}/api/geo/region/${_currentRegion}`);
       }
     } catch (e) {
       contentEl.innerHTML = `<div class="mod-error">Failed to load ${rCfg.label} AIS data.<br><small>${e.message}</small></div>`;
@@ -378,6 +582,14 @@
     const history = d.history || [];
     const withCog = vessels.filter(v => v.cog != null).length;
 
+    const baseline = isCronTracked ? computeBaseline(history) : null;
+    const baselineStatus = (isCronTracked && baseline) ? (() => {
+      const cur = d.summary?.tankers || 0;
+      if (cur > baseline.high_threshold) return { label: 'ABOVE NORMAL', cls: 'num-dn' };
+      if (cur < baseline.low_threshold)  return { label: 'BELOW NORMAL', cls: 'num-warn' };
+      return { label: 'NORMAL', cls: 'num-up' };
+    })() : null;
+
     /* Format generated_at in US Eastern Time */
     const asOfET = d.generated_at
       ? new Intl.DateTimeFormat('en-US', {
@@ -388,11 +600,17 @@
       : (d.as_of || '');
 
     /* ── State hero ── */
-    const heroCls = isGulf
-      ? (reg.cls === 'num-up' ? 'brd-hero-healthy' : reg.cls === 'num-warn' ? 'brd-hero-caution' : 'brd-hero-risk')
+    // All cron-tracked regions (incl. Gulf) use μ/σ baseline once enough history exists.
+    // Fall back to hardcoded AIS-ping thresholds only while baseline is still building.
+    const activeStatus = (isCronTracked && baselineStatus) ? baselineStatus
+      : (isGulf ? { label: reg.label, cls: reg.cls } : null);
+    const heroCls = activeStatus
+      ? (activeStatus.cls === 'num-dn' ? 'brd-hero-risk' : activeStatus.cls === 'num-warn' ? 'brd-hero-caution' : 'brd-hero-healthy')
       : 'brd-hero-healthy';
-    const heroTag   = isGulf ? 'PERSIAN GULF + HORMUZ + GULF OF OMAN · TRAFFIC REGIME' : `${rCfg.desc.toUpperCase()} · VESSEL ACTIVITY`;
-    const heroScore = isGulf ? `<span class="brd-state-score mono ${reg.cls}">${reg.label}</span>` : '';
+    const heroTag   = isGulf ? 'PERSIAN GULF + HORMUZ + GULF OF OMAN · TANKER ACTIVITY' : `${rCfg.desc.toUpperCase()} · VESSEL ACTIVITY`;
+    const heroScore = activeStatus
+      ? `<span class="brd-state-score mono ${activeStatus.cls}">${activeStatus.label}</span>`
+      : '';
     const hero = `
       <div class="brd-state-hero ${heroCls}">
         <div class="brd-state-headline">
@@ -415,8 +633,8 @@
     vessels.forEach(v => {
       typeCounts[v.ship_type] = (typeCounts[v.ship_type] || 0) + 1;
       const f = transitFlow(v.lon, v.cog);
-      if (f.text === '← Entering') enteringCount++;
-      else if (f.text === '→ Leaving') leavingCount++;
+      if (f.text.startsWith('←')) enteringCount++;
+      else if (f.text.startsWith('→')) leavingCount++;
     });
 
     /* Buttons for types that have at least one vessel */
@@ -439,16 +657,16 @@
         </button>`)
       .join('');
 
-    const transitFilterHtml = isGulf ? `
+    const transitFilterHtml = (isGulf || isCronTracked) ? `
         <div class="geo-map-legend geo-map-legend-flow">
           <span class="geo-legend-label">TRANSIT FILTER</span>
           <button class="geo-flow-btn" data-flow="entering" style="--geo-btn-color:#fb923c">
             <span class="geo-legend-dot" style="background:#fb923c"></span>
-            ← Entering <span style="color:var(--fg-faint)">(${enteringCount})</span>
+            ${rCfg.flowEntering || '← Entering'} <span style="color:var(--fg-faint)">(${enteringCount})</span>
           </button>
           <button class="geo-flow-btn" data-flow="leaving" style="--geo-btn-color:#4ade80">
             <span class="geo-legend-dot" style="background:#4ade80"></span>
-            → Leaving <span style="color:var(--fg-faint)">(${leavingCount})</span>
+            ${rCfg.flowLeaving || '→ Leaving'} <span style="color:var(--fg-faint)">(${leavingCount})</span>
           </button>
           <span style="margin-left:auto;font-size:9px;color:var(--fg-faint)">click to isolate · click again to reset</span>
         </div>` : '';
@@ -473,16 +691,8 @@
       </div>
     `;
 
-    /* ── 7-day tanker sparkline (Gulf only — history not stored for on-demand regions) ── */
-    const sparkData = history.map(h => h.tankers || 0);
-    const spark = OC_CHART.sparkline(sparkData, { w: 120, h: 22, color: 'var(--num-warn)' });
-    const sparkBlock = (isGulf && sparkData.length >= 2) ? `
-      <div style="display:flex;align-items:center;gap:10px;margin:6px 0 10px 0;padding:6px 10px;background:var(--bg-2);border-radius:4px;width:fit-content">
-        <span style="font-size:10px;color:var(--fg-dim);letter-spacing:.05em">TANKERS · 7D TREND</span>
-        ${spark}
-        <span class="mono" style="font-size:10px;color:var(--fg-dim)">${sparkData.length} snapshots</span>
-      </div>
-    ` : '';
+    /* ── 7-day history chart for all cron-tracked regions ── */
+    const historyBlock = (isGulf || isCronTracked) ? geoHistoryChart(history) : '';
 
     /* ── Type breakdown table ── */
     const typeRows = (d.type_breakdown || []).map(t => `
@@ -581,13 +791,14 @@
     /* ── Context panel ── */
     const sw = d.bbox?.sw || {};
     const ne = d.bbox?.ne || {};
-    const bboxStr = (sw.lat != null) ? `[${sw.lat}°N ${sw.lon}°E – ${ne.lat}°N ${ne.lon}°E]` : '';
+    const _lonStr = v => v < 0 ? `${(-v).toFixed(1)}°W` : `${(+v).toFixed(1)}°E`;
+    const bboxStr = (sw.lat != null) ? `[${sw.lat}°N ${_lonStr(sw.lon)} – ${ne.lat}°N ${_lonStr(ne.lon)}]` : '';
     const context = `
       <div class="mod-panel">
         <div class="mod-panel-title">COVERAGE & MARKET CONTEXT · ${rCfg.label.toUpperCase()}</div>
         <div style="padding:10px 12px;font-size:12px;line-height:1.7;color:var(--fg-dim)">
           ${rCfg.contextHtml}
-          <p style="margin:0"><b style="color:var(--fg)">Data source:</b> VesselFinder public AIS (mp2 + sfl${isGulf ? ', 3 tiles' : ''}) · ${isGulf ? 'updated 4× daily · ' : 'on-demand fetch · 2h cache · '}${bboxStr}.
+          <p style="margin:0"><b style="color:var(--fg)">Data source:</b> VesselFinder public AIS (mp2 + sfl) · ${(isGulf || isCronTracked) ? 'updated 4× daily · ' : 'on-demand fetch · 2h cache · '}${bboxStr}.
           <a href="${rCfg.marinetraffic}" target="_blank" rel="noopener" style="color:var(--accent);margin-left:6px">MarineTraffic map ↗</a></p>
           <p style="margin:4px 0 0 0;font-size:10px;opacity:0.6">AIS data from <a href="https://vesselfinder.com" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">VesselFinder</a> — for research and educational use only, subject to <a href="https://www.vesselfinder.com/terms" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">their terms of service</a>. Not for commercial redistribution.</p>
         </div>
@@ -596,7 +807,7 @@
 
     contentEl.innerHTML = hero + mapPanel
       + '<div id="geo-detail-panel" class="geo-detail-panel" hidden></div>'
-      + sparkBlock + typeTable + vesselTable + context;
+      + historyBlock + typeTable + vesselTable + context;
     initGeoMap(vessels, d.bbox);
     initVesselSection(vessels);
   }
@@ -617,8 +828,8 @@
     /* Flow code for a vessel — used in filtering */
     function flowCode(v) {
       const f = transitFlow(v.lon, v.cog);
-      if (f.text === '← Entering') return 'entering';
-      if (f.text === '→ Leaving')  return 'leaving';
+      if (f.text.startsWith('←')) return 'entering';
+      if (f.text.startsWith('→')) return 'leaving';
       return 'none';
     }
 
@@ -642,7 +853,7 @@
     function renderRow(v) {
       const cls    = shipTypeCls(v.ship_type || 'Unknown');
       const lat    = v.lat != null ? v.lat.toFixed(3) + '°N' : '—';
-      const lon    = v.lon != null ? v.lon.toFixed(3) + '°E' : '—';
+      const lon    = v.lon != null ? (v.lon < 0 ? (-v.lon).toFixed(3) + '°W' : v.lon.toFixed(3) + '°E') : '—';
       const cogTxt = v.cog != null ? compassStr(v.cog) : '—';
       const flow   = transitFlow(v.lon, v.cog);
       const flg    = vesselFlag(v.mmsi);

@@ -1129,8 +1129,8 @@
     body.innerHTML = `<div class="mod-loading">Loading deep value · ${idx}…</div>`;
     try {
       const [d, alpha] = await Promise.all([
-        fetchJSON(`https://deep-value.clawmo.tech/data/${idx}_data.json`),
-        fetchJSON('https://deep-value.clawmo.tech/data/alpha/alpha-history.json').catch(() => null),
+        fetchJSON(`https://stocks.clawmo.tech/api/deep-value-data/${idx}_data.json`),
+        fetchJSON('https://stocks.clawmo.tech/api/deep-value-data/alpha/alpha-history.json').catch(() => null),
       ]);
       const pf = d.portfolio || {};
       const pl = d.pipeline || {};

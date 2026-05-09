@@ -322,6 +322,9 @@
   // trade row (Setups, Open Trades, Closed Trades, Equity Curve).
   const SIZER_KEY = 'oc_sig_sizer';
   const REGIME_MULT = { BULL: 1.0, CAUTION: 0.5, BEAR: 0.3 };
+  // Fix B (2026-05-08): grade-tiered risk multipliers — A=1.25× · B=1.0× · C=0.75× · D/F=0.5×.
+  // Applied to non-Kelly methods only (Kelly already weights by win-rate / payoff).
+  const GRADE_RISK_MULT = { A: 1.25, B: 1.0, C: 0.75, D: 0.5, F: 0.5 };
   function getSizer() {
     let s;
     try { s = JSON.parse(localStorage.getItem(SIZER_KEY)); } catch (e) {}
@@ -330,6 +333,7 @@
       account: typeof s.account === 'number' && s.account > 0 ? s.account : 100000,
       riskPct: typeof s.riskPct === 'number' && s.riskPct > 0 ? s.riskPct : 2,
       method:  s.method === 'half_kelly' || s.method === 'regime_scaled' ? s.method : 'fixed_fractional',
+      gradeTier: s.gradeTier === false ? false : true,  // default ON
     };
   }
   function setSizer(patch) {
@@ -338,10 +342,13 @@
     try { localStorage.setItem(SIZER_KEY, JSON.stringify(next)); } catch (e) {}
     return next;
   }
-  // Compute position size for a single trade. Returns { shares, dollarRisk, positionValue, dollarPnL }.
+  // Match stocks.clawmo.tech/signals.html buildDollarCurve: 0.1% per realized trade.
+  const EXEC_COST_PCT = 0.001;
+  // Compute position size for a single trade. Returns { shares, dollarRisk, positionValue, dollarPnL, gradeMult }.
   // - entry: entry price · stop: stop loss · regime: BULL/CAUTION/BEAR (for regime_scaled)
   // - patternStats: { win_rate, avg_win, avg_loss } (for half_kelly) — from playbook/adaptive_grades
-  // - returnPct: closed-trade % return (for dollarPnL)
+  // - grade: pattern grade A/B/C/D (for grade-tiered risk) — ignored in half_kelly
+  // - returnPct: closed-trade % return (for dollarPnL — exec cost subtracted when present)
   function computeSize(opts) {
     const sizer = opts.sizer || getSizer();
     const account = sizer.account;
@@ -350,8 +357,13 @@
     const stop  = Number(opts.stop  || 0);
     const stopDist = Math.abs(entry - stop);
     if (entry <= 0 || stopDist <= 0) {
-      return { shares: 0, dollarRisk: 0, positionValue: 0, dollarPnL: null, methodLbl: sizer.method };
+      return { shares: 0, dollarRisk: 0, positionValue: 0, dollarPnL: null, methodLbl: sizer.method, gradeMult: 1.0 };
     }
+    // Grade tier multiplier — applied to fixed_fractional and regime_scaled only.
+    // Half-Kelly is grade-implicit via win_rate / avg_win / avg_loss.
+    const gradeMult = (sizer.gradeTier !== false && opts.grade && sizer.method !== 'half_kelly')
+      ? (GRADE_RISK_MULT[opts.grade] || 0.75)
+      : 1.0;
     let dollarRisk;
     if (sizer.method === 'half_kelly' && opts.patternStats) {
       const ps = opts.patternStats;
@@ -373,24 +385,24 @@
         const dollarRiskKelly = shares * stopDist;
         const positionValueKelly = shares * entry;
         const dollarPnLKelly = (opts.returnPct != null && shares > 0)
-          ? (shares * entry * opts.returnPct / 100)
+          ? (shares * entry * opts.returnPct / 100) - (positionValueKelly * EXEC_COST_PCT)
           : null;
-        return { shares, dollarRisk: dollarRiskKelly, positionValue: positionValueKelly, dollarPnL: dollarPnLKelly, methodLbl: sizer.method };
+        return { shares, dollarRisk: dollarRiskKelly, positionValue: positionValueKelly, dollarPnL: dollarPnLKelly, methodLbl: sizer.method, gradeMult: 1.0 };
       }
       dollarRisk = account * riskFrac;  // fallback if pattern stats unavailable
     } else if (sizer.method === 'regime_scaled') {
       const mult = REGIME_MULT[opts.regime] || 1.0;
-      dollarRisk = account * riskFrac * mult;
+      dollarRisk = account * riskFrac * mult * gradeMult;
     } else {
       // fixed_fractional (default)
-      dollarRisk = account * riskFrac;
+      dollarRisk = account * riskFrac * gradeMult;
     }
     const shares = Math.floor(dollarRisk / stopDist);
     const positionValue = shares * entry;
     const dollarPnL = (opts.returnPct != null && shares > 0)
-      ? (shares * entry * opts.returnPct / 100)
+      ? (shares * entry * opts.returnPct / 100) - (positionValue * EXEC_COST_PCT)
       : null;
-    return { shares, dollarRisk, positionValue, dollarPnL, methodLbl: sizer.method };
+    return { shares, dollarRisk, positionValue, dollarPnL, methodLbl: sizer.method, gradeMult };
   }
   function fmtUsd(v, compact) {
     if (v == null || !isFinite(v)) return '—';
@@ -450,6 +462,7 @@
       const qualityGates     = summary?.quality_gates     || {};
       const equityCurve = scorecard?.equity_curve || [];
       const openTrades = scorecard?.open_trades || [];
+      const paperTracked = scorecard?.paper_tracked_signals || [];
       const closedTrades = scorecard?.closed_trades || [];
       const patternVsBacktest = scorecard?.pattern_vs_backtest || [];
 
@@ -607,6 +620,7 @@
         const ps = computeSize({
           sizer, entry: s.entry_price, stop: s.stop_loss,
           regime: regName, patternStats: patternStatsFor(s.signal_type),
+          grade: grade,
         });
         return `
           <tr data-row-idx="${idx}" class="sig-row">
@@ -1090,6 +1104,7 @@
             const ps = computeSize({
               sizer, entry: t.entry_price, stop: t.stop_loss,
               regime: regName, patternStats: patternStatsFor(t.signal_type), returnPct: t.return_pct,
+              grade: gradeFor(t.signal_type, t.direction)?.grade,
             });
             const dollarPnL = ps.dollarPnL != null ? ps.dollarPnL : 0;
             running += dollarPnL;
@@ -1285,15 +1300,81 @@
         hit.addEventListener('mousemove', onMove);
         hit.addEventListener('mouseleave', onLeave);
       }
-      const openRows = openTrades.slice(0, 50).map(t => {
+      // Pagination for Open / Closed trade tables. Window-scoped so state
+      // survives the full re-render triggered by page-button clicks.
+      const TRADES_PER_PAGE = 25;
+      const openTotalPages = Math.max(1, Math.ceil(openTrades.length / TRADES_PER_PAGE));
+      const closedTotalPages = Math.max(1, Math.ceil(closedTrades.length / TRADES_PER_PAGE));
+      let openPage = Math.min(Math.max(0, window._sigOpenPage | 0), openTotalPages - 1);
+      let closedPage = Math.min(Math.max(0, window._sigClosedPage | 0), closedTotalPages - 1);
+      window._sigOpenPage = openPage;
+      window._sigClosedPage = closedPage;
+      const openSliceStart = openPage * TRADES_PER_PAGE;
+      const closedSliceStart = closedPage * TRADES_PER_PAGE;
+      function pagerHTML(kind, page, totalPages, total) {
+        if (total === 0 || totalPages <= 1) return '';
+        const from = page * TRADES_PER_PAGE + 1;
+        const to = Math.min(total, (page + 1) * TRADES_PER_PAGE);
+        const prevDisabled = page === 0 ? ' disabled' : '';
+        const nextDisabled = page >= totalPages - 1 ? ' disabled' : '';
+        return `<div class="sig-pager">
+          <button class="sig-pager-btn" data-pager="${kind}" data-pager-act="prev"${prevDisabled} type="button">&laquo; Prev</button>
+          <span class="sig-pager-info">${from}–${to} of ${total} &middot; page ${page + 1}/${totalPages}</span>
+          <button class="sig-pager-btn" data-pager="${kind}" data-pager-act="next"${nextDisabled} type="button">Next &raquo;</button>
+        </div>`;
+      }
+      // Early-exit badge — shows when the system is projected to SELL the trade.
+      // Trades close via update-trade-status.py at 4:40 PM ET (cron 3c590b9e) once
+      // price crosses 60% of target. ETA = linear extrapolation of today's pace.
+      const _MS_DAY = 86400000;
+      const _monShort = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      const _today0 = (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
+      const _tmrw0 = new Date(_today0.getTime() + _MS_DAY);
+      const _fmtShort = (dt) => `${_monShort[dt.getMonth()]} ${dt.getDate()}`;
+      const renderEEBadge = (t) => {
+        const status = t.early_exit_status || 'standard';
+        if (status === 'exit_now') {
+          return `<span title="Already meets the early-exit rule (≥60% of target reached AND ≤40% of target_days elapsed). Tonight's 4:40 PM ET update-trade-status run will close this at today's closing price." style="background:var(--up,#10b981);color:#000;font-size:9px;font-weight:700;padding:1px 4px;border-radius:2px">SELL TONIGHT</span>`;
+        }
+        if (status === 'on_pace') {
+          const etaStr = t.early_exit_eta || '';
+          let label, tip;
+          if (etaStr) {
+            const etaDt = new Date(etaStr + 'T00:00:00');
+            if (etaDt.getTime() <= _today0.getTime()) {
+              label = 'SELL TONIGHT*';
+              tip = 'Projected to cross 60%-target today. IF today\'s pace holds, the 4:40 PM ET run closes this at today\'s close. Asterisk = depends on pace continuing. Linear extrapolation, not a forecast.';
+            } else if (etaDt.getTime() === _tmrw0.getTime()) {
+              label = 'SELL TMRW';
+              tip = 'Projected close tomorrow at 4:40 PM ET if today\'s pace continues. Linear extrapolation; pullbacks/stop hits not modelled.';
+            } else {
+              label = 'SELL ~' + _fmtShort(etaDt);
+              tip = `Projected close on ${etaStr} at 4:40 PM ET if today's pace continues. Linear extrapolation, not a forecast — actual close depends on price holding the trajectory.`;
+            }
+          } else {
+            label = 'ON PACE';
+            tip = 'On pace to hit early exit before the 40%-time deadline.';
+          }
+          return `<span title="${tip.replace(/"/g,'&quot;')}" style="background:rgba(251,191,36,0.18);color:#fbbf24;font-size:9px;font-weight:700;padding:1px 4px;border-radius:2px;border:1px solid rgba(251,191,36,0.6)">${label}</span>`;
+        }
+        if (status === 'window_closed') {
+          return `<span title="Past the 40%-time deadline. Early-exit can no longer fire — this trade will close on TP, SL, trailing stop, or expiry." style="background:rgba(148,163,184,0.12);color:var(--muted);font-size:9px;font-weight:700;padding:1px 4px;border-radius:2px;border:1px solid var(--border)">WIN CLOSED</span>`;
+        }
+        return `<span style="color:var(--muted);font-size:9px" title="Active. Window still open but not on pace — needs more upward movement to project a sell date.">—</span>`;
+      };
+      const openRows = openTrades.slice(openSliceStart, openSliceStart + TRADES_PER_PAGE).map(t => {
         const dirC = t.direction === 'long' ? 'num-up' : 'num-dn';
         const ps = computeSize({
           sizer, entry: t.entry_price, stop: t.stop_loss,
           regime: regName, patternStats: patternStatsFor(t.signal_type),
+          grade: gradeFor(t.signal_type, t.direction)?.grade,
         });
         const unrlPct = t.unrealized_pnl;
         const unrlDollar = ps.shares > 0 ? (ps.shares * t.entry_price * (unrlPct / 100)) : null;
         const pnlCls = unrlPct == null ? '' : unrlPct > 0 ? 'num-up' : 'num-dn';
+        const pctTgt = t.pct_to_target;
+        const pctTgtCls = pctTgt == null ? '' : pctTgt >= 60 ? 'num-up' : pctTgt < 0 ? 'num-dn' : '';
+        const dwc = t.days_to_window_close;
         return `<tr>
           <td class="tk clickable" data-tk="${escSig(t.ticker)}">${escSig(t.ticker)}</td>
           <td class="pat">${escSig(t.signal_type)}</td>
@@ -1305,16 +1386,37 @@
           <td class="mono num-up">${fmt.money(t.take_profit)}</td>
           <td class="mono ${pnlCls}">${unrlPct != null ? (unrlPct >= 0 ? '+' : '') + unrlPct.toFixed(2) + '%' : '—'}</td>
           <td class="mono ${pnlCls}">${unrlDollar != null ? (unrlDollar >= 0 ? '+' : '') + fmtUsd(unrlDollar, true) : '—'}</td>
+          <td>${renderEEBadge(t)}</td>
+          <td class="mono ${pctTgtCls}">${pctTgt != null ? pctTgt.toFixed(0) + '%' : '—'}</td>
+          <td class="mono">${dwc != null ? (dwc >= 0 ? '+' + dwc : dwc) + 'd' : '—'}</td>
           <td class="mono">${ps.shares > 0 ? ps.shares : '—'}</td>
           <td class="mono">${ps.positionValue > 0 ? fmtUsd(ps.positionValue, true) : '—'}</td>
           <td class="mono num-dn">${ps.dollarRisk > 0 ? '-' + fmtUsd(ps.dollarRisk, true) : '—'}</td>
         </tr>`;
       }).join('');
-      const closedRows = closedTrades.map(t => {
+      const paperRows = paperTracked.map(t => {
+        const dirC = t.direction === 'long' ? 'num-up' : 'num-dn';
+        const unrlPct = t.unrealized_pnl;
+        const pnlCls = unrlPct == null ? '' : unrlPct > 0 ? 'num-up' : 'num-dn';
+        return `<tr>
+          <td class="tk clickable" data-tk="${escSig(t.ticker)}">${escSig(t.ticker)}</td>
+          <td class="pat">${escSig(t.signal_type)}</td>
+          <td class="${dirC}">${t.direction === 'long' ? '▲' : '▼'}</td>
+          <td class="mono">${escSig(t.signal_date || '—')}</td>
+          <td class="mono">${fmt.money(t.entry_price)}</td>
+          <td class="mono">${fmt.money(t.current_price)}</td>
+          <td class="mono num-dn">${fmt.money(t.stop_loss)}</td>
+          <td class="mono num-up">${fmt.money(t.take_profit)}</td>
+          <td class="mono ${pnlCls}">${unrlPct != null ? (unrlPct >= 0 ? '+' : '') + unrlPct.toFixed(2) + '%' : '—'}</td>
+          <td class="mono">${t.target_days != null ? t.target_days + 'd' : '—'}</td>
+        </tr>`;
+      }).join('');
+      const closedRows = closedTrades.slice(closedSliceStart, closedSliceStart + TRADES_PER_PAGE).map(t => {
         const dirC = t.direction === 'long' ? 'num-up' : 'num-dn';
         const ps = computeSize({
           sizer, entry: t.entry_price, stop: t.stop_loss,
           regime: regName, patternStats: patternStatsFor(t.signal_type), returnPct: t.return_pct,
+          grade: gradeFor(t.signal_type, t.direction)?.grade,
         });
         const pct = t.return_pct;
         const pnlCls = pct == null ? '' : pct > 0 ? 'num-up' : 'num-dn';
@@ -1348,25 +1450,44 @@
           <div class="chart-legend"><span class="chart-note" style="display:block">${
             _eqMode === 'alpha'
               ? `<b>Strategy α mode</b> — sums each closed trade&rsquo;s return % assuming equal allocation per signal, ignoring position sizing. Shows the raw edge of the strategy, not what your account actually earned. Switch to <b>Portfolio $</b> to see real account impact.`
-              : `<b>Portfolio $ mode</b> — sizes each trade using your position sizer (account: <b>${fmtUsd(sizer.account)}</b> · method: <b>${escSig(sizer.method.replace(/_/g, ' '))}</b> · risk: <b>${sizer.riskPct}%/trade</b>) then compounds chronologically through all closed trades. Significantly smaller than Strategy α because Half Kelly allocates only ~2–3% per trade.`
+              : `<b>Portfolio $ mode</b> — sizes each trade using your position sizer (account: <b>${fmtUsd(sizer.account)}</b> · method: <b>${escSig(sizer.method.replace(/_/g, ' '))}</b> · risk: <b>${sizer.riskPct}%/trade</b>${sizer.gradeTier && sizer.method !== 'half_kelly' ? ' · <b>grade tier on</b> (A 1.25× / B 1.0× / C 0.75× / D 0.5×)' : ''}) then compounds chronologically through all closed trades. Significantly smaller than Strategy α because Half Kelly allocates only ~2–3% per trade.`
           }</span></div>
         </div>
         <div class="mod-panel">
-          <div class="mod-panel-title">OPEN TRADES · ${openTrades.length} active${openTrades.length > 50 ? ' (showing first 50)' : ''}</div>
+          <div class="mod-panel-title">OPEN TRADES · ${openTrades.length} active${openTotalPages > 1 ? ` · page ${openPage + 1}/${openTotalPages}` : ''}</div>
           <div class="tbl-wrap">
             <table class="tbl-dense">
               <thead><tr>
                 <th>TICKER</th><th>PATTERN</th><th>DIR</th><th>SIGNAL</th>
                 <th class="num">ENTRY</th><th class="num">LAST</th><th class="num">STOP</th><th class="num">TGT</th>
                 <th class="num">UNRL %</th><th class="num">UNRL $</th>
+                <th title="Projected SELL date for the early-exit rule. The system runs update-trade-status.py at 4:40 PM ET on weekdays — if a trade has hit ≥60% of target while ≤40% of target_days has elapsed, it closes at that day's close. SELL TONIGHT = already meets rule. SELL TMRW / SELL ~date = projected close date if today's price velocity continues (linear extrapolation, not a forecast — pullbacks not modelled). WIN CLOSED = past the 40%-time deadline, rule can't fire.">EARLY EXIT</th>
+                <th class="num" title="Progress toward TP — pct of (TP - entry) covered by current price. Different from 'To TP' which is the price gap.">% TGT</th>
+                <th class="num" title="Days the early-exit window stays open. Window closes at 40% × target_days from entry — past that, early-exit can no longer fire. Different from the projected SELL date, which is when (within the window) the rule is expected to actually trigger. Negative = window already past.">WINDOW LEFT</th>
                 <th class="num">SHARES</th><th class="num">POS $</th><th class="num">RISK $</th>
               </tr></thead>
-              <tbody>${openRows || '<tr><td colspan="13" class="empty">no open trades</td></tr>'}</tbody>
+              <tbody>${openRows || '<tr><td colspan="16" class="empty">no open trades</td></tr>'}</tbody>
+            </table>
+          </div>
+          ${pagerHTML('open', openPage, openTotalPages, openTrades.length)}
+        </div>
+        <div class="mod-panel">
+          <div class="mod-panel-title" title="Paper-tracked signals from quarantined / locked patterns. The system fires these as if they were real but does NOT allocate capital — pure paper-tracking so live PF can be measured and the pattern can be unlocked once it proves itself. Same TP/SL/early-exit/expire rules apply on paper.">
+            PAPER-TRACKED SIGNALS · ${paperTracked.length} active · <span style="color:var(--muted);font-size:10px;font-weight:400">no capital · feeds adaptive grades</span>
+          </div>
+          <div class="tbl-wrap">
+            <table class="tbl-dense">
+              <thead><tr>
+                <th>TICKER</th><th>PATTERN</th><th>DIR</th><th>SIGNAL</th>
+                <th class="num">ENTRY</th><th class="num">LAST</th><th class="num">STOP</th><th class="num">TGT</th>
+                <th class="num">UNRL %</th><th class="num">DAYS</th>
+              </tr></thead>
+              <tbody>${paperRows || '<tr><td colspan="10" class="empty">no paper-tracked signals — all patterns are unlocked</td></tr>'}</tbody>
             </table>
           </div>
         </div>
         <div class="mod-panel">
-          <div class="mod-panel-title">CLOSED TRADES · ${closedTrades.length} closed</div>
+          <div class="mod-panel-title">CLOSED TRADES · ${closedTrades.length} closed${closedTotalPages > 1 ? ` · page ${closedPage + 1}/${closedTotalPages}` : ''}</div>
           <div class="tbl-wrap">
             <table class="tbl-dense">
               <thead><tr>
@@ -1377,6 +1498,7 @@
               <tbody>${closedRows || '<tr><td colspan="10" class="empty">no closed trades yet</td></tr>'}</tbody>
             </table>
           </div>
+          ${pagerHTML('closed', closedPage, closedTotalPages, closedTrades.length)}
         </div>
       `;
 
@@ -1560,6 +1682,20 @@
           [data-mod-panel="sig"] .sig-eq-mode-btn:hover { color:var(--fg); border-color:#555; }
           [data-mod-panel="sig"] .sig-eq-mode-btn.active { background:var(--accent); color:#0d1117; border-color:var(--accent); }
 
+          [data-mod-panel="sig"] .sig-pager {
+            display:flex; align-items:center; justify-content:center; gap:10px;
+            padding:6px 8px; margin-top:4px;
+            border-top:1px solid var(--border);
+          }
+          [data-mod-panel="sig"] .sig-pager-btn {
+            background:#0d1117; color:var(--fg-dim); border:1px solid #30363d;
+            padding:3px 10px; font-size:10px; font-family:var(--font-mono);
+            cursor:pointer; border-radius:3px; letter-spacing:0.4px;
+          }
+          [data-mod-panel="sig"] .sig-pager-btn:hover:not(:disabled) { color:var(--fg); border-color:#555; }
+          [data-mod-panel="sig"] .sig-pager-btn:disabled { opacity:0.35; cursor:not-allowed; }
+          [data-mod-panel="sig"] .sig-pager-info { font-size:10px; color:var(--fg-dim); font-family:var(--font-mono); letter-spacing:0.3px; }
+
           [data-mod-panel="sig"] .sig-how-card {
             background:var(--bg-card); border:1px solid var(--border); border-radius:3px;
             padding:8px 10px; margin-bottom:6px;
@@ -1608,7 +1744,10 @@
                 <option value="regime_scaled"${sizer.method === 'regime_scaled' ? ' selected' : ''}>Regime-Scaled</option>
               </select>
             </label>
-            <span class="sig-sizer-help" title="Fixed Fractional: flat risk% per trade. Half Kelly: math-optimal sizing using each pattern's WR/avgWin/avgLoss, halved for safety, capped at risk%. Regime-Scaled: Fixed Fractional × regime multiplier (BULL 1.0× / CAUTION 0.5× / BEAR 0.3×). See How It Works tab for full methodology.">?</span>
+            <label title="Scale risk by pattern grade: A=1.25× · B=1.0× · C=0.75× · D=0.5×. Ignored in Half Kelly (already weights by win rate).">
+              <input type="checkbox" data-sizer-field="gradeTier"${sizer.gradeTier ? ' checked' : ''}> Grade tier
+            </label>
+            <span class="sig-sizer-help" title="Fixed Fractional: flat risk% per trade. Half Kelly: math-optimal sizing using each pattern's WR/avgWin/avgLoss, halved for safety, capped at risk%. Regime-Scaled: Fixed Fractional × regime multiplier (BULL 1.0× / CAUTION 0.5× / BEAR 0.3×). Grade tier (Fixed/Regime only): A=1.25× · B=1.0× · C=0.75× · D=0.5×. See How It Works tab for full methodology.">?</span>
             <span class="sig-sizer-applied">applied to all trade tables → see <b>SHARES / POS $ / RISK $</b> columns and Live Trades equity curve</span>
           </div>
           <div class="sig-tabs">${tabBtns}</div>
@@ -1661,6 +1800,18 @@
               render(body);
             });
           });
+          // Pagination — same full-render pattern as eq-mode toggle.
+          body.querySelectorAll('.sig-pager-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+              if (btn.disabled) return;
+              const kind = btn.dataset.pager;
+              const act  = btn.dataset.pagerAct;
+              const key  = kind === 'open' ? '_sigOpenPage' : '_sigClosedPage';
+              const cur  = window[key] | 0;
+              window[key] = act === 'next' ? cur + 1 : Math.max(0, cur - 1);
+              render(body);
+            });
+          });
         }
       }
 
@@ -1677,11 +1828,14 @@
       // both number-input typing (debounced) and select changes.
       let sizerDebounce = null;
       body.querySelectorAll('[data-sizer-field]').forEach(el => {
-        const evtName = el.tagName === 'SELECT' ? 'change' : 'input';
+        const isCheckbox = el.type === 'checkbox';
+        const evtName = el.tagName === 'SELECT' || isCheckbox ? 'change' : 'input';
         el.addEventListener(evtName, () => {
           const field = el.dataset.sizerField;
           let val;
-          if (field === 'account' || field === 'riskPct') {
+          if (isCheckbox) {
+            val = el.checked;
+          } else if (field === 'account' || field === 'riskPct') {
             val = parseFloat(el.value);
             if (!isFinite(val) || val <= 0) return;
           } else {

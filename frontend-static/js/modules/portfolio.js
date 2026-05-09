@@ -48,6 +48,7 @@
     deposit:  '<svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;flex-shrink:0"><line x1="5.5" y1="1" x2="5.5" y2="8"/><polyline points="3,5.5 5.5,8 8,5.5"/><line x1="2" y1="10.5" x2="9" y2="10.5"/></svg>',
     withdraw: '<svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;flex-shrink:0"><line x1="5.5" y1="8" x2="5.5" y2="1"/><polyline points="3,3.5 5.5,1 8,3.5"/><line x1="2" y1="10.5" x2="9" y2="10.5"/></svg>',
     dividend: '<svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" style="vertical-align:-2px;flex-shrink:0"><circle cx="5.5" cy="5.5" r="4.2"/><path d="M5.5 3.2v4.6"/><path d="M7.2 4.2c0-.6-1.7-.8-1.7 0s1.7.6 1.7 1.2-1.7.8-1.7 0"/></svg>',
+    reinvest: '<svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;flex-shrink:0"><path d="M2 5.5a3.5 3.5 0 0 1 6 -2.3"/><polyline points="6,1.4 8,3.2 6.2,4.8"/><path d="M9 5.5a3.5 3.5 0 0 1 -6 2.3"/><polyline points="5,9.6 3,7.8 4.8,6.2"/></svg>',
   };
 
   /* ── Formatters ──────────────────────────────────────────── */
@@ -136,7 +137,7 @@
       const qty    = parseFloat(ov.querySelector('#bQty').value);
       const price  = parseFloat(ov.querySelector('#bPx').value);
       if (!ticker || !(qty > 0) || !(price > 0)) { err.textContent = 'Ticker, qty, and price are required.'; return; }
-      await api('POST', '/api/portfolio/transactions', {
+      const resp = await api('POST', '/api/portfolio/transactions', {
         account_key: acctKey, type: 'BUY', ticker, qty, price,
         date: ov.querySelector('#bDt').value,
         fees: parseFloat(ov.querySelector('#bFee').value) || 0,
@@ -144,6 +145,7 @@
         note: ov.querySelector('#bNote').value.trim() || undefined,
       });
       close(); await reloadPositions();
+      if (resp && resp.recalc_queued && resp.recalc_queued.length) startPostTxnPoll();
     });
   }
 
@@ -172,13 +174,14 @@
       const qty    = parseFloat(ov.querySelector('#sQty').value);
       const price  = parseFloat(ov.querySelector('#sPx').value);
       if (!ticker || !(qty > 0) || !(price > 0)) { err.textContent = 'Ticker, qty, and price are required.'; return; }
-      await api('POST', '/api/portfolio/transactions', {
+      const resp = await api('POST', '/api/portfolio/transactions', {
         account_key: acctKey, type: 'SELL', ticker, qty, price,
         date: ov.querySelector('#sDt').value,
         fees: parseFloat(ov.querySelector('#sFee').value) || 0,
         note: ov.querySelector('#sNote').value.trim() || undefined,
       });
       close(); await reloadPositions();
+      if (resp && resp.recalc_queued && resp.recalc_queued.length) startPostTxnPoll();
     });
   }
 
@@ -216,6 +219,82 @@
       await api('POST', '/api/portfolio/transactions', body);
       close(); await reloadPositions();
     });
+  }
+
+  function showReinvestModal(acctKey) {
+    const acct = (DATA?.positions?.accounts || []).find(a => a.key === acctKey);
+    const cur  = acct?.currency || '';
+    const { ov, close } = mkModal('⟲ REINVEST · ' + acctKey,
+      '<div class="ptf-hint">Records the dividend AND the new shares in one entry. Net cash impact: zero. Holdings line aggregates DRIP shares into the existing position with a blended avg cost.</div>' +
+      '<div class="ptf-err" id="rErr"></div>' +
+      '<label>Ticker</label><input id="rTk" placeholder="e.g. BANK">' +
+      '<label>Shares acquired</label><input id="rQty" type="number" step="any" placeholder="21.7041">' +
+      '<label>Reinvest price/share (' + cur + ')</label><input id="rPx" type="number" step="any" placeholder="9.45">' +
+      '<label>Cash dividend amount (' + cur + ')</label><input id="rAmt" type="number" step="any" placeholder="auto = qty × price">' +
+      '<label>Date</label><input id="rDt" type="date" value="' + today() + '">' +
+      '<label>Note (optional)</label><input id="rNote" placeholder="e.g. monthly distribution">' +
+      '<div class="ptf-modal-actions">' +
+        '<button type="button" class="ptf-btn" id="rCancel">Cancel</button>' +
+        '<button type="button" class="ptf-btn ptf-btn-reinv" id="rSub" data-submit="1">REINVEST</button>' +
+      '</div>');
+    ov.querySelector('#rCancel').onclick = close;
+    setTimeout(() => ov.querySelector('#rTk')?.focus(), 50);
+
+    const qtyEl = ov.querySelector('#rQty');
+    const pxEl  = ov.querySelector('#rPx');
+    const amtEl = ov.querySelector('#rAmt');
+    const recalc = () => {
+      const q = parseFloat(qtyEl.value), p = parseFloat(pxEl.value);
+      if (!isNaN(q) && !isNaN(p) && !amtEl.dataset.touched) amtEl.value = (q * p).toFixed(2);
+    };
+    qtyEl.addEventListener('input', recalc);
+    pxEl.addEventListener('input',  recalc);
+    amtEl.addEventListener('input', () => { amtEl.dataset.touched = '1'; });
+
+    const btn = ov.querySelector('#rSub');
+    btn.onclick = guard(btn, async () => {
+      const err    = ov.querySelector('#rErr');
+      const ticker = ov.querySelector('#rTk').value.trim().toUpperCase();
+      const qty    = parseFloat(qtyEl.value);
+      const price  = parseFloat(pxEl.value);
+      const amount = parseFloat(amtEl.value);
+      if (!ticker || !(qty > 0) || !(price > 0) || !(amount > 0)) {
+        err.textContent = 'Ticker, qty, price, and amount all required.';
+        return;
+      }
+      const resp = await api('POST', '/api/portfolio/transactions', {
+        account_key: acctKey, type: 'REINVEST', ticker, qty, price, amount,
+        date: ov.querySelector('#rDt').value,
+        note: ov.querySelector('#rNote').value.trim() || undefined,
+      });
+      close();
+      await reloadPositions();
+      if (resp && resp.recalc_queued && resp.recalc_queued.length) startPostTxnPoll();
+    });
+  }
+
+  /* ── Post-txn auto-refresh ─────────────────────────────────
+     After BUY/SELL/REINVEST, the backend kicks off a background
+     recalc. Poll its status; when it finishes, refetch the full
+     dashboard so current price / value / P&L update without a
+     manual refresh. */
+  let _postTxnPoll = null;
+  function startPostTxnPoll() {
+    if (_postTxnPoll) clearInterval(_postTxnPoll);
+    let ticks = 0;
+    _postTxnPoll = setInterval(async () => {
+      ticks++;
+      try {
+        const s = await api('GET', '/api/portfolio/recalculate/status');
+        const idle = (s.status === 'idle') || (!s.running && s.finished_at);
+        if (idle) {
+          clearInterval(_postTxnPoll); _postTxnPoll = null;
+          DATA = await api('GET', '/api/portfolio/dashboard');
+          renderAll();
+        }
+      } catch (_) { /* keep polling silently */ }
+      if (ticks > 80) { clearInterval(_postTxnPoll); _postTxnPoll = null; }  // ~2 min cap
+    }, 1500);
   }
 
   async function reverseTransaction(id, label) {
@@ -429,6 +508,7 @@
         '<button class="ptf-btn ptf-btn-sell" data-acct="' + escH(acct.key) + '" data-action="wdw">' + ICO.withdraw + ' Withdraw</button>' +
         '<button class="ptf-btn"              data-acct="' + escH(acct.key) + '" data-action="dep">' + ICO.deposit  + ' Deposit</button>' +
         '<button class="ptf-btn ptf-btn-div"  data-acct="' + escH(acct.key) + '" data-action="div">' + ICO.dividend + ' Dividend</button>' +
+        '<button class="ptf-btn ptf-btn-reinv" data-acct="' + escH(acct.key) + '" data-action="reinv">' + ICO.reinvest + ' Reinvest</button>' +
         '<span class="ptf-acct-ccy">' + escH(acct.currency) + '</span>' +
       '</div>' +
       '<div class="tbl-wrap">' +
@@ -449,6 +529,7 @@
         else if (a === 'dep') showCashModal('DEPOSIT', k);
         else if (a === 'wdw') showCashModal('WITHDRAW', k);
         else if (a === 'div') showCashModal('DIVIDEND', k);
+        else if (a === 'reinv') showReinvestModal(k);
       });
     });
     panel.querySelectorAll('.ptf-sell-row').forEach(btn => {
@@ -746,7 +827,7 @@
     if (!panel) return;
     const all      = DATA?.transactions_recent || [];
     const acctKeys = [...new Set(all.map(t => t.account_key).filter(Boolean))].sort();
-    const TYPES    = ['BUY','SELL','DEPOSIT','WITHDRAW','DIVIDEND','FEE','REVERSAL'];
+    const TYPES    = ['BUY','SELL','DEPOSIT','WITHDRAW','DIVIDEND','REINVEST','FEE','REVERSAL'];
 
     const shown = all.filter(t => {
       if (_txnAcct && t.account_key !== _txnAcct) return false;
@@ -756,7 +837,8 @@
 
     const reversedIds = new Set(all.filter(t => t.ref_id).map(t => t.ref_id));
     const colFor = { BUY: 'var(--pnl-up)', SELL: 'var(--pnl-dn)', DEPOSIT: 'var(--accent)',
-                     WITHDRAW: '#E6B84A', DIVIDEND: 'var(--pnl-up)', FEE: 'var(--fg-faint)', REVERSAL: 'var(--fg-faint)' };
+                     WITHDRAW: '#E6B84A', DIVIDEND: 'var(--pnl-up)', REINVEST: '#5BD9B4',
+                     FEE: 'var(--fg-faint)', REVERSAL: 'var(--fg-faint)' };
 
     const rows = shown.map(t => {
       const col    = colFor[t.type] || 'var(--fg)';
@@ -995,6 +1077,7 @@
           '<span class="chip" id="ptfChipHold">HOLDINGS · ' + nHold + '</span>' +
           '<span class="chip" id="ptfChipLast">LAST · ' + escH(last) + '</span>' +
           '<span class="chip chip-dim">' + fmt.ago(p?.generated_at) + '</span>' +
+          '<button class="chip chip-btn" id="pfRefresh" title="Re-fetch dashboard (current price, value, P&L)">↻ REFRESH</button>' +
           '<button class="chip chip-btn" id="pfRecalc">⟳ RECALC</button>' +
           '<button class="chip chip-btn" id="pfLock">🔒 LOCK</button>' +
         '</div>' +
@@ -1038,6 +1121,17 @@
       renderGate(body, '');
     };
     body.querySelector('#pfRecalc').onclick = toggleRecalcPanel;
+    body.querySelector('#pfRefresh').onclick = async () => {
+      const btn = body.querySelector('#pfRefresh');
+      if (btn.disabled) return;
+      const orig = btn.textContent;
+      btn.disabled = true; btn.textContent = '↻ …';
+      try {
+        DATA = await api('GET', '/api/portfolio/dashboard');
+        renderAll();
+      } catch (e) { alert('Refresh failed: ' + (e.message || e)); }
+      finally { btn.disabled = false; btn.textContent = orig; }
+    };
 
     renderAll();
   }

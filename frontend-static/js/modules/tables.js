@@ -1294,30 +1294,34 @@
     { id: 'signals',  label: 'Signals' },
     { id: 'insider',  label: 'Insider Trades' },
     { id: 'congress', label: 'Congress Trades' },
+    { id: 'moc',      label: 'Closing Auction' },
   ];
   const INSIDER_URL  = 'https://stocks.clawmo.tech/data/insider-trades.json';
   const CONGRESS_URL = 'https://stocks.clawmo.tech/data/congress-trades.json';
+  const MOC_URL      = 'https://stocks.clawmo.tech/data/moc.json';
 
   async function renderSmartMoney(body, ctx) {
     body.innerHTML = `<div class="mod-loading">Loading smart money…</div>`;
     try {
       // Parallel fetch — full JSON has all tickers; fallback to signals-only
-      const [sig, ins, cg] = await Promise.allSettled([
+      const [sig, ins, cg, moc] = await Promise.allSettled([
         fetchJSON(`${BASE}/smart-money-full.json`).catch(() => fetchJSON(`${BASE}/smart-money.json`)),
         fetchJSON(INSIDER_URL).catch(() => null),
         fetchJSON(CONGRESS_URL).catch(() => null),
+        fetchJSON(MOC_URL).catch(() => null),
       ]);
       const sigData = sig.status === 'fulfilled' ? sig.value : null;
       const insData = ins.status === 'fulfilled' ? ins.value : null;
       const cgData  = cg.status  === 'fulfilled' ? cg.value  : null;
+      const mocData = moc.status === 'fulfilled' ? moc.value : null;
 
-      if (!sigData && !insData && !cgData) {
+      if (!sigData && !insData && !cgData && !mocData) {
         body.innerHTML = `<div class="mod-err">Failed to load smart-money data</div>`;
         return;
       }
 
       const initialTab = (ctx && ctx.params && ctx.params.smyTab) || 'signals';
-      body._smyData = { sig: sigData, ins: insData, cg: cgData };
+      body._smyData = { sig: sigData, ins: insData, cg: cgData, moc: mocData };
 
       body.innerHTML = `
         <div class="mod-head">
@@ -1357,9 +1361,171 @@
       case 'signals':  renderSmySignals(inner, d.sig);  break;
       case 'insider':  renderSmyInsider(inner, d.ins);  break;
       case 'congress': renderSmyCongress(inner, d.cg);  break;
+      case 'moc':      renderSmyMoc(inner, d.moc);      break;
       default:         inner.innerHTML = `<div class="mod-err">Unknown tab: ${tab}</div>`;
     }
     attachTickerClicks(inner);
+  }
+
+  /* ── MOC tab — index-level closing-auction imbalance ───────── */
+  function fmtMocVal(n) {
+    if (n == null || !isFinite(n)) return '—';
+    const abs = Math.abs(n);
+    const sign = n < 0 ? '-' : '';
+    if (abs >= 1000) return sign + '$' + (abs / 1000).toFixed(2) + 'B';
+    return sign + '$' + abs.toFixed(1) + 'M';
+  }
+
+  function mocTermDonut(sell_m, buy_m, net_m) {
+    const sell = Math.max(sell_m || 0, 0);
+    const buy  = Math.max(buy_m  || 0, 0);
+    const total = sell + buy;
+    const cx = 60, cy = 60, r = 44, sw = 12;
+    if (total <= 0) {
+      return `<svg viewBox="0 0 120 120" width="110" height="110">
+        <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#252b35" stroke-width="${sw}"/>
+        <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" fill="#6e7681" style="font:600 0.78rem var(--font-mono,monospace)">—</text>
+      </svg>`;
+    }
+    const sellFrac = sell / total;
+    const C = 2 * Math.PI * r;
+    const sellLen = sellFrac * C;
+    const buyLen  = C - sellLen;
+    const netColor = net_m == null ? '#e6edf3' : (net_m < 0 ? '#ef4444' : (net_m > 0 ? '#22c55e' : '#9aa3af'));
+    const netText = (function(n){
+      if (n == null || !isFinite(n)) return '—';
+      const a = Math.abs(n), s = n < 0 ? '-' : '';
+      return a >= 1000 ? s + '$' + (a/1000).toFixed(2) + 'B' : s + '$' + a.toFixed(0) + 'M';
+    })(net_m);
+    return `<svg viewBox="0 0 120 120" width="110" height="110" style="transform:rotate(-90deg)">
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#1f242c" stroke-width="${sw}"/>
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#ef4444" stroke-width="${sw}"
+              stroke-dasharray="${sellLen} ${C}" stroke-linecap="butt"/>
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#22c55e" stroke-width="${sw}"
+              stroke-dasharray="${buyLen} ${C}" stroke-dashoffset="${-sellLen}" stroke-linecap="butt"/>
+      <g style="transform:rotate(90deg);transform-origin:${cx}px ${cy}px">
+        <text x="${cx}" y="${cy - 4}" text-anchor="middle" dominant-baseline="central"
+              fill="${netColor}" style="font:700 0.85rem var(--font-mono,monospace)">${netText}</text>
+        <text x="${cx}" y="${cy + 12}" text-anchor="middle" dominant-baseline="central"
+              fill="#6e7681" style="font:500 0.55rem var(--font-mono,monospace);letter-spacing:0.08em">NET</text>
+      </g>
+    </svg>`;
+  }
+
+  function renderSmyMoc(inner, doc) {
+    const fj = (doc && doc.fj) || {};
+    const indices = fj.indices || {};
+    const order = ['sp500', 'nas100', 'dow30', 'mag7'];
+    const have = order.filter(k => indices[k]);
+    if (!have.length) {
+      inner.innerHTML = `<div class="mod-err">No closing-auction data — runs at 15:58 ET weekdays.</div>`;
+      return;
+    }
+    const generated = doc.generated_at || fj.fetched_at;
+    const cards = have.map(k => {
+      const x = indices[k];
+      return `
+        <div class="mocterm-card">
+          <div class="mocterm-label">${x.label || k.toUpperCase()}</div>
+          <div class="mocterm-donut">${mocTermDonut(x.sell_m, x.buy_m, x.net_m)}</div>
+          <div class="mocterm-breakdown">
+            <span class="mocterm-sell">SELL ${fmtMocVal(x.sell_m)}</span>
+            <span class="mocterm-buy">BUY ${fmtMocVal(x.buy_m)}</span>
+          </div>
+        </div>`;
+    }).join('');
+    const top5b = fj.top5_buy || [];
+    const top5s = fj.top5_sell || [];
+    const mag7t = fj.mag7_tickers || [];
+    const hasBars = top5b.length || top5s.length || mag7t.length;
+
+    function oneSidedRows(items, side) {
+      if (!items.length) return '<div class="mocterm-bars-empty">no data</div>';
+      const max = Math.max(...items.map(r => Math.abs(r.amount_m || 0)), 1);
+      return items.map(r => {
+        const v = r.amount_m || 0;
+        const pct = (Math.abs(v) / max) * 100;
+        return `<div class="mocterm-bar-row">
+          <span class="mocterm-bar-tk">${r.ticker || ''}</span>
+          <div class="mocterm-bar-track">
+            <div class="mocterm-bar-fill mocterm-bar-${side}" style="left:0;width:${pct.toFixed(1)}%"></div>
+          </div>
+          <span class="mocterm-bar-v">${fmtMocVal(v)}</span>
+        </div>`;
+      }).join('');
+    }
+    function divergingRows(items) {
+      if (!items.length) return '<div class="mocterm-bars-empty">no data</div>';
+      const max = Math.max(...items.map(r => Math.abs(r.amount_m || 0)), 1);
+      return items.map(r => {
+        const v = r.amount_m || 0;
+        const halfPct = (Math.abs(v) / max) * 50;
+        let bar;
+        if (v > 0)      bar = `<div class="mocterm-bar-fill mocterm-bar-pos" style="left:50%;width:${halfPct.toFixed(1)}%"></div>`;
+        else if (v < 0) bar = `<div class="mocterm-bar-fill mocterm-bar-neg" style="right:50%;width:${halfPct.toFixed(1)}%"></div>`;
+        else            bar = `<div class="mocterm-bar-fill mocterm-bar-zero" style="left:49.5%;width:1%"></div>`;
+        return `<div class="mocterm-bar-row">
+          <span class="mocterm-bar-tk">${r.ticker || ''}</span>
+          <div class="mocterm-bar-track">
+            <div class="mocterm-bar-axis"></div>
+            ${bar}
+          </div>
+          <span class="mocterm-bar-v">${v >= 0 ? '+' : ''}${fmtMocVal(v)}</span>
+        </div>`;
+      }).join('');
+    }
+    const barsHtml = hasBars ? `
+      <div class="mocterm-bars-grid">
+        <div class="mocterm-bars-card">
+          <div class="mocterm-bars-title" style="color:#22c55e">TOP 5 BUY</div>
+          ${oneSidedRows(top5b, 'buy')}
+        </div>
+        <div class="mocterm-bars-card">
+          <div class="mocterm-bars-title" style="color:#ef4444">TOP 5 SELL</div>
+          ${oneSidedRows(top5s, 'sell')}
+        </div>
+        <div class="mocterm-bars-card">
+          <div class="mocterm-bars-title">MAG 7 · NET</div>
+          ${divergingRows(mag7t)}
+        </div>
+      </div>` : '';
+
+    inner.innerHTML = `
+      <style>
+        .mocterm-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:0.5rem; margin-bottom:0.5rem; }
+        .mocterm-card { background:var(--panel-alt,#0e1217); border:1px solid var(--border,#252b35); border-radius:4px;
+                        padding:0.55rem 0.65rem; font-family:var(--font-mono,monospace);
+                        display:flex; flex-direction:column; align-items:center; gap:0.35rem; }
+        .mocterm-label { font-size:0.7rem; color:var(--text-secondary,#9aa3af); letter-spacing:0.05em; align-self:flex-start; }
+        .mocterm-donut { display:flex; justify-content:center; }
+        .mocterm-breakdown { display:flex; justify-content:space-between; gap:0.5rem; width:100%; font-size:0.65rem; }
+        .mocterm-sell { color:#ef4444; }
+        .mocterm-buy  { color:#22c55e; }
+        .mocterm-meta { font-size:0.65rem; color:var(--text-muted,#6e7681); margin-top:0.4rem; line-height:1.5; }
+
+        .mocterm-bars-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:0.5rem; margin:0.5rem 0; }
+        @media (max-width:720px) { .mocterm-bars-grid { grid-template-columns:1fr; } }
+        .mocterm-bars-card { background:var(--panel-alt,#0e1217); border:1px solid var(--border,#252b35); border-radius:4px;
+                             padding:0.55rem 0.65rem; font-family:var(--font-mono,monospace); }
+        .mocterm-bars-title { font-size:0.7rem; font-weight:700; letter-spacing:0.06em; margin-bottom:0.35rem; color:var(--text-secondary,#9aa3af); }
+        .mocterm-bars-empty { font-size:0.65rem; color:var(--text-muted,#6e7681); padding:0.25rem 0; }
+        .mocterm-bar-row { display:grid; grid-template-columns:48px 1fr 56px; align-items:center; gap:0.35rem;
+                           height:16px; margin:1px 0; font-size:0.65rem; }
+        .mocterm-bar-tk { color:var(--text-primary,#e5e7eb); font-weight:600; }
+        .mocterm-bar-v  { color:var(--text-secondary,#9aa3af); text-align:right; font-variant-numeric:tabular-nums; }
+        .mocterm-bar-track { position:relative; height:10px; }
+        .mocterm-bar-fill  { position:absolute; top:0; height:100%; border-radius:1px; }
+        .mocterm-bar-buy, .mocterm-bar-pos { background:#22c55e; }
+        .mocterm-bar-sell, .mocterm-bar-neg { background:#ef4444; }
+        .mocterm-bar-zero { background:#6e7681; opacity:0.4; }
+        .mocterm-bar-axis { position:absolute; left:50%; top:-2px; bottom:-2px; width:1px; background:var(--border,#252b35); }
+      </style>
+      <div class="mocterm-grid">${cards}</div>
+      ${barsHtml}
+      <div class="mocterm-meta">
+        Net = Buy − Sell ($M). Source: FinancialJuice (NYSE Closing Auction Imbalance + Nasdaq NOII). Captured Mon-Fri at 15:58 / 15:59 / 16:00 / 16:01 ET — last write wins; if FJ is unavailable the previous snapshot is kept (see updated timestamp).
+        ${generated ? '· Updated ' + (window.fmt && window.fmt.ago ? window.fmt.ago(generated) : new Date(generated).toLocaleString()) : ''}
+      </div>`;
   }
 
   /* ── Signals tab — the legacy flow monitor, now sortable ──── */

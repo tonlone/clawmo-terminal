@@ -13,7 +13,7 @@
     { id: 'breadth',        code: 'BRD', fkey: 5,  label: 'Market Breadth', labelCN: '市場廣度', group: 'Core',     src: 'stocks.clawmo.tech/breadth.html', pdfExportable: true, pdfNeedsTicker: false },
     { id: 'signals',        code: 'SIG', fkey: 6,  label: 'Signals',        labelCN: '交易信號', group: 'Core',     src: 'stocks.clawmo.tech/signals.html', pdfExportable: true, pdfNeedsTicker: false },
     { id: 'sctr',           code: 'SCT', fkey: 7,  label: 'Tech Rank',      labelCN: '技術排名', group: 'Tools',    src: 'stocks.clawmo.tech/sctr.html', pdfExportable: true, pdfNeedsTicker: false },
-    { id: 'deep-value',     code: 'DVL', fkey: 8,  label: 'Deep Value',     labelCN: '深度價值', group: 'Tools',    src: 'deep-value.clawmo.tech', pdfExportable: true, pdfNeedsTicker: false },
+    { id: 'deep-value',     code: 'DVL', fkey: 8,  label: 'Deep Value',     labelCN: '深度價值', group: 'Tools',    src: 'stocks.clawmo.tech/deep-value.html', pdfExportable: true, pdfNeedsTicker: false },
     { id: 'gex',            code: 'GEX', fkey: 9,  label: 'GEX',            labelCN: '伽瑪曝險', group: 'Tools',    src: 'stocks.clawmo.tech/gex.html', pdfExportable: true, pdfNeedsTicker: false },
     { id: 'smart-money',    code: 'SMY', fkey: 10, label: 'Smart Money',    labelCN: '機構資金', group: 'Tools',    src: 'stocks.clawmo.tech/smart-money.html', pdfExportable: true, pdfNeedsTicker: false },
     { id: 'heatmap',        code: 'HMP', fkey: 11, label: 'Heatmap',        labelCN: '熱力圖',   group: 'Market',   src: 'stocks.clawmo.tech/heatmap.html' },
