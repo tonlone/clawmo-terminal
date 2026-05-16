@@ -1294,34 +1294,42 @@
     { id: 'signals',  label: 'Signals' },
     { id: 'insider',  label: 'Insider Trades' },
     { id: 'congress', label: 'Congress Trades' },
+    { id: 'trump',    label: 'Politics: Trump' },
+    { id: 'moo',      label: 'Opening Auction' },
     { id: 'moc',      label: 'Closing Auction' },
   ];
   const INSIDER_URL  = 'https://stocks.clawmo.tech/data/insider-trades.json';
   const CONGRESS_URL = 'https://stocks.clawmo.tech/data/congress-trades.json';
   const MOC_URL      = 'https://stocks.clawmo.tech/data/moc.json';
+  const MOO_URL      = 'https://stocks.clawmo.tech/data/moo.json';
+  const TRUMP_URL    = 'https://stocks.clawmo.tech/data/politics-trump.json';
 
   async function renderSmartMoney(body, ctx) {
     body.innerHTML = `<div class="mod-loading">Loading smart money…</div>`;
     try {
       // Parallel fetch — full JSON has all tickers; fallback to signals-only
-      const [sig, ins, cg, moc] = await Promise.allSettled([
+      const [sig, ins, cg, moc, moo, tr] = await Promise.allSettled([
         fetchJSON(`${BASE}/smart-money-full.json`).catch(() => fetchJSON(`${BASE}/smart-money.json`)),
         fetchJSON(INSIDER_URL).catch(() => null),
         fetchJSON(CONGRESS_URL).catch(() => null),
         fetchJSON(MOC_URL).catch(() => null),
+        fetchJSON(MOO_URL).catch(() => null),
+        fetchJSON(TRUMP_URL).catch(() => null),
       ]);
       const sigData = sig.status === 'fulfilled' ? sig.value : null;
       const insData = ins.status === 'fulfilled' ? ins.value : null;
       const cgData  = cg.status  === 'fulfilled' ? cg.value  : null;
       const mocData = moc.status === 'fulfilled' ? moc.value : null;
+      const mooData = moo.status === 'fulfilled' ? moo.value : null;
+      const trData  = tr.status  === 'fulfilled' ? tr.value  : null;
 
-      if (!sigData && !insData && !cgData && !mocData) {
+      if (!sigData && !insData && !cgData && !mocData && !mooData && !trData) {
         body.innerHTML = `<div class="mod-err">Failed to load smart-money data</div>`;
         return;
       }
 
       const initialTab = (ctx && ctx.params && ctx.params.smyTab) || 'signals';
-      body._smyData = { sig: sigData, ins: insData, cg: cgData, moc: mocData };
+      body._smyData = { sig: sigData, ins: insData, cg: cgData, moc: mocData, moo: mooData, tr: trData };
 
       body.innerHTML = `
         <div class="mod-head">
@@ -1330,6 +1338,7 @@
             ${sigData ? `<span class="chip">SCANNED · ${sigData.total_symbols || (sigData.signals || []).length}</span>` : ''}
             ${insData ? `<span class="chip">INSIDER · ${(insData.summary || {}).total_trades ?? '—'}</span>` : ''}
             ${cgData  ? `<span class="chip">CONGRESS · ${(cgData.summary || {}).totalTrades ?? '—'}</span>` : ''}
+            ${trData  ? `<span class="chip">TRUMP · ${(trData.summary || {}).holdings_count ?? '—'} hld / ${(trData.summary || {}).transaction_count ?? '—'} tx</span>` : ''}
             <span class="chip chip-dim">${fmt.ago(sigData?.generated_at || insData?.generated_at || cgData?.generated_at)}</span>
           </div>
         </div>
@@ -1361,6 +1370,8 @@
       case 'signals':  renderSmySignals(inner, d.sig);  break;
       case 'insider':  renderSmyInsider(inner, d.ins);  break;
       case 'congress': renderSmyCongress(inner, d.cg);  break;
+      case 'trump':    renderSmyTrump(inner, d.tr);     break;
+      case 'moo':      renderSmyAuction(inner, d.moo, 'MOO'); break;
       case 'moc':      renderSmyMoc(inner, d.moc);      break;
       default:         inner.innerHTML = `<div class="mod-err">Unknown tab: ${tab}</div>`;
     }
@@ -1412,21 +1423,27 @@
     </svg>`;
   }
 
-  function renderSmyMoc(inner, doc) {
+  function renderSmyMoc(inner, doc) { renderSmyAuction(inner, doc, 'MOC'); }
+
+  function renderSmyAuction(inner, doc, kind) {
+    const isMoo = kind === 'MOO';
     const fj = (doc && doc.fj) || {};
     const indices = fj.indices || {};
     const order = ['sp500', 'nas100', 'dow30', 'mag7'];
     const have = order.filter(k => indices[k]);
     if (!have.length) {
-      inner.innerHTML = `<div class="mod-err">No closing-auction data — runs at 15:58 ET weekdays.</div>`;
+      inner.innerHTML = isMoo
+        ? `<div class="mod-err">No opening-auction data — runs every 2 min from 9:32–9:46 ET weekdays.</div>`
+        : `<div class="mod-err">No closing-auction data — runs at 15:58 ET weekdays.</div>`;
       return;
     }
     const generated = doc.generated_at || fj.fetched_at;
     const cards = have.map(k => {
       const x = indices[k];
+      const tagStyle = isMoo ? ' style="background:rgba(96,165,250,0.15);color:#60a5fa"' : '';
       return `
         <div class="mocterm-card">
-          <div class="mocterm-label">${x.label || k.toUpperCase()}</div>
+          <div class="mocterm-label">${x.label || k.toUpperCase()} <span class="mocterm-tag"${tagStyle}>${kind}</span></div>
           <div class="mocterm-donut">${mocTermDonut(x.sell_m, x.buy_m, x.net_m)}</div>
           <div class="mocterm-breakdown">
             <span class="mocterm-sell">SELL ${fmtMocVal(x.sell_m)}</span>
@@ -1523,7 +1540,10 @@
       <div class="mocterm-grid">${cards}</div>
       ${barsHtml}
       <div class="mocterm-meta">
-        Net = Buy − Sell ($M). Source: FinancialJuice (NYSE Closing Auction Imbalance + Nasdaq NOII). Captured Mon-Fri at 15:58 / 15:59 / 16:00 / 16:01 ET — last write wins; if FJ is unavailable the previous snapshot is kept (see updated timestamp).
+        Net = Buy − Sell ($M). Source: FinancialJuice (NYSE ${isMoo ? 'Opening' : 'Closing'} Auction Imbalance + Nasdaq NOII).
+        ${isMoo
+          ? 'Captured Mon-Fri every 2 min from 9:32 to 9:46 ET — last write wins; if FJ is unavailable the previous snapshot is kept.'
+          : 'Captured Mon-Fri at 15:58 / 15:59 / 16:00 / 16:01 ET — last write wins; if FJ is unavailable the previous snapshot is kept (see updated timestamp).'}
         ${generated ? '· Updated ' + (window.fmt && window.fmt.ago ? window.fmt.ago(generated) : new Date(generated).toLocaleString()) : ''}
       </div>`;
   }
@@ -2179,6 +2199,197 @@
       </div>
     `;
     wireCongressTable(inner, trades);
+  }
+
+  /* ── Trump politics tab — OGE 278 holdings + SEC Form 3/4/5 transactions ─── */
+  function bandMaxTr(v) {
+    if (!v || v.indexOf('None') >= 0) return 0;
+    const nums = (v.match(/\$([\d,]+)/g) || []).map(s => parseInt(s.replace(/[$,]/g, '')));
+    return nums.length ? nums[nums.length - 1] : 0;
+  }
+  function shTr(n) {
+    if (n == null) return '—';
+    if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+    return String(n);
+  }
+  function actBadgeTr(a) {
+    const x = (a || '').toLowerCase();
+    if (x.includes('buy') || x.includes('purchase')) return '<span class="num-up">BUY</span>';
+    if (x.includes('sell') || x.includes('sale') || x.includes('disposition')) return '<span class="num-dn">SELL</span>';
+    if (x.includes('award')) return '<span style="color:#60a5fa">AWARD</span>';
+    if (x.includes('gift')) return '<span style="color:#fbbf24">GIFT</span>';
+    if (x.includes('initial')) return '<span style="color:#a855f7">HOLD</span>';
+    return '<span style="opacity:.6">' + (a || '—') + '</span>';
+  }
+
+  function renderSmyTrump(inner, d) {
+    if (!d) { inner.innerHTML = '<div class="mod-loading">No Trump data — run compute_politics_trump.py</div>'; return; }
+    const stake = d.djt_stake;
+    const jr = d.djt_jr_personal;
+    const sum = d.summary || {};
+    const seedDate = (d.holdings_seed || {}).as_of || '—';
+    const holdings = (d.holdings || []).slice();
+    const txns = (d.transactions || []).slice();
+
+    inner.innerHTML = `
+      <div class="acct-strip" style="grid-template-columns:repeat(4,1fr)">
+        <div class="acct-card">
+          <div class="acct-name">DJT TRUST STAKE</div>
+          <div class="acct-val"><span class="mono num-up">${stake ? shTr(stake.shares) : '—'}</span></div>
+          <div class="acct-meta"><span>${stake ? stake.via + ' · ' + stake.as_of : '—'}</span></div>
+        </div>
+        <div class="acct-card">
+          <div class="acct-name">TRUMP JR. DJT (DIRECT)</div>
+          <div class="acct-val"><span class="mono">${jr ? shTr(jr.shares) : '—'}</span></div>
+          <div class="acct-meta"><span>${jr ? jr.via + ' · ' + jr.as_of : 'no direct holdings'}</span></div>
+        </div>
+        <div class="acct-card">
+          <div class="acct-name">HOLDINGS (OGE 278)</div>
+          <div class="acct-val"><span class="mono">${sum.holdings_count ?? 0}</span></div>
+          <div class="acct-meta"><span>≥$50K bands · as of ${seedDate}</span></div>
+        </div>
+        <div class="acct-card">
+          <div class="acct-name">OGE 278-T TXNS</div>
+          <div class="acct-val"><span class="mono">${(sum.oge_278t_count ?? 0).toLocaleString()}</span></div>
+          <div class="acct-meta"><span>${sum.oge_278t_pdfs ?? 0} periodic PDF(s)</span></div>
+        </div>
+      </div>
+
+      <div class="mod-panel" data-smy-panel="trump-hold" style="margin-top:8px">
+        <div class="mod-panel-title">
+          HOLDINGS · <span class="mono smy-tr-hold-count">${holdings.length}</span>
+          <input type="search" class="smy-tr-hold-search stk-tick-input" placeholder="filter ticker / asset…" style="margin-left:8px;min-width:180px">
+        </div>
+        <div class="tbl-wrap" style="max-height:280px;min-height:140px">
+          <table class="tbl-dense">
+            <thead><tr>
+              <th>Ticker</th><th>Asset</th><th style="text-align:right">Value Band</th><th style="text-align:right">Band Top</th>
+            </tr></thead>
+            <tbody id="smy-tr-hold-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="mod-panel" data-smy-panel="trump-txn" style="margin-top:8px">
+        <div class="mod-panel-title">
+          TRANSACTIONS · <span class="mono smy-tr-txn-count">${txns.length}</span>
+          <span class="fin-stmt-toggles" style="margin-left:10px">
+            <button class="hld-cg-btn smy-tr-src-btn" data-sr="all" type="button">ALL</button>
+            <button class="hld-cg-btn smy-tr-src-btn" data-sr="oge" type="button">OGE</button>
+            <button class="hld-cg-btn smy-tr-src-btn" data-sr="sec" type="button">SEC</button>
+          </span>
+          <span class="fin-stmt-toggles" style="margin-left:8px">
+            <button class="hld-cg-btn smy-tr-act-btn" data-ac="all" type="button">ALL TX</button>
+            <button class="hld-cg-btn smy-tr-act-btn" data-ac="buy" type="button">BUY</button>
+            <button class="hld-cg-btn smy-tr-act-btn" data-ac="sell" type="button">SELL</button>
+          </span>
+          <input type="search" class="smy-tr-txn-search stk-tick-input" placeholder="filter ticker/asset…" style="margin-left:8px;min-width:160px">
+        </div>
+        <div class="tbl-wrap" style="max-height:calc(100vh - 540px);min-height:200px">
+          <table class="tbl-dense">
+            <thead><tr>
+              <th>Date</th><th>Src</th><th>Ticker</th><th>Asset</th>
+              <th style="text-align:center">Action</th>
+              <th style="text-align:right">Amount</th><th style="text-align:right">Shares</th><th style="text-align:center">Link</th>
+            </tr></thead>
+            <tbody id="smy-tr-txn-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="mod-foot" style="margin-top:6px;font-size:0.62rem;opacity:.6">${d.disclaimer || ''}</div>
+    `;
+
+    wireTrumpTables(inner, holdings, txns);
+  }
+
+  function wireTrumpTables(inner, holdings, txns) {
+    const holdBody = inner.querySelector('#smy-tr-hold-body');
+    const txnBody  = inner.querySelector('#smy-tr-txn-body');
+    const holdCount = inner.querySelector('.smy-tr-hold-count');
+    const txnCount  = inner.querySelector('.smy-tr-txn-count');
+    const state = { holdQ: '', txnQ: '', src: 'all', action: 'all' };
+
+    function renderHold() {
+      const q = state.holdQ.toLowerCase();
+      const rows = holdings.filter(h =>
+        !q || (h.ticker || '').toLowerCase().includes(q) || (h.asset || '').toLowerCase().includes(q)
+      );
+      holdCount.textContent = rows.length;
+      holdBody.innerHTML = rows.map(h => `
+        <tr>
+          <td><span class="mono ticker" data-ticker="${escapeGex(h.ticker || '')}">${h.ticker || '—'}</span></td>
+          <td style="opacity:.8;font-size:.7rem">${escapeGex(h.asset)}</td>
+          <td style="text-align:right" class="mono">${escapeGex(h.value_range || '—')}</td>
+          <td style="text-align:right;opacity:.7" class="mono">$${bandMaxTr(h.value_range).toLocaleString()}</td>
+        </tr>`).join('');
+    }
+
+    function renderTxn() {
+      const q = state.txnQ.toLowerCase();
+      const sr = state.src;
+      const ac = state.action;
+      const rows = txns.filter(t => {
+        const isOGE = (t.source || '').indexOf('OGE') >= 0;
+        const isSEC = (t.source || '').indexOf('SEC') >= 0;
+        if (sr === 'oge' && !isOGE) return false;
+        if (sr === 'sec' && !isSEC) return false;
+        const a = (t.action || '').toLowerCase();
+        if (ac === 'buy'  && !(a.includes('buy')  || a.includes('purchase'))) return false;
+        if (ac === 'sell' && !(a.includes('sell') || a.includes('sale')))     return false;
+        if (q && !((t.ticker || '').toLowerCase().includes(q)
+                || (t.asset  || '').toLowerCase().includes(q)
+                || (t.issuer || '').toLowerCase().includes(q))) return false;
+        return true;
+      });
+      txnCount.textContent = rows.length;
+      txnBody.innerHTML = rows.slice(0, 800).map(t => {
+        const isOGE = (t.source || '').indexOf('OGE') >= 0;
+        const srcBadge = isOGE
+          ? '<span style="color:#fb923c;font-weight:700">OGE</span>'
+          : '<span style="color:#60a5fa;font-weight:700">SEC</span>';
+        const assetCell = isOGE ? (t.asset || '') : (t.issuer || '');
+        const amountCell = isOGE
+          ? '$' + (t.amount_lo || '?') + '–$' + (t.amount_hi || '?')
+          : (t.shares != null && t.price != null && t.price > 0 ? '$' + (t.shares * t.price).toLocaleString() : '—');
+        return `
+        <tr>
+          <td class="mono" style="font-size:.68rem">${t.date || '—'}</td>
+          <td style="font-size:.62rem">${srcBadge}</td>
+          <td><span class="mono ticker" data-ticker="${escapeGex(t.ticker || '')}">${t.ticker || '—'}</span></td>
+          <td style="opacity:.8;font-size:.65rem;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeGex(assetCell)}">${escapeGex(assetCell || '—')}</td>
+          <td style="text-align:center">${actBadgeTr(t.action)}</td>
+          <td style="text-align:right" class="mono" style="font-size:.65rem">${amountCell}</td>
+          <td style="text-align:right" class="mono">${shTr(t.shares)}</td>
+          <td style="text-align:center;font-size:.62rem">${t.source_url ? `<a href="${t.source_url}" target="_blank" rel="noopener" style="color:#a78bfa">→</a>` : '—'}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    renderHold();
+    renderTxn();
+
+    inner.querySelector('.smy-tr-hold-search').addEventListener('input', e => { state.holdQ = e.target.value; renderHold(); });
+    inner.querySelector('.smy-tr-txn-search').addEventListener('input',  e => { state.txnQ  = e.target.value; renderTxn();  });
+    inner.querySelectorAll('.smy-tr-src-btn').forEach(b => {
+      b.addEventListener('click', () => {
+        state.src = b.dataset.sr;
+        inner.querySelectorAll('.smy-tr-src-btn').forEach(x => x.classList.toggle('active', x === b));
+        renderTxn();
+      });
+    });
+    inner.querySelectorAll('.smy-tr-act-btn').forEach(b => {
+      b.addEventListener('click', () => {
+        state.action = b.dataset.ac;
+        inner.querySelectorAll('.smy-tr-act-btn').forEach(x => x.classList.toggle('active', x === b));
+        renderTxn();
+      });
+    });
+    const defSrc = inner.querySelector('.smy-tr-src-btn[data-sr="all"]');
+    const defAct = inner.querySelector('.smy-tr-act-btn[data-ac="all"]');
+    if (defSrc) defSrc.classList.add('active');
+    if (defAct) defAct.classList.add('active');
   }
 
   function wireCongressTable(inner, trades) {

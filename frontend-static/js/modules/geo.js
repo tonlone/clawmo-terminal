@@ -629,12 +629,23 @@
 
     /* ── Map panel ── */
     const typeCounts = {};
-    let enteringCount = 0, leavingCount = 0;
+    const typeFlow = {}; // { type: { entering, leaving, loading } }
+    let enteringCount = 0, leavingCount = 0, loadingCount = 0;
     vessels.forEach(v => {
-      typeCounts[v.ship_type] = (typeCounts[v.ship_type] || 0) + 1;
+      const t = v.ship_type || 'Unknown';
+      typeCounts[t] = (typeCounts[t] || 0) + 1;
+      if (!typeFlow[t]) typeFlow[t] = { entering: 0, leaving: 0, loading: 0 };
+      // Gulf-only "loading zone" = west Persian Gulf (lon < 51°E):
+      // Saudi/Kuwait/Iraq/Bahrain/Qatar terminals. Vessels here are not on
+      // the Hormuz transit lane regardless of heading.
+      if (isGulf && v.lon != null && v.lon < 51) {
+        loadingCount++;
+        typeFlow[t].loading++;
+        return;
+      }
       const f = transitFlow(v.lon, v.cog);
-      if (f.text.startsWith('←')) enteringCount++;
-      else if (f.text.startsWith('→')) leavingCount++;
+      if (f.text.startsWith('←')) { enteringCount++; typeFlow[t].entering++; }
+      else if (f.text.startsWith('→')) { leavingCount++; typeFlow[t].leaving++; }
     });
 
     /* Buttons for types that have at least one vessel */
@@ -649,12 +660,22 @@
     ];
     const btns = TYPE_DEFS
       .filter(td => (typeCounts[td.type] || 0) > 0)
-      .map(td => `
+      .map(td => {
+        const tf = typeFlow[td.type] || { entering: 0, leaving: 0, loading: 0 };
+        const hasFlow = tf.entering || tf.leaving || tf.loading;
+        const loadSub = (isGulf && tf.loading)
+          ? `<span style="color:var(--fg-faint)">/</span><span style="color:#a78bfa" title="West Persian Gulf loading zone (lon < 51°E) — Saudi/Kuwait/Iraq/Bahrain/Qatar terminals">⚓${tf.loading}</span>`
+          : '';
+        const flowSub = hasFlow
+          ? ` <span style="font-size:9px;margin-left:2px"><span style="color:#fb923c">↑${tf.entering}</span><span style="color:var(--fg-faint)">/</span><span style="color:#4ade80">↓${tf.leaving}</span>${loadSub}</span>`
+          : '';
+        return `
         <button class="geo-type-btn active" data-type="${td.type}"
                 style="--geo-btn-color:${td.color}">
           <span class="geo-legend-dot" style="background:${td.color}"></span>
-          ${td.type} <span style="color:var(--fg-faint)">(${typeCounts[td.type]})</span>
-        </button>`)
+          ${td.type} <span style="color:var(--fg-faint)">(${typeCounts[td.type]})</span>${flowSub}
+        </button>`;
+      })
       .join('');
 
     const transitFilterHtml = (isGulf || isCronTracked) ? `
