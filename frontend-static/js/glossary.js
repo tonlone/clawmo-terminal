@@ -129,6 +129,14 @@
     'REV GRW':     { full: 'Revenue Growth (YoY)',       def: 'Year-over-year revenue growth rate' },
     'D/E':         { full: 'Debt-to-Equity Ratio',       def: 'Total debt ÷ shareholders\' equity; < 1 conservative, > 2 high leverage' },
     'CUR RATIO':   { full: 'Current Ratio',              def: 'Current assets ÷ current liabilities; < 1 = potential short-term liquidity stress, > 2 = comfortable buffer' },
+
+    // ── Sector Rotation (RRG / JdK) ──
+    'RRG_ETF':     { full: 'Sector ETF',                 def: 'SPDR sector ETF ticker (XLK Tech, XLV Health Care, XLF Financials, XLY Consumer Disc, XLC Comm Svcs, XLI Industrials, XLP Cons Staples, XLE Energy, XLRE Real Estate, XLB Materials, XLU Utilities)' },
+    'RRG_Q':       { full: 'Rotation Quadrant',          def: 'Leading (R≥100, M≥100): outperforming and accelerating. Improving (R<100, M≥100): underperforming but turning up. Weakening (R≥100, M<100): outperforming but decelerating. Lagging (R<100, M<100): underperforming and falling further' },
+    'RRG_RATIO':   { full: 'JdK RS-Ratio',               def: 'Relative-strength of the sector vs the benchmark (SPY), normalized so 100 = neutral. > 100 = outperforming the benchmark, < 100 = underperforming. Trend component of RRG (x-axis)' },
+    'RRG_MOM':     { full: 'JdK RS-Momentum',            def: 'Rate-of-change of the RS-Ratio, normalized so 100 = neutral. > 100 = relative strength is accelerating, < 100 = decelerating. Momentum component of RRG (y-axis)' },
+    'RRG_WKS':     { full: 'Weeks in Quadrant',          def: 'Consecutive weeks the sector has remained in its current rotation quadrant. Long runs in Leading or Lagging tend to mean-revert; fresh entries (1–2 wks) often signal active rotation' },
+    'RRG_CROSS':   { full: 'Just-Crossed Flag',          def: 'Marks sectors whose rotation quadrant changed in the last 1–2 weeks — the alpha events of an RRG. Examples: Lagging→Improving (early reversal), Leading→Weakening (loss of momentum)' },
     'BETA':        { full: 'Beta',                       def: 'Sensitivity to the broad market; 1.0 = moves in lockstep, > 1 = amplified moves, < 1 = dampened, < 0 = inverse' },
     'EV/EBITDA':   { full: 'Enterprise Value ÷ EBITDA' },
     'GM%':         { full: 'Gross Margin %' },

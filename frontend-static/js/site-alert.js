@@ -3,6 +3,10 @@
  * vs. the stocks-app full-width banner — terminal's #app uses height:100vh so a full
  * banner would push content off-screen.
  *
+ * 2026-05-20 redesign: chip now reflects multi-tenor (5Y/10Y/30Y) data with directional
+ * coloring (green=falling, red=rising, purple=mixed). Tier (WATCH/WARN/ALERT) scales
+ * color intensity. Mirrors the stocks-app banner; same site-alerts.json source.
+ *
  * Dismissible (24h via localStorage). Click chip → opens bonds module.
  */
 (function () {
@@ -13,11 +17,51 @@
   const DISMISS_HOURS = 24;
   const POLL_MS = 5 * 60 * 1000;
 
-  const TIER_STYLE = {
-    WATCH: { color: '#fbbf24', bg: 'rgba(251, 191, 36, 0.16)', border: 'rgba(251, 191, 36, 0.5)', icon: '⚡' },
-    WARN:  { color: '#fb923c', bg: 'rgba(251, 146, 60, 0.20)', border: 'rgba(251, 146, 60, 0.6)', icon: '⚠' },
-    ALERT: { color: '#ef4444', bg: 'rgba(239, 68, 68, 0.25)',  border: 'rgba(239, 68, 68, 0.75)', icon: '🚨' },
+  // Tier icons (severity)
+  const TIER_ICON = { WATCH: '⚡', WARN: '⚠', ALERT: '🚨' };
+
+  // Direction arrow (compact directional indicator for the chip)
+  const DIRECTION_ARROW = { falling: '▼', rising: '▲', mixed: '◆' };
+
+  // Direction × Tier color matrix.
+  // Direction drives hue (green=falling, red=rising, purple=mixed),
+  // tier scales alpha intensity within each direction.
+  const DIRECTION_TIER_STYLE = {
+    falling: {
+      WATCH: { color: '#22c55e', bg: 'rgba(34, 197, 94, 0.16)', border: 'rgba(34, 197, 94, 0.50)' },
+      WARN:  { color: '#22c55e', bg: 'rgba(34, 197, 94, 0.24)', border: 'rgba(34, 197, 94, 0.70)' },
+      ALERT: { color: '#16a34a', bg: 'rgba(34, 197, 94, 0.32)', border: 'rgba(34, 197, 94, 0.90)' },
+    },
+    rising: {
+      WATCH: { color: '#ef4444', bg: 'rgba(239, 68, 68, 0.18)', border: 'rgba(239, 68, 68, 0.55)' },
+      WARN:  { color: '#ef4444', bg: 'rgba(239, 68, 68, 0.24)', border: 'rgba(239, 68, 68, 0.70)' },
+      ALERT: { color: '#dc2626', bg: 'rgba(239, 68, 68, 0.32)', border: 'rgba(239, 68, 68, 0.90)' },
+    },
+    mixed: {
+      WATCH: { color: '#a855f7', bg: 'rgba(168, 85, 247, 0.18)', border: 'rgba(168, 85, 247, 0.55)' },
+      WARN:  { color: '#a855f7', bg: 'rgba(168, 85, 247, 0.24)', border: 'rgba(168, 85, 247, 0.70)' },
+      ALERT: { color: '#9333ea', bg: 'rgba(168, 85, 247, 0.32)', border: 'rgba(168, 85, 247, 0.90)' },
+    },
   };
+
+  // Legacy fallback for alerts that don't include `direction` (e.g. if compute script
+  // is rolled back or another source publishes site-alerts.json)
+  const TIER_STYLE = {
+    WATCH: { color: '#fbbf24', bg: 'rgba(251, 191, 36, 0.16)', border: 'rgba(251, 191, 36, 0.50)' },
+    WARN:  { color: '#fb923c', bg: 'rgba(251, 146, 60, 0.20)', border: 'rgba(251, 146, 60, 0.60)' },
+    ALERT: { color: '#ef4444', bg: 'rgba(239, 68, 68, 0.25)',  border: 'rgba(239, 68, 68, 0.75)' },
+  };
+
+  function styleFor(alert) {
+    const tier = alert.level || 'WATCH';
+    const dir = alert.direction;
+    if (dir && DIRECTION_TIER_STYLE[dir]) {
+      const s = DIRECTION_TIER_STYLE[dir][tier] || DIRECTION_TIER_STYLE[dir].WATCH;
+      return { ...s, icon: TIER_ICON[tier] || '⚡' };
+    }
+    const s = TIER_STYLE[tier] || TIER_STYLE.WATCH;
+    return { ...s, icon: TIER_ICON[tier] || '⚡' };
+  }
 
   function isDismissed(alert) {
     try {
@@ -39,8 +83,19 @@
   }
 
   function shortHeadline(alert) {
-    const dir = alert.change_bps > 0 ? '+' : '';
-    return `10Y ${dir}${Math.round(alert.change_bps)}bps · ${alert.value.toFixed(2)}%`;
+    const tenors = alert.monitored_tenors;
+    const arrow = DIRECTION_ARROW[alert.direction] || '';
+    if (Array.isArray(tenors) && tenors.length) {
+      // Compact 3-tenor format: "▼ 5Y -10 · 10Y -10 · 30Y -6"
+      const parts = tenors.map(t => {
+        const sign = t.change_bps >= 0 ? '+' : '';
+        return `${t.label} ${sign}${Math.round(t.change_bps)}`;
+      });
+      return arrow ? `${arrow} ${parts.join(' · ')}` : parts.join(' · ');
+    }
+    // Legacy single-tenor fallback
+    const sign = (alert.change_bps || 0) > 0 ? '+' : '';
+    return `10Y ${sign}${Math.round(alert.change_bps || 0)}bps · ${(alert.value || 0).toFixed(2)}%`;
   }
 
   function render(alert) {
@@ -50,7 +105,7 @@
       return;
     }
 
-    const style = TIER_STYLE[alert.level] || TIER_STYLE.WATCH;
+    const style = styleFor(alert);
     const headline = shortHeadline(alert);
     const fullText = alert.headline || headline;
 
@@ -81,7 +136,7 @@
     chip.innerHTML = `
       <span style="font-size:0.7rem">${style.icon}</span>
       <span style="letter-spacing:0.04em">${alert.level}</span>
-      <span style="opacity:0.85;font-weight:500">${headline}</span>
+      <span style="opacity:0.92;font-weight:500">${headline}</span>
       <span id="term-site-alert-x" style="margin-left:4px;opacity:0.7;font-size:0.78rem;line-height:0.9;padding:0 3px">×</span>
     `;
 

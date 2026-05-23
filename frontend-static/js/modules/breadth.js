@@ -6,6 +6,7 @@
   const BREADTH_URL = 'https://stocks.clawmo.tech/data/breadth.json';
   const INDUSTRY_URL = 'https://stocks.clawmo.tech/data/industry_performance.json';
   const MONITOR_URL = 'https://stocks.clawmo.tech/data/monitor.json';
+  const ROTATION_URL = 'https://stocks.clawmo.tech/data/rotation.json';
 
   // Per-pane state for industry filter + historical heatmap range.
   // Stored on body element so sort clicks don't leak across modules.
@@ -320,10 +321,11 @@
   async function render(body) {
     body.innerHTML = `<div class="mod-loading">Loading market breadth…</div>`;
     try {
-      const [br, ind, mon] = await Promise.all([
+      const [br, ind, mon, rot] = await Promise.all([
         fetchJSON(BREADTH_URL),
         fetchJSON(INDUSTRY_URL),
         fetchJSON(MONITOR_URL).catch(() => null),
+        fetchJSON(ROTATION_URL).catch(() => null),
       ]);
 
       const periods = br.ma_periods || [50, 100, 200];
@@ -533,6 +535,7 @@
         </div>
 
         ${renderRotationRibbon(data, 63)}
+        ${renderRRG(rot)}
         ${renderLeadersLaggards(data, latest50)}
         ${renderSectorDonut(br)}
         ${renderHistoricalHeatShell(data, sectors)}
@@ -783,6 +786,244 @@
      {tech, broad, aligned, riskoff} based on QQQ−SPY breadth gap, rendered
      as a horizontal time-axis bar so the dominant regime over the window is
      visually obvious. Range default 63 td (3M) to match stocks-app /breadth.html. */
+  /* ── Sector Rotation (RRG) ──────────────────────────────────
+     Compact JdK Relative Rotation Graph for 11 SPDR sectors vs SPY.
+     Scan-density priority: small SVG chart + dense table side-by-side. */
+  const RRG_QUAD_COLOR = {
+    Leading:   '#4ade80',
+    Weakening: '#facc15',
+    Lagging:   '#f87171',
+    Improving: '#60a5fa',
+    Unknown:   '#8b949e',
+  };
+
+  // Collision-aware label placement: stack labels vertically when anchors cluster.
+  function rrgPlaceLabels(anchors, opts) {
+    const GAP_X = opts.gapX || 38, GAP_Y = opts.gapY || 14, OFF = opts.offset || 7;
+    const xR = opts.xR, charW = opts.charW || 6.6, padApprox = 4;
+    const sorted = anchors.slice().sort((a, b) => a.ay - b.ay);
+    const placed = [];
+    sorted.forEach(a => {
+      let lx = a.ax + OFF;
+      let ly = a.ay;
+      let iters = 0;
+      while (iters < 40 && placed.some(p =>
+        Math.abs(p.lx - lx) < GAP_X && Math.abs(p.ly - ly) < GAP_Y
+      )) { ly += GAP_Y; iters++; }
+      // If running off right edge, swing left of anchor
+      const labelW = a.etf.length * charW + padApprox;
+      let anchor = 'start';
+      if (lx + labelW > xR) {
+        lx = a.ax - OFF - labelW;
+        anchor = 'end';
+        iters = 0;
+        while (iters < 40 && placed.some(p =>
+          Math.abs(p.lx - lx) < GAP_X && Math.abs(p.ly - ly) < GAP_Y
+        )) { ly += GAP_Y; iters++; }
+      }
+      placed.push({ etf: a.etf, color: a.color, ax: a.ax, ay: a.ay, lx, ly, anchor });
+    });
+    return placed;
+  }
+
+  function renderRRG(rot) {
+    if (!rot || !rot.data || !rot.data.SPY || !rot.data.SPY.weekly) {
+      return `<div class="mod-panel">
+        <div class="mod-panel-title">SECTOR ROTATION (RRG) · weekly · vs SPY</div>
+        <div class="mod-empty">rotation.json unavailable — run compute_rotation.py</div>
+      </div>`;
+    }
+    const snap = rot.data.SPY.weekly;
+    const W = 540, H = 420, pad = 36;
+    // Compute axis bounds from all trail points (last 5 each)
+    const xs = [], ys = [];
+    Object.keys(snap).forEach(etf => {
+      snap[etf].trail.slice(-5).forEach(p => { xs.push(p.ratio); ys.push(p.mom); });
+    });
+    if (!xs.length) return '';
+    let xMin = Math.min.apply(null, xs), xMax = Math.max.apply(null, xs);
+    let yMin = Math.min.apply(null, ys), yMax = Math.max.apply(null, ys);
+    const padN = 0.6;
+    xMin = Math.min(xMin - padN, 99); xMax = Math.max(xMax + padN, 101);
+    yMin = Math.min(yMin - padN, 99); yMax = Math.max(yMax + padN, 101);
+    const sx = v => pad + ((v - xMin) / (xMax - xMin)) * (W - 2 * pad);
+    const sy = v => pad + (1 - (v - yMin) / (yMax - yMin)) * (H - 2 * pad);
+    const x100 = sx(100), y100 = sy(100);
+    const xL = pad, xR = W - pad, yT = pad, yB = H - pad;
+
+    // Quadrant tint rects + labels + crosshair
+    const quadRects = `
+      <rect x="${x100}" y="${yT}"  width="${xR - x100}" height="${y100 - yT}" fill="rgba(74,222,128,0.07)"/>
+      <rect x="${x100}" y="${y100}" width="${xR - x100}" height="${yB - y100}" fill="rgba(250,204,21,0.07)"/>
+      <rect x="${xL}"   y="${y100}" width="${x100 - xL}" height="${yB - y100}" fill="rgba(248,113,113,0.07)"/>
+      <rect x="${xL}"   y="${yT}"  width="${x100 - xL}" height="${y100 - yT}" fill="rgba(96,165,250,0.07)"/>
+    `;
+    const quadLbls = `
+      <text x="${xR - 6}" y="${yT + 14}" fill="rgba(74,222,128,0.65)" text-anchor="end" font-size="11" font-weight="700">LEADING</text>
+      <text x="${xR - 6}" y="${yB - 6}"  fill="rgba(250,204,21,0.65)" text-anchor="end" font-size="11" font-weight="700">WEAKENING</text>
+      <text x="${xL + 6}" y="${yB - 6}"  fill="rgba(248,113,113,0.65)" font-size="11" font-weight="700">LAGGING</text>
+      <text x="${xL + 6}" y="${yT + 14}" fill="rgba(96,165,250,0.65)" font-size="11" font-weight="700">IMPROVING</text>
+    `;
+    const crosshair = `
+      <line x1="${xL}" y1="${y100}" x2="${xR}" y2="${y100}" stroke="rgba(255,255,255,0.18)" stroke-width="0.8"/>
+      <line x1="${x100}" y1="${yT}" x2="${x100}" y2="${yB}" stroke="rgba(255,255,255,0.18)" stroke-width="0.8"/>
+    `;
+
+    // Sector trails — tapered segments + hollow start + halo head dots
+    const anchors = [];
+    let sampleTrailDates = null;
+    const trails = Object.keys(snap).map(etf => {
+      const s = snap[etf];
+      const pts = s.trail.slice(-5);
+      if (!pts.length) return '';
+      if (!sampleTrailDates) sampleTrailDates = { start: pts[0].date, end: pts[pts.length - 1].date, n: pts.length };
+      const color = RRG_QUAD_COLOR[s.quadrant] || '#8b949e';
+      const n = pts.length;
+      // Segment-tapered line: thinner+faded toward start, thicker+opaque toward head
+      const segments = [];
+      for (let i = 0; i < n - 1; i++) {
+        const p1 = pts[i], p2 = pts[i + 1];
+        const t = i / Math.max(1, n - 2);             // 0 (oldest) → 1 (newest)
+        const sw = (0.9 + t * 1.7).toFixed(2);        // 0.9 → 2.6
+        const op = (0.35 + t * 0.55).toFixed(2);      // 0.35 → 0.90
+        segments.push(`<line x1="${sx(p1.ratio).toFixed(1)}" y1="${sy(p1.mom).toFixed(1)}" x2="${sx(p2.ratio).toFixed(1)}" y2="${sy(p2.mom).toFixed(1)}" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" opacity="${op}"/>`);
+      }
+      // Dots: hollow start · faded middles · halo head
+      const dots = pts.map((p, i) => {
+        const cx = sx(p.ratio).toFixed(1), cy = sy(p.mom).toFixed(1);
+        if (i === 0) {
+          // Hollow start ring
+          return `<circle cx="${cx}" cy="${cy}" r="3.2" fill="#0d1117" stroke="${color}" stroke-width="1.4" opacity="0.85"/>`;
+        }
+        if (i === n - 1) {
+          // Head: large filled + light halo ring
+          return `<circle cx="${cx}" cy="${cy}" r="6.8" fill="none" stroke="#e6edf3" stroke-width="1.2" opacity="0.7"/>` +
+                 `<circle cx="${cx}" cy="${cy}" r="4.4" fill="${color}" stroke="#0d1117" stroke-width="1" opacity="1"/>`;
+        }
+        // Middle: small faded dot
+        const op = (0.45 + (i / (n - 1)) * 0.4).toFixed(2);
+        return `<circle cx="${cx}" cy="${cy}" r="1.8" fill="${color}" opacity="${op}"/>`;
+      }).join('');
+      const head = pts[pts.length - 1];
+      anchors.push({ etf, color, ax: sx(head.ratio), ay: sy(head.mom) });
+      return `<g>${segments.join('')}${dots}</g>`;
+    }).join('');
+
+    // Place labels with collision avoidance
+    const placed = rrgPlaceLabels(anchors, { xR: xR - 2 });
+    const labels = placed.map(p => {
+      // Leader line if displaced
+      const dx = Math.abs(p.lx - p.ax), dy = Math.abs(p.ly - p.ay);
+      const lineEndX = p.anchor === 'end' ? p.lx + (p.etf.length * 6.6 + 2) : p.lx - 2;
+      const leader = (dx > 12 || dy > 6)
+        ? `<line x1="${p.ax}" y1="${p.ay}" x2="${lineEndX}" y2="${p.ly}" stroke="${p.color}" stroke-width="0.6" opacity="0.45"/>`
+        : '';
+      // text with dark stroke + colored fill for legibility
+      return `${leader}<text x="${p.lx.toFixed(1)}" y="${(p.ly + 3.5).toFixed(1)}" fill="${p.color}" stroke="#0d1117" stroke-width="2.6" stroke-linejoin="round" paint-order="stroke fill" text-anchor="${p.anchor}" font-size="11" font-weight="700" font-family="SF Mono, monospace">${p.etf}</text>`;
+    }).join('');
+
+    const chartSvg = `
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="width:100%;max-width:${W}px;height:auto;display:block">
+        ${quadRects}
+        ${crosshair}
+        ${quadLbls}
+        ${trails}
+        ${labels}
+        <text x="${W / 2}" y="${H - 6}" text-anchor="middle" fill="var(--text-muted, #6e7681)" font-size="10">RS-Ratio →</text>
+        <text x="12" y="${H / 2}" transform="rotate(-90 12 ${H / 2})" text-anchor="middle" fill="var(--text-muted, #6e7681)" font-size="10">RS-Momentum →</text>
+      </svg>
+    `;
+
+    // Trail key strip — explains start vs current dot convention + date range
+    const td = sampleTrailDates || { start: '—', end: '—', n: 0 };
+    const trailKeySvg = `
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:4px 8px;font-size:10px;color:var(--text-muted, #6e7681);font-family:SF Mono, monospace">
+        <span style="display:inline-flex;align-items:center;gap:4px">
+          <svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="3.2" fill="#0d1117" stroke="#8b949e" stroke-width="1.4"/></svg>
+          <b style="color:var(--text-primary, #e6edf3)">${td.start || '—'}</b> start
+        </span>
+        <span>→</span>
+        <span style="display:inline-flex;align-items:center;gap:4px">
+          <svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="#e6edf3" stroke-width="1.1" opacity="0.7"/><circle cx="8" cy="8" r="4.4" fill="#8b949e" stroke="#0d1117" stroke-width="1"/></svg>
+          <b style="color:var(--text-primary, #e6edf3)">${td.end || '—'}</b> current
+        </span>
+        <span style="opacity:0.7">· ${td.n} weekly points, oldest → newest</span>
+        <span style="opacity:0.7;margin-left:auto">line thickens toward current</span>
+      </div>
+    `;
+
+    // Dense table
+    const quadOrder = { Leading: 0, Improving: 1, Weakening: 2, Lagging: 3, Unknown: 4 };
+    const rows = Object.keys(snap).map(etf => Object.assign({ etf }, snap[etf]))
+      .sort((a, b) => (quadOrder[a.quadrant] - quadOrder[b.quadrant]) || (b.ratio - a.ratio));
+    const tableRows = rows.map(r => {
+      const color = RRG_QUAD_COLOR[r.quadrant] || '#8b949e';
+      const cross = r.crossed_recently ? '<span class="mono" style="color:#fde68a">↺</span>' : '';
+      return `<tr>
+        <td class="lbl"><b>${r.etf}</b></td>
+        <td class="mono" style="color:${color}">${r.quadrant.slice(0, 4).toUpperCase()}</td>
+        <td class="mono">${r.ratio.toFixed(2)}</td>
+        <td class="mono">${r.mom.toFixed(2)}</td>
+        <td class="mono">${r.weeks_in_quadrant}</td>
+        <td>${cross}</td>
+      </tr>`;
+    }).join('');
+
+    // Full-name "Just Crossed" panel — mirrors stocks.clawmo.tech layout
+    const crossedList = Object.keys(snap).filter(e => snap[e].crossed_recently);
+    const crossedPanelHtml = crossedList.length
+      ? `<div class="mod-subpanel" style="background:rgba(96,165,250,0.06);border:1px solid rgba(96,165,250,0.25);border-radius:4px;padding:6px 10px;margin-bottom:8px">
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:#93c5fd;font-weight:700;margin-bottom:4px">Just Crossed (last 1–2 weeks)</div>
+          ${crossedList.map(etf => {
+            const s = snap[etf];
+            const color = RRG_QUAD_COLOR[s.quadrant] || '#8b949e';
+            return `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;font-size:11px">
+              <span><b style="font-family:SF Mono, monospace">${etf}</b> <span style="color:var(--text-muted, #6e7681)">${s.name || ''}</span></span>
+              <span style="color:${color};font-family:SF Mono, monospace;font-weight:700">→ ${s.quadrant}</span>
+            </div>`;
+          }).join('')}
+        </div>`
+      : `<div class="mod-subpanel" style="background:rgba(255,255,255,0.02);border:1px solid var(--border, #30363d);border-radius:4px;padding:6px 10px;margin-bottom:8px;font-size:11px;color:var(--text-muted, #6e7681);font-style:italic">No quadrant changes — stable rotation.</div>`;
+
+    // Quadrant counts narrative footer
+    const counts = { Leading: 0, Weakening: 0, Lagging: 0, Improving: 0 };
+    Object.values(snap).forEach(s => { if (counts[s.quadrant] != null) counts[s.quadrant]++; });
+
+    return `
+      <div class="mod-panel">
+        <div class="mod-panel-title">SECTOR ROTATION (RRG) · weekly · vs SPY · as of ${rot.as_of || '—'}</div>
+        <div class="mod-grid-2" style="grid-template-columns: minmax(0,1.4fr) minmax(0,1fr); gap: 12px">
+          <div style="min-width:0">
+            ${chartSvg}
+            ${trailKeySvg}
+          </div>
+          <div style="min-width:0;display:flex;flex-direction:column">
+            ${crossedPanelHtml}
+            <div class="tbl-wrap" style="flex:1">
+              <table class="tbl-dense">
+                <thead><tr>
+                  <th data-glossary="RRG_ETF">ETF</th>
+                  <th data-glossary="RRG_Q">Q</th>
+                  <th data-glossary="RRG_RATIO">RATIO</th>
+                  <th data-glossary="RRG_MOM">MOM</th>
+                  <th data-glossary="RRG_WKS">WKS</th>
+                  <th data-glossary="RRG_CROSS">↺</th>
+                </tr></thead>
+                <tbody>${tableRows}</tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="chart-legend" style="margin-top:6px;font-size:11px">
+          <span style="color:#86efac"><b>${counts.Leading}</b> Leading</span>
+          <span style="color:#93c5fd"><b>${counts.Improving}</b> Improving</span>
+          <span style="color:#fde68a"><b>${counts.Weakening}</b> Weakening</span>
+          <span style="color:#fca5a5"><b>${counts.Lagging}</b> Lagging</span>
+        </div>
+      </div>
+    `;
+  }
+
   function renderRotationRibbon(data, days) {
     const N = days || 63;
     const rows = (data['50'] || []).slice(0, N).slice().reverse();  // chronological

@@ -658,12 +658,12 @@
       const setupsContent = `
         <div class="mod-grid-2">
           <div class="mod-panel">
-            <div class="mod-panel-title">TRADE SETUPS · ACTIVE <span class="mod-panel-sub">click row to preview chart below</span></div>
+            <div class="mod-panel-title">TRADE SETUPS · ACTIVE <span class="mod-panel-sub">click row to preview chart below · see How It Works tab for 2026-05-20 patch notes (A–E shipped, F queued 05-26)</span></div>
             <div class="tbl-wrap sig-tbl-wrap">
               <table class="tbl-dense">
                 <thead>
                   <tr>
-                    <th>TICKER</th><th>GD</th><th>PATTERN</th><th>DIR</th><th>TF</th>
+                    <th>TICKER</th><th>GD</th><th title="bos: cap raised 5→15 by Patch A 2026-05-20; shorts hard-blocked in BULL by Patch E. vcp: TP halved 3×→1.5× MM by Patch C; early_exit promoted to primary by Patch D. mom_top_decile: ATR stop 2.0×→1.5× by Patch B. See How It Works tab for full changelog.">PATTERN</th><th>DIR</th><th>TF</th>
                     <th>ENTRY</th><th>LAST</th><th>STOP</th><th>TGT</th>
                     <th>R:R</th><th>CONF</th><th>P&amp;L%</th>
                     <th class="num">SHARES</th><th class="num">POS $</th><th class="num">RISK $</th>
@@ -933,6 +933,10 @@
                 <span><b>SHARPE / MAX DD / HOLD</b> — live-only metrics</span>
                 <span><b>REGIME LOCK</b> — pattern only fires when current regime matches · <b>Q</b> quarantined · <b>BLOCK</b> fails PF gate</span>
               </span>
+              <span style="display:block;margin-top:0.35rem;padding-top:0.35rem;border-top:1px solid var(--border)">
+                <b style="color:var(--fg)">Today's patch effects on these stats (2026-05-20):</b>
+                BT N is unchanged by config patches — the 5-year sim doesn't re-run. <b>LIVE PF</b> for <b>bos</b> should rise as Patch E removes the 40 polluted regime_exit shorts (97.6% of all bos shorts ever). <b>vcp / cup_handle</b> LIVE stats reflect new exit behaviour from Patches C/D. <b>mom_top_decile</b> reflects tighter ATR stop from Patch B. Patch F (sizing 2% → 1%, ships 05-26) is direction-agnostic of PF/WR/EXPECT — those columns unaffected. For MCPT/FDR/PSR, treat pre-patch vs post-patch trades as distinct cohorts where composition shifted.
+              </span>
             </span>
           </div>
         </div>
@@ -1058,6 +1062,10 @@
                 <span><b>TREND</b> — recent win rate vs earlier period win rate</span>
               </span>
               &#128274; regime-locked — pattern only fires in its designated regime &bull; ACTIVE/INACTIVE badge shows current status &bull; ⚠ = grade was downgraded by regime context
+              <span style="display:block;margin-top:0.35rem;padding-top:0.35rem;border-top:1px solid var(--border);color:var(--fg-dim)">
+                <b style="color:var(--fg)">2026-05-20:</b>
+                Patch A (bos cap 5→15) will increase bos closed-trade count over coming days — Live PF / # column will move accordingly. Patch B/C/D affect vcp / cup_handle / mom_top_decile exit composition. Patch E removes BULL+short bos pollution from the live ledger. Patch F (queued 05-26, sizing 2%→1%) doesn't affect these columns — all PF/WR/Sharpe/decay are direction-agnostic of sizing. <b>pocket_pivot</b> is on track to auto-mothball Saturday 2026-05-23 (paper PF 0.0 over 6 trades — see How It Works tab).
+              </span>
             </span>
           </div>
         </div>
@@ -1451,7 +1459,7 @@
             _eqMode === 'alpha'
               ? `<b>Strategy α mode</b> — sums each closed trade&rsquo;s return % assuming equal allocation per signal, ignoring position sizing. Shows the raw edge of the strategy, not what your account actually earned. Switch to <b>Portfolio $</b> to see real account impact.`
               : `<b>Portfolio $ mode</b> — sizes each trade using your position sizer (account: <b>${fmtUsd(sizer.account)}</b> · method: <b>${escSig(sizer.method.replace(/_/g, ' '))}</b> · risk: <b>${sizer.riskPct}%/trade</b>${sizer.gradeTier && sizer.method !== 'half_kelly' ? ' · <b>grade tier on</b> (A 1.25× / B 1.0× / C 0.75× / D 0.5×)' : ''}) then compounds chronologically through all closed trades. Significantly smaller than Strategy α because Half Kelly allocates only ~2–3% per trade.`
-          }</span></div>
+          }<span style="display:block;margin-top:0.35rem;padding-top:0.35rem;border-top:1px solid var(--border);color:var(--fg-dim)"><b style="color:var(--fg)">Drawdown context (2026-05-20):</b> The latest peak-to-trough drawdown was <b>-$35,588</b> at $100K × 2% × grade-tier sizing. 19 A-grade breakouts contributed -$31,767 of that, hitting SL during a 4-day risk-off cluster — regime-driven, not signal-quality-driven. <b>Patch F (ships 2026-05-26)</b> halves base risk 2% → 1%; the same drawdown at the new sizing would have been ~-$12.7k. To preview now: drop Risk% to 1% in the sizer bar above. Patch E also stops BULL+short bos same-cycle pollution from showing up as -0.1% to -0.5% regime_exit dots going forward.</span></span></div>
         </div>
         <div class="mod-panel">
           <div class="mod-panel-title">OPEN TRADES · ${openTrades.length} active${openTotalPages > 1 ? ` · page ${openPage + 1}/${openTotalPages}` : ''}</div>
@@ -1518,6 +1526,32 @@
         </div>`;
       }).join('');
       const howContent = `
+        <div class="mod-panel">
+          <div class="mod-panel-title">RECENT CHANGES · 2026-05-20 patches A–E shipped · Patch F queued for 05-26</div>
+          <div class="sig-how-meth">
+            <div class="sig-how-meth-row">
+              <b>Patch A</b> — <b>bos</b> per-pattern cap raised 5 → 15 (was the silent throttle dropping ~85 raw signals/day).
+            </div>
+            <div class="sig-how-meth-row">
+              <b>Patch B</b> — <b>mom_top_decile</b> ATR stop multiplier 2.0× → 1.5× (tighter stops, ~+25% expected fire rate).
+            </div>
+            <div class="sig-how-meth-row">
+              <b>Patch C</b> — <b>vcp</b> take-profit scale 3× measured-move → 1.5× (4× was too ambitious — only 1/30 hit old TP).
+            </div>
+            <div class="sig-how-meth-row">
+              <b>Patch D</b> — <b>early_exit</b> promoted to primary outcome for <b>vcp</b> + <b>cup_handle</b> (time-gate 0.6× target_days).
+            </div>
+            <div class="sig-how-meth-row">
+              <b>Patch E</b> — BULL+short hard-blocked at entry, mirroring the exit-side <code>regime_exit</code> policy. Stops same-cycle "generate then immediately kill" pollution (97.6% of all bos shorts ever — 40/41 — had been closing as regime_exit before this).
+            </div>
+            <div class="sig-how-meth-row">
+              <b>Patch F (queued 2026-05-26)</b> — base risk per trade <b>2% → 1%</b> to align with Qullamaggie's published ceiling. Grade A effective sizing drops 2.5% → 1.25%. <span style="color:var(--fg-dim)">Today's $31.7k of $35.6k drawdown came from 19 Grade A breakouts at 2.5% sizing — at Patch F sizing the same cluster would have been -$12.7k.</span>
+            </div>
+            <div class="sig-how-meth-row">
+              <b>Drawdown drilldown</b> — Today's $35.6k Fix B drawdown was <b>regime-driven</b>, not signal-quality-driven. 19 A-grade breakouts hit SL during the 2026-05-15 risk-off cluster (SPY -1.20%, IWM -2.41%, VIX +6.78%). Patches A–D fix pattern mechanics; they don't address regime-cluster events. <code>regime.py</code> work is the right next lever for the 05-21–25 pre-work sprint.
+            </div>
+          </div>
+        </div>
         <div class="mod-panel">
           <div class="mod-panel-title">POSITION SIZING METHODS · what the sizer bar at top of SIG does</div>
           <div class="sig-how-meth">

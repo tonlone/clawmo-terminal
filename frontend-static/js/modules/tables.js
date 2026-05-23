@@ -1291,30 +1291,33 @@
                 · Congress (congress-trades.json).
      Sub-tab choice persists on pane.params.smyTab so Phase E deep-links work. */
   const SMY_TABS = [
-    { id: 'signals',  label: 'Signals' },
-    { id: 'insider',  label: 'Insider Trades' },
-    { id: 'congress', label: 'Congress Trades' },
-    { id: 'trump',    label: 'Politics: Trump' },
-    { id: 'moo',      label: 'Opening Auction' },
-    { id: 'moc',      label: 'Closing Auction' },
+    { id: 'signals',    label: 'Signals' },
+    { id: 'insider',    label: 'Insider Trades' },
+    { id: 'congress',   label: 'Congress Trades' },
+    { id: 'trump',      label: 'Politics: Trump' },
+    { id: 'hedgefunds', label: 'Hedge Funds' },
+    { id: 'moo',        label: 'Opening Auction' },
+    { id: 'moc',        label: 'Closing Auction' },
   ];
-  const INSIDER_URL  = 'https://stocks.clawmo.tech/data/insider-trades.json';
-  const CONGRESS_URL = 'https://stocks.clawmo.tech/data/congress-trades.json';
-  const MOC_URL      = 'https://stocks.clawmo.tech/data/moc.json';
-  const MOO_URL      = 'https://stocks.clawmo.tech/data/moo.json';
-  const TRUMP_URL    = 'https://stocks.clawmo.tech/data/politics-trump.json';
+  const INSIDER_URL    = 'https://stocks.clawmo.tech/data/insider-trades.json';
+  const CONGRESS_URL   = 'https://stocks.clawmo.tech/data/congress-trades.json';
+  const MOC_URL        = 'https://stocks.clawmo.tech/data/moc.json';
+  const MOO_URL        = 'https://stocks.clawmo.tech/data/moo.json';
+  const TRUMP_URL      = 'https://stocks.clawmo.tech/data/politics-trump.json';
+  const HEDGEFUNDS_URL = 'https://stocks.clawmo.tech/data/hedge-funds.json';
 
   async function renderSmartMoney(body, ctx) {
     body.innerHTML = `<div class="mod-loading">Loading smart money…</div>`;
     try {
       // Parallel fetch — full JSON has all tickers; fallback to signals-only
-      const [sig, ins, cg, moc, moo, tr] = await Promise.allSettled([
+      const [sig, ins, cg, moc, moo, tr, hf] = await Promise.allSettled([
         fetchJSON(`${BASE}/smart-money-full.json`).catch(() => fetchJSON(`${BASE}/smart-money.json`)),
         fetchJSON(INSIDER_URL).catch(() => null),
         fetchJSON(CONGRESS_URL).catch(() => null),
         fetchJSON(MOC_URL).catch(() => null),
         fetchJSON(MOO_URL).catch(() => null),
         fetchJSON(TRUMP_URL).catch(() => null),
+        fetchJSON(HEDGEFUNDS_URL).catch(() => null),
       ]);
       const sigData = sig.status === 'fulfilled' ? sig.value : null;
       const insData = ins.status === 'fulfilled' ? ins.value : null;
@@ -1322,14 +1325,15 @@
       const mocData = moc.status === 'fulfilled' ? moc.value : null;
       const mooData = moo.status === 'fulfilled' ? moo.value : null;
       const trData  = tr.status  === 'fulfilled' ? tr.value  : null;
+      const hfData  = hf.status  === 'fulfilled' ? hf.value  : null;
 
-      if (!sigData && !insData && !cgData && !mocData && !mooData && !trData) {
+      if (!sigData && !insData && !cgData && !mocData && !mooData && !trData && !hfData) {
         body.innerHTML = `<div class="mod-err">Failed to load smart-money data</div>`;
         return;
       }
 
       const initialTab = (ctx && ctx.params && ctx.params.smyTab) || 'signals';
-      body._smyData = { sig: sigData, ins: insData, cg: cgData, moc: mocData, moo: mooData, tr: trData };
+      body._smyData = { sig: sigData, ins: insData, cg: cgData, moc: mocData, moo: mooData, tr: trData, hf: hfData };
 
       body.innerHTML = `
         <div class="mod-head">
@@ -1370,9 +1374,10 @@
       case 'signals':  renderSmySignals(inner, d.sig);  break;
       case 'insider':  renderSmyInsider(inner, d.ins);  break;
       case 'congress': renderSmyCongress(inner, d.cg);  break;
-      case 'trump':    renderSmyTrump(inner, d.tr);     break;
-      case 'moo':      renderSmyAuction(inner, d.moo, 'MOO'); break;
-      case 'moc':      renderSmyMoc(inner, d.moc);      break;
+      case 'trump':      renderSmyTrump(inner, d.tr);     break;
+      case 'hedgefunds': renderSmyHedgeFunds(inner, d.hf); break;
+      case 'moo':        renderSmyAuction(inner, d.moo, 'MOO'); break;
+      case 'moc':        renderSmyMoc(inner, d.moc);      break;
       default:         inner.innerHTML = `<div class="mod-err">Unknown tab: ${tab}</div>`;
     }
     attachTickerClicks(inner);
@@ -2302,6 +2307,266 @@
     `;
 
     wireTrumpTables(inner, holdings, txns);
+  }
+
+  /* ── HEDGE FUNDS sub-tab ──────────────────────────────────
+     6 sources: 4 quarterly 13F + 2 daily Subversive ETFs (NANC/GOP).
+     Header strip: per-source chip with AUM + position count + Q-over-Q delta.
+     Main panel: unified holdings table with source filter chips. */
+  function renderSmyHedgeFunds(inner, d) {
+    if (!d) {
+      inner.innerHTML = '<div class="mod-loading">No hedge-fund data — run compute_hedge_funds.py</div>';
+      return;
+    }
+    const funds = d.funds || [];
+    const etfs = d.etfs || [];
+    const allSources = [...funds.map(f => ({ ...f, _kind: '13F' })),
+                        ...etfs.map(e => ({ ...e, _kind: 'ETF' }))];
+    const idx = d.holdings_by_ticker || {};
+
+    const tagColor = (tag) => ({
+      AI: '#a78bfa', Value: '#60a5fa', Contrarian: '#f87171', Growth: '#34d399',
+      Dem: '#3b82f6', GOP: '#ef4444',
+    })[tag] || '#9ca3af';
+
+    const fmtM = (n) => {
+      if (n == null || !isFinite(n)) return '—';
+      const a = Math.abs(n), s = n < 0 ? '-' : '';
+      if (a >= 1e9) return s + '$' + (a / 1e9).toFixed(2) + 'B';
+      if (a >= 1e6) return s + '$' + (a / 1e6).toFixed(1) + 'M';
+      if (a >= 1e3) return s + '$' + (a / 1e3).toFixed(1) + 'K';
+      return s + '$' + a.toFixed(0);
+    };
+
+    const shortKey = (k) => k.split('_').map(s => s[0].toUpperCase()).join('');
+
+    // Build per-ticker delta lookup
+    const tickerDeltas = {};
+    funds.forEach(f => {
+      const dl = f.deltas || {};
+      ['new', 'added', 'reduced', 'closed'].forEach(kind => {
+        (dl[kind] || []).forEach(p => {
+          if (!p.ticker) return;
+          tickerDeltas[p.ticker] = tickerDeltas[p.ticker] || { new: 0, added: 0, reduced: 0, closed: 0 };
+          tickerDeltas[p.ticker][kind]++;
+        });
+      });
+    });
+
+    // Source chips strip
+    const srcCards = allSources.map(s => {
+      const isETF = s._kind === 'ETF';
+      const tc = tagColor(s.tag);
+      const dl = s.deltas || {};
+      const deltaSum = !isETF
+        ? `<span class="num-up">+${(dl.new || []).length}</span> <span class="num-up">↑${(dl.added || []).length}</span> <span class="num-dn">↓${(dl.reduced || []).length}</span> <span class="num-dn">−${(dl.closed || []).length}</span>`
+        : `<span class="mono num-dim">${s.n_positions} pos</span>`;
+      const optBadge = (!isETF && (s.n_puts || s.n_calls))
+        ? `<span class="mono" style="color:#f87171;font-size:0.62rem;margin-left:4px">${s.n_puts}P/${s.n_calls}C</span>` : '';
+      return `<div class="acct-card hf-src-card" data-srckey="${s.key}" style="cursor:pointer;border-left:3px solid ${tc}">
+        <div class="acct-name" style="display:flex;justify-content:space-between;gap:4px">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${isETF ? s.ticker : shortKey(s.key)} · ${(s.manager || s.name).split(' ').slice(-1)[0]}</span>
+          <span class="mono" style="color:${tc};font-size:0.6rem">${s.tag}</span>
+        </div>
+        <div class="acct-val"><span class="mono">${fmtM(s.total_value_usd)}</span></div>
+        <div class="acct-meta" style="font-size:0.62rem">
+          <span class="mono">${s.n_positions}p${optBadge}</span> · ${deltaSum}
+        </div>
+        <div class="acct-meta" style="font-size:0.6rem;opacity:.55">
+          ${isETF ? 'daily · ' + (s.as_of || '—') : (s.period_of_report || '—')}
+        </div>
+      </div>`;
+    }).join('');
+
+    // Top-tickers panel rows (initially: ALL sources, sorted by total value, take top 200)
+    const allTickerRows = Object.entries(idx).map(([tk, info]) => ({
+      ticker: tk,
+      name: info.name,
+      total_value_usd: info.total_value_usd,
+      funds: info.funds || [],
+      etfs: info.etfs || [],
+      n_sources: (info.funds || []).length + (info.etfs || []).length,
+      delta: tickerDeltas[tk] || { new: 0, added: 0, reduced: 0, closed: 0 },
+    })).sort((a, b) => b.total_value_usd - a.total_value_usd);
+
+    inner.innerHTML = `
+      <div class="acct-strip" style="grid-template-columns:repeat(${allSources.length},1fr)">${srcCards}</div>
+
+      <div class="mod-panel" style="margin-top:8px">
+        <div class="mod-panel-title">
+          HOLDINGS · <span class="mono hf-tk-count">${allTickerRows.length}</span>
+          <span class="fin-stmt-toggles" style="margin-left:10px">
+            <button class="hld-cg-btn hf-flt-btn active" data-flt="all" type="button">ALL</button>
+            <button class="hld-cg-btn hf-flt-btn" data-flt="multi" type="button">≥2 SRC</button>
+            <button class="hld-cg-btn hf-flt-btn" data-flt="new" type="button">NEW</button>
+            <button class="hld-cg-btn hf-flt-btn" data-flt="closed" type="button">CLOSED</button>
+          </span>
+          <input type="search" class="hf-tk-search stk-tick-input" placeholder="filter ticker / issuer…" style="margin-left:8px;min-width:160px">
+          <span class="mono num-dim" style="margin-left:auto;font-size:0.62rem">click a fund card above to drill in · 13F lag ~45d</span>
+        </div>
+        <div class="tbl-wrap" style="max-height:calc(100vh - 360px);min-height:240px">
+          <table class="tbl-dense">
+            <thead><tr>
+              <th>Ticker</th><th>Issuer</th>
+              <th style="text-align:center"># Src</th>
+              <th>Held By</th>
+              <th style="text-align:right">Total $</th>
+              <th>Activity</th>
+            </tr></thead>
+            <tbody id="hf-tk-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="mod-panel hf-detail-panel" style="margin-top:8px;display:none">
+        <div class="mod-panel-title">
+          <span class="hf-detail-title">—</span>
+          <button class="hld-cg-btn hf-detail-close" type="button" style="margin-left:auto">CLOSE ✕</button>
+        </div>
+        <div class="tbl-wrap" style="max-height:360px">
+          <table class="tbl-dense">
+            <thead><tr>
+              <th>#</th><th>Ticker</th><th>Issuer</th>
+              <th style="text-align:right">$ Value</th>
+              <th style="text-align:right">Shares</th>
+              <th style="text-align:right">% Port</th>
+              <th style="text-align:center">P/C</th>
+            </tr></thead>
+            <tbody id="hf-detail-body"></tbody>
+          </table>
+        </div>
+        <div class="hf-deltas-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px"></div>
+      </div>
+    `;
+
+    const state = { filter: 'all', search: '' };
+
+    function renderTable() {
+      let rows = allTickerRows;
+      if (state.filter === 'multi') rows = rows.filter(r => r.n_sources >= 2);
+      if (state.filter === 'new') rows = rows.filter(r => r.delta.new > 0);
+      if (state.filter === 'closed') rows = rows.filter(r => r.delta.closed > 0);
+      if (state.search) {
+        const q = state.search.toLowerCase();
+        rows = rows.filter(r => r.ticker.toLowerCase().includes(q) || (r.name || '').toLowerCase().includes(q));
+      }
+      inner.querySelector('.hf-tk-count').textContent = rows.length;
+      const html = rows.slice(0, 300).map(r => {
+        const fundChips = r.funds.map(f => {
+          const tc = tagColor((funds.find(x => x.key === f.key) || {}).tag);
+          return `<span class="mono" style="background:${tc}22;color:${tc};padding:0 4px;border-radius:2px;font-size:0.6rem;margin-right:2px">${shortKey(f.key)}</span>`;
+        }).join('');
+        const etfChips = r.etfs.map(e => {
+          const tag = e.key === 'nanc' ? 'Dem' : 'GOP';
+          const tc = tagColor(tag);
+          return `<span class="mono" style="background:${tc}33;color:${tc};padding:0 4px;border-radius:2px;font-size:0.6rem;margin-right:2px">${e.key.toUpperCase()}</span>`;
+        }).join('');
+        const act = [];
+        if (r.delta.new) act.push(`<span class="num-up" style="font-size:0.6rem">N×${r.delta.new}</span>`);
+        if (r.delta.added) act.push(`<span class="num-up" style="font-size:0.6rem">↑${r.delta.added}</span>`);
+        if (r.delta.reduced) act.push(`<span class="num-dn" style="font-size:0.6rem">↓${r.delta.reduced}</span>`);
+        if (r.delta.closed) act.push(`<span class="num-dn" style="font-size:0.6rem">C×${r.delta.closed}</span>`);
+        return `<tr>
+          <td><span class="tick-link" data-ticker="${r.ticker}">${r.ticker}</span></td>
+          <td class="trunc-32" title="${(r.name || '').replace(/"/g, '&quot;')}">${(r.name || '').substring(0, 30)}</td>
+          <td style="text-align:center"><b>${r.n_sources}</b></td>
+          <td>${fundChips}${etfChips}</td>
+          <td class="mono" style="text-align:right">${fmtM(r.total_value_usd)}</td>
+          <td>${act.join(' ')}</td>
+        </tr>`;
+      }).join('');
+      inner.querySelector('#hf-tk-body').innerHTML = html || '<tr><td colspan="6" style="text-align:center;opacity:.6">no matches</td></tr>';
+      attachTickerClicks(inner);
+    }
+
+    function renderFundDetail(srckey) {
+      const src = allSources.find(s => s.key === srckey);
+      if (!src) return;
+      const positions = (src.top_holdings || []).slice();
+      // Need full positions — pull detail file lazily
+      if (!window._hfDetail) {
+        fetchJSON('https://stocks.clawmo.tech/data/hedge-funds-detail.json').then(dd => {
+          window._hfDetail = dd;
+          renderFundDetail(srckey);
+        }).catch(() => {});
+        return;
+      }
+      const detail = (window._hfDetail.funds || []).find(f => f.key === srckey) ||
+                     (window._hfDetail.etfs || []).find(f => f.key === srckey);
+      const fullPos = (detail && detail._full_positions) || positions;
+      const isETF = src._kind === 'ETF';
+      const sorted = [...fullPos].sort((a, b) => b.value_usd - a.value_usd);
+      const totVal = sorted.reduce((s, p) => s + p.value_usd, 0);
+      const bodyHtml = sorted.map((p, i) => {
+        const tk = p.ticker || '—';
+        const pc = (p.put_call && p.put_call.toLowerCase() !== 'long') ? `<span class="mono" style="color:${p.put_call.toLowerCase() === 'call' ? '#4ade80' : '#f87171'}">${p.put_call.toUpperCase()}</span>` : '';
+        const wt = isETF ? p.weight : (totVal ? p.value_usd / totVal : 0);
+        return `<tr>
+          <td class="num-dim">${i + 1}</td>
+          <td><span class="tick-link" data-ticker="${tk}">${tk}</span></td>
+          <td class="trunc-32">${(p.name || '').substring(0, 32)}</td>
+          <td class="mono" style="text-align:right">${fmtM(p.value_usd)}</td>
+          <td class="mono" style="text-align:right">${(p.shares || 0).toLocaleString()}</td>
+          <td class="mono" style="text-align:right">${(wt * 100).toFixed(2)}%</td>
+          <td style="text-align:center">${pc}</td>
+        </tr>`;
+      }).join('');
+      inner.querySelector('#hf-detail-body').innerHTML = bodyHtml;
+      inner.querySelector('.hf-detail-title').textContent =
+        (isETF ? src.ticker + ' · ' + src.name : src.name + ' — ' + src.manager) +
+        ' · ' + sorted.length + ' positions · ' + fmtM(totVal);
+
+      // Deltas grid (only for 13F)
+      const deltaGrid = inner.querySelector('.hf-deltas-grid');
+      if (!isETF && src.deltas) {
+        const dl = src.deltas;
+        const renderCol = (rows, label, color) => {
+          if (!rows || !rows.length) return `<div style="opacity:.4;font-size:0.65rem"><b>${label}</b><br>none</div>`;
+          const top = rows.slice(0, 8);
+          return `<div>
+            <div style="font-size:0.65rem;font-weight:700;color:${color};margin-bottom:3px">${label} (${rows.length})</div>
+            ${top.map(r => {
+              const tk = r.ticker || '—';
+              const pc = (r.put_call && r.put_call.toLowerCase() !== 'long') ? ` <span class="mono" style="color:${r.put_call.toLowerCase() === 'call' ? '#4ade80' : '#f87171'};font-size:0.55rem">${r.put_call}</span>` : '';
+              return `<div style="font-size:0.65rem;display:flex;justify-content:space-between;padding:1px 0">
+                <span><span class="tick-link" data-ticker="${tk}">${tk}</span>${pc}</span>
+                <span class="mono" style="color:${color}">${fmtM(Math.abs(r.delta_value))}</span>
+              </div>`;
+            }).join('')}
+          </div>`;
+        };
+        deltaGrid.innerHTML =
+          renderCol(dl.new, 'NEW', '#34d399') +
+          renderCol(dl.added, 'ADDED', '#34d399') +
+          renderCol(dl.reduced, 'REDUCED', '#f87171') +
+          renderCol(dl.closed, 'CLOSED', '#f87171');
+        deltaGrid.style.display = '';
+      } else {
+        deltaGrid.style.display = 'none';
+      }
+      inner.querySelector('.hf-detail-panel').style.display = '';
+      attachTickerClicks(inner);
+      inner.querySelector('.hf-detail-panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    // Wire interactions
+    renderTable();
+    inner.querySelectorAll('.hf-flt-btn').forEach(b => {
+      b.addEventListener('click', () => {
+        inner.querySelectorAll('.hf-flt-btn').forEach(x => x.classList.toggle('active', x === b));
+        state.filter = b.dataset.flt;
+        renderTable();
+      });
+    });
+    const ts = inner.querySelector('.hf-tk-search');
+    if (ts) ts.addEventListener('input', e => { state.search = e.target.value; renderTable(); });
+
+    inner.querySelectorAll('.hf-src-card').forEach(c => {
+      c.addEventListener('click', () => renderFundDetail(c.dataset.srckey));
+    });
+    inner.querySelector('.hf-detail-close').addEventListener('click', () => {
+      inner.querySelector('.hf-detail-panel').style.display = 'none';
+    });
   }
 
   function wireTrumpTables(inner, holdings, txns) {
