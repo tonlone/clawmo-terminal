@@ -813,6 +813,7 @@
     const main = body.querySelector('#gex-main');
     main.innerHTML = renderGexUniverseBody(d, stocks, totalPos, totalNeg, netMarket, posNegRatio, butterfly, bar);
     body._gexUniverse = d;
+    populateGexVixTerm(body);
     wireGexTable(body, 'pos', stocks.filter(s => s.net_gex > 0));
     wireGexTable(body, 'neg', stocks.filter(s => s.net_gex < 0));
     // Butterfly ticker click → detail view (table ticker clicks are wired
@@ -863,6 +864,16 @@
       `;
     }
 
+    // Short-gamma flashpoint: SPY dealers net short AND price pressing the call wall.
+    let flashLine = '';
+    const spyCwDist = (spy && spy.call_wall != null && spy.spot) ? (spy.call_wall - spy.spot) / spy.spot * 100 : null;
+    if (!isPos && spyCwDist != null && spyCwDist >= 0 && spyCwDist <= 3) {
+      flashLine = `
+        <div style="margin-top:6px;padding:6px 10px;border:1px solid rgba(248,113,113,0.5);border-radius:4px;background:rgba(248,113,113,0.08);font-size:11px;color:var(--fg-dim);line-height:1.5">
+          <b style="color:#f87171">⚠️ Gamma flashpoint:</b> SPY is short gamma with spot <b>${spyCwDist.toFixed(2)}% below its call wall</b> ($${spy.call_wall.toFixed(2)}). Forced dealer hedging can fuel a squeeze toward the wall, then snap into a sharp reversal — mechanical, not fundamental.
+        </div>`;
+    }
+
     return `
       <div class="gex-state-hero ${klass}">
         <div class="gex-state-headline">
@@ -874,13 +885,56 @@
           <span class="chip">UNIVERSE <span class="mono">${posPct}% POS / ${negPct}% NEG</span></span>
         </div>
         <div class="gex-state-narrative">${narrative}</div>
+        ${flashLine}
       </div>
     `;
+  }
+
+  // VIX term structure panel (index-level contango/backwardation). Fetched
+  // separately so a missing/late feed never blocks the GEX universe render.
+  async function populateGexVixTerm(body) {
+    const el = body.querySelector('#gex-vix-term');
+    if (!el) return;
+    let d;
+    try { d = await fetchJSON(`${BASE}/vix-term.json`); }
+    catch (e) { el.innerHTML = ''; return; }
+    if (!d || !d.points || !d.points.length) { el.innerHTML = ''; return; }
+
+    const col = d.state === 'BACKWARDATION' ? '#f87171' : d.state === 'FLAT' ? '#E6B84A' : '#4ade80';
+    const cls = d.state === 'BACKWARDATION' ? 'num-dn' : d.state === 'FLAT' ? 'num-warn' : 'num-up';
+
+    // Mini curve sparkline (dependency-free SVG).
+    const vals = d.points.map(p => p.value);
+    const mn = Math.min(...vals), mx = Math.max(...vals), rng = (mx - mn) || 1;
+    const W = 230, H = 48, padX = 10, padY = 9;
+    const step = vals.length > 1 ? (W - 2 * padX) / (vals.length - 1) : 0;
+    const xy = vals.map((v, i) => [padX + i * step, H - padY - ((v - mn) / rng) * (H - 2 * padY)]);
+    let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="font-family:var(--font-mono)">`;
+    svg += `<polyline points="${xy.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ')}" fill="none" stroke="${col}" stroke-width="1.6"/>`;
+    xy.forEach(p => { svg += `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.4" fill="${col}"/>`; });
+    svg += '</svg>';
+
+    const chips = d.points.map(p => `<span class="chip">${escapeGex(p.label)} <span class="mono">${p.value.toFixed(2)}</span></span>`).join('');
+    const slopeTxt = d.slope_pct != null ? `${d.slope_pct >= 0 ? '+' : ''}${d.slope_pct.toFixed(1)}% (6M vs 9D)` : '—';
+    const tip = 'VIX term structure across expiries. Contango (upward slope, front<back) = calm/complacent. Backwardation (inverted, front>back) = stress/panic, often a capitulation tell. Gauge: VIX÷VIX3M — <0.95 contango, 0.95–1.0 flattening, >1.0 backwardation.';
+
+    el.innerHTML = `
+      <div class="mod-panel" title="${escapeGex(tip)}" style="cursor:help">
+        <div class="mod-panel-title">VIX TERM STRUCTURE · <span class="${cls}">${escapeGex(d.state_label || d.state)}</span> · VIX/VIX3M <span class="${cls}">${d.ratio_vix_vix3m != null ? d.ratio_vix_vix3m.toFixed(3) : '—'}</span> · slope ${escapeGex(slopeTxt)}</div>
+        <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:4px 8px 8px">
+          <div>${svg}</div>
+          <div style="display:flex;flex-direction:column;gap:5px">
+            <div style="display:flex;gap:6px;flex-wrap:wrap">${chips}</div>
+            <div style="font-size:11px;color:var(--fg-dim);line-height:1.5;max-width:600px">${escapeGex(d.interpretation || '')}</div>
+          </div>
+        </div>
+      </div>`;
   }
 
   function renderGexUniverseBody(d, stocks, totalPos, totalNeg, netMarket, posNegRatio, butterfly, bar) {
     return `
         ${renderGexMarketState(d)}
+        <div id="gex-vix-term"></div>
 
         <div class="acct-strip">
           <div class="acct-card"><div class="acct-name">TOTAL POSITIVE GEX</div><div class="acct-val"><span class="mono num-up">+${fmt.compact(totalPos)}</span></div><div class="acct-meta"><span>${d.positive_count} tickers dealer long</span></div></div>
@@ -1071,12 +1125,83 @@
     const svg = buildGexStrikeSvg(td);
     const greeksTable = buildGexGreeksTable(td);
 
-    const card = (label, val, cls, sub) => `
-      <div class="acct-card">
+    const card = (label, val, cls, sub, tip) => `
+      <div class="acct-card"${tip ? ` title="${escapeGex(tip)}" style="cursor:help"` : ''}>
         <div class="acct-name">${escapeGex(label)}</div>
         <div class="acct-val"><span class="mono ${cls || ''}">${val}</span></div>
         ${sub ? `<div class="acct-meta"><span>${escapeGex(sub)}</span></div>` : ''}
       </div>`;
+
+    // ── Expected Move + call-wall distance + flashpoint ──────────
+    const em = gexExpectedMove(td);
+    const cwDist = gexDistPct(td, kl.call_wall);
+    const shortGamma = td.net_gex != null && td.net_gex < 0;
+    const pressingWall = cwDist != null && cwDist >= 0 && cwDist <= 3;
+
+    let flashHtml = '';
+    if (shortGamma && pressingWall) {
+      flashHtml = `
+        <div class="mod-panel" style="border:1px solid rgba(248,113,113,0.5);border-left-width:4px;background:rgba(248,113,113,0.08);padding:8px 12px">
+          <div style="font-size:13px;font-weight:700;color:#f87171">⚠️ GAMMA FLASHPOINT — short gamma into the call wall</div>
+          <div style="font-size:11px;color:var(--fg-dim);line-height:1.5;margin-top:4px">
+            Dealers <b>net short gamma</b> (Net GEX $${fmtGexMag(td.net_gex)}) with spot just <b>${cwDist.toFixed(2)}% below the call wall</b> (${fmtPrice(kl.call_wall)}).
+            Forced hedging can accelerate a <b>squeeze toward the wall</b>, then snap into a <b>sharp reversal</b> if 0DTE momentum stalls. Mechanical, not fundamental.
+          </div>
+        </div>`;
+    }
+
+    let emHtml = '';
+    if (em) {
+      const cwInside = kl.call_wall != null && Math.abs(kl.call_wall - td.spot) <= em.em1d;
+      const pwInside = kl.put_wall != null && Math.abs(kl.put_wall - td.spot) <= em.em1d;
+      let cwCls = '', cwNote = '';
+      if (cwDist != null) {
+        if (cwDist >= 0 && cwDist <= 1)      { cwCls = 'num-dn';   cwNote = 'pressing wall — squeeze risk'; }
+        else if (cwDist >= 0 && cwDist <= 3) { cwCls = 'num-warn'; cwNote = 'approaching wall'; }
+        else if (cwDist < 0)                 { cwCls = 'num-up';   cwNote = 'spot above call wall'; }
+        else                                  { cwNote = 'room below wall'; }
+      }
+      const wvE = (cwInside ? 'CW inside 1σ' : 'CW outside 1σ') + ' · ' + (pwInside ? 'PW inside 1σ' : 'PW outside 1σ');
+      const tipEM   = 'Expected Move = spot × IV ÷ √252, using the chain’s average implied volatility. The ±1 standard-deviation move the options market prices for one trading session (~68% of outcomes land inside it).';
+      const tip1w   = '1-week Expected Move = 1-day EM × √5 (five trading days). The ±1σ band priced over the coming week.';
+      const tipBand = 'The ±1σ price band for one session — roughly 2-in-3 odds the close lands inside it.';
+      const tipSafe = 'Margin-of-safety strikes. Selling premium 1.5–2.0σ outside the expected move keeps short strikes beyond the move the market is pricing.';
+      const tipCW   = 'Distance from spot to the call wall. Small positive = price pressing resistance (dealer hedging can fuel a squeeze toward the wall, then reverse). Negative = spot already above the wall.';
+      const tipWvE  = 'Whether the gamma walls sit inside the 1σ expected move. A wall inside 1σ means the market is pricing a move big enough to reach it in a single day — expect strong pin / magnet interaction.';
+      emHtml = `
+        <div class="acct-strip" style="grid-template-columns:repeat(4,1fr);margin-top:6px">
+          ${card('1-DAY EM',  '±$' + em.em1d.toFixed(2), 'num-cyan', '±' + em.em1dPct.toFixed(2) + '% (1σ)', tipEM)}
+          ${card('1-WEEK EM', '±$' + em.em1w.toFixed(2), 'num-cyan', '±' + em.em1wPct.toFixed(2) + '% (1σ)', tip1w)}
+          ${card('1σ RANGE',  fmtPrice(em.dn1) + ' – ' + fmtPrice(em.up1), '', '~68% of sessions', tipBand)}
+          ${card('SAFETY 1.5σ/2σ', fmtPrice(em.dn15) + '/' + fmtPrice(em.up15), '', '2σ: ' + fmtPrice(em.dn2) + '/' + fmtPrice(em.up2), tipSafe)}
+        </div>
+        <div class="acct-strip" style="grid-template-columns:repeat(2,1fr);margin-top:6px">
+          ${card('DIST TO CALL WALL', cwDist != null ? (cwDist >= 0 ? '+' : '') + cwDist.toFixed(2) + '%' : '—', cwCls, cwNote, tipCW)}
+          ${card('WALLS vs EM', wvE, (cwInside || pwInside) ? 'num-warn' : '', '1σ = ±' + em.em1dPct.toFixed(2) + '%', tipWvE)}
+        </div>`;
+    }
+
+    // ── Structure zone: price vs the gamma walls (in range / desert / stale) ──
+    const st = td.structure;
+    let structHtml = '';
+    if (st && st.zone && st.zone !== 'unknown') {
+      const sLabel = st.structure_stale ? 'STALE STRUCTURE'
+        : (st.zone === 'above_call_wall' && st.desert) ? '↑ GAMMA DESERT'
+        : (st.zone === 'below_put_wall' && st.desert) ? '↓ GAMMA DESERT'
+        : 'IN RANGE';
+      const sColor = st.structure_stale ? '#94a3b8'
+        : (st.desert ? '#fbbf24' : '#60a5fa');
+      const sTip = st.structure_stale
+        ? 'Price has gapped far beyond the whole options profile (e.g. earnings) — the call/put walls above predate the gap and are NOT usable levels until structure rebuilds.'
+        : st.desert
+          ? 'Price has run past a wall into open space — no nearby dealer gamma to pin it. Expect momentum over mean-reversion; the breached wall is no longer support/resistance.'
+          : 'Price sits between the put wall and call wall — those walls tend to act as support/resistance (dealers hedge against moves toward them).';
+      structHtml = `
+        <div class="mod-panel" style="border-left:4px solid ${sColor};background:${sColor}14;padding:6px 12px" title="${escapeGex(sTip)}">
+          <span style="font-size:12px;font-weight:700;color:${sColor}">STRUCTURE · ${sLabel}</span>
+          <span style="font-size:11px;color:var(--fg-dim);margin-left:8px">${escapeGex(st.label || '')}</span>
+        </div>`;
+    }
 
     return `
       <div class="mod-panel" style="padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:12px">
@@ -1090,6 +1215,8 @@
           <button class="gex-back-btn" type="button" style="background:transparent;border:1px solid var(--border);color:var(--fg);border-radius:3px;padding:3px 10px;cursor:pointer">← back to universe</button>
         </div>
       </div>
+
+      ${flashHtml}
 
       <div class="acct-strip" style="grid-template-columns:repeat(4,1fr)">
         ${card('NET GEX',   '$' + fmtGexMag(td.net_gex),            netCls, td.regime_label || '')}
@@ -1119,6 +1246,8 @@
         ${card('MAX GAMMA',    fmtPrice(kl.max_gamma),    '',         'Largest |GEX|')}
         ${card('GAMMA FLIP',   fmtPrice(kl.gamma_flip),   'num-warn', 'Neg→Pos transition')}
       </div>
+      ${structHtml}
+      ${emHtml}
       <div class="acct-strip" style="grid-template-columns:repeat(2,1fr);margin-top:6px">
         ${card('TOTAL VEGA',  '$' + fmtGexMag(gs.total_vega),              '', 'P&L per 1% IV move')}
         ${card('TOTAL THETA', '$' + fmtGexMag(gs.total_theta) + '/day',    'num-dn', 'Time decay cost')}
@@ -1134,11 +1263,31 @@
           <span><span style="display:inline-block;width:10px;height:2px;background:#4ade80;margin-right:3px;vertical-align:middle"></span>Call Wall</span>
           <span><span style="display:inline-block;width:10px;height:2px;background:#f87171;margin-right:3px;vertical-align:middle"></span>Put Wall</span>
           <span><span style="display:inline-block;width:10px;height:2px;background:#fbbf24;margin-right:3px;vertical-align:middle"></span>Gamma Flip</span>
+          <span><span style="display:inline-block;width:10px;height:2px;background:#22d3ee;margin-right:3px;vertical-align:middle"></span>±1σ Exp. Move</span>
         </div>
       </div>
 
       ${greeksTable}
     `;
+  }
+
+  // Expected Move = spot × IV ÷ √252 (1σ for one trading session); 1-week = ×√5.
+  function gexExpectedMove(td) {
+    if (!td || td.spot == null || td.avg_iv == null || td.spot <= 0) return null;
+    const iv = td.avg_iv / 100;
+    const em1d = td.spot * iv / Math.sqrt(252);
+    const em1w = em1d * Math.sqrt(5);
+    return {
+      em1d, em1w,
+      em1dPct: em1d / td.spot * 100, em1wPct: em1w / td.spot * 100,
+      dn1: td.spot - em1d, up1: td.spot + em1d,
+      dn15: td.spot - 1.5 * em1d, up15: td.spot + 1.5 * em1d,
+      dn2: td.spot - 2 * em1d, up2: td.spot + 2 * em1d
+    };
+  }
+  function gexDistPct(td, level) {
+    if (level == null || td.spot == null || td.spot <= 0) return null;
+    return (level - td.spot) / td.spot * 100;
   }
 
   function buildGexStrikeSvg(td) {
@@ -1223,6 +1372,19 @@
     if (spotX != null) {
       svg += `<line x1="${spotX}" y1="${padT}" x2="${spotX}" y2="${H - padB}" stroke="#e6edf3" stroke-width="1.5" stroke-dasharray="4 3"/>`;
       svg += `<text x="${spotX}" y="${padT - 4}" fill="#e6edf3" text-anchor="middle" font-size="10" font-weight="600">Spot $${td.spot.toFixed(2)}</text>`;
+    }
+    // Expected Move ±1σ (1-day) — cyan dashed band edges
+    const emv = gexExpectedMove(td);
+    if (emv) {
+      const emUpX = priceToX(emv.up1), emDnX = priceToX(emv.dn1);
+      if (emUpX != null) {
+        svg += `<line x1="${emUpX}" y1="${padT}" x2="${emUpX}" y2="${H - padB}" stroke="#22d3ee" stroke-width="1" stroke-dasharray="2 3" opacity="0.65"/>`;
+        svg += `<text x="${emUpX + 3}" y="${H - padB - 4}" fill="#22d3ee" font-size="8" font-weight="600">+1σ</text>`;
+      }
+      if (emDnX != null) {
+        svg += `<line x1="${emDnX}" y1="${padT}" x2="${emDnX}" y2="${H - padB}" stroke="#22d3ee" stroke-width="1" stroke-dasharray="2 3" opacity="0.65"/>`;
+        svg += `<text x="${emDnX + 3}" y="${H - padB - 4}" fill="#22d3ee" font-size="8" font-weight="600">−1σ</text>`;
+      }
     }
     svg += '</svg>';
     return svg;
@@ -2759,9 +2921,101 @@
     });
   }
 
+  /* ── Daily Brief — post-close digest (reads daily-brief.json) ──── */
+  async function renderDailyBrief(body, ctx) {
+    body.innerHTML = `<div class="mod-loading">Loading daily brief…</div>`;
+    let b;
+    try { b = await fetchJSON(`${BASE}/daily-brief.json`); }
+    catch (e) { body.innerHTML = `<div class="mod-err">No brief available — ${escapeGex(e.message)}</div>`; return; }
+
+    const n = (x, d) => x == null ? '—' : Number(x).toFixed(d == null ? 2 : d);
+    const sg = (x, d) => (x >= 0 ? '+' : '') + n(x, d);
+    const etStamp = (iso) => {
+      try {
+        return new Date(iso).toLocaleString('en-CA', { timeZone: 'America/New_York',
+          year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
+          .replace(', ', ' ') + ' ET';
+      } catch (e) { return (iso || '').slice(0, 16).replace('T', ' ') + 'Z'; }
+    };
+    const c = (label, val, cls, sub) => `
+      <div class="acct-card"><div class="acct-name">${escapeGex(label)}</div>
+      <div class="acct-val"><span class="mono ${cls || ''}">${val}</span></div>
+      ${sub ? `<div class="acct-meta"><span>${escapeGex(sub)}</span></div>` : ''}</div>`;
+    const wcol = { high: '#f87171', med: '#E6B84A', change: '#60a5fa', info: 'var(--fg-dim)' };
+
+    const r = b.regime || {}, sgn = b.signals || {}, ct = sgn.closed_today || {};
+    const g = b.gex || {}, vt = g.vix_term || {}, rec = b.recession || {}, sm = b.smart_money || {};
+    const rot = b.rotation || [];
+    const leaders = rot.filter(x => x.quadrant === 'Leading').map(x => x.etf);
+    const changes = rot.filter(x => x.changed);
+
+    let H = `
+      <div class="mod-panel" style="padding:8px 12px">
+        <span class="mono" style="font-size:15px;font-weight:700">📋 DAILY BRIEF</span>
+        <span style="color:var(--fg-dim);margin-left:8px">${escapeGex(b.as_of)} close · ${escapeGex(etStamp(b.generated_at))}</span>
+      </div>`;
+
+    if (b.summary) H += `<div class="mod-panel" style="border-left:3px solid #60a5fa;font-size:13px;line-height:1.55">${escapeGex(b.summary)}</div>`;
+
+    // Watch
+    H += `<div class="mod-panel"><div class="mod-panel-title">TOP THINGS TO WATCH</div><div style="display:flex;flex-direction:column;gap:5px;padding:4px 8px 8px">`;
+    if (!b.watch || !b.watch.length) H += `<div style="color:var(--fg-dim);font-size:12px">Quiet day — no flags.</div>`;
+    else b.watch.forEach(x => { H += `<div style="border-left:3px solid ${wcol[x.level] || 'var(--fg-dim)'};padding:3px 9px;font-size:12px;line-height:1.45">${escapeGex(x.text)}</div>`; });
+    H += `</div></div>`;
+
+    // Regime strip
+    H += `<div class="acct-strip" style="grid-template-columns:repeat(5,1fr)">
+      ${c('REGIME', (r.regime || '—') + (r.score != null ? ' ' + r.score + '/4' : ''), r.regime === 'BULL' ? 'num-up' : 'num-dn', 'RSI ' + n(r.rsi, 1))}
+      ${c('SPX', n(r.price), '', 'SMA50 ' + n(r.sma50, 0))}
+      ${c('KILL SWITCH', r.kill_switch_active ? 'ARMED' : 'off', r.kill_switch_active ? 'num-dn' : 'num-up', '20d DD $' + n(r.drawdown_20d, 0))}
+      ${c('POSITIONS', r.positions != null ? r.positions : '—', '', (r.net_direction || '') + ' · corr ' + n(r.avg_correlation, 2))}
+      ${c('RECESSION', rec.composite != null ? rec.composite : '—', '', rec.regime || '')}
+    </div>`;
+
+    // Signals
+    H += `<div class="mod-panel"><div class="mod-panel-title">SIGNALS · closed ${ct.count || 0} (${ct.winners || 0}W) avg <span class="${(ct.avg_return||0)>=0?'num-up':'num-dn'}">${sg(ct.avg_return)}%</span> · open ${sgn.open_count != null ? sgn.open_count : '—'} · new ${(sgn.new_setups||[]).length}</div>`;
+    if (ct.items && ct.items.length) {
+      H += `<table class="tbl-dense" style="width:100%;font-size:11px"><thead><tr><th>Ticker</th><th>Pattern</th><th style="text-align:right">Ret</th><th>Outcome</th></tr></thead><tbody>`;
+      ct.items.slice(0, 12).forEach(t => {
+        H += `<tr><td class="mono">${escapeGex(t.ticker)}</td><td style="color:var(--fg-dim)">${escapeGex(t.pattern)}</td><td style="text-align:right" class="${(t.return_pct||0)>=0?'num-up':'num-dn'}">${sg(t.return_pct)}%</td><td style="color:var(--fg-dim)">${escapeGex(t.outcome)}</td></tr>`;
+      });
+      H += `</tbody></table>`;
+    }
+    if (sgn.new_setups && sgn.new_setups.length) {
+      H += `<div class="mod-panel-title" style="margin-top:6px">NEW SETUPS</div><table class="tbl-dense" style="width:100%;font-size:11px"><thead><tr><th>Ticker</th><th>Pattern</th><th style="text-align:right">Entry</th><th style="text-align:right">Tgt</th><th style="text-align:right">Stop</th><th style="text-align:right">R:R</th></tr></thead><tbody>`;
+      sgn.new_setups.forEach(s => {
+        H += `<tr><td class="mono">${escapeGex(s.ticker)}</td><td style="color:var(--fg-dim)">${escapeGex(s.pattern)}</td><td style="text-align:right">${n(s.entry)}</td><td style="text-align:right" class="num-up">${n(s.target)}</td><td style="text-align:right" class="num-dn">${n(s.stop)}</td><td style="text-align:right">${s.rr != null ? s.rr : '—'}</td></tr>`;
+      });
+      H += `</tbody></table>`;
+    }
+    H += `</div>`;
+
+    // GEX
+    H += `<div class="acct-strip" style="grid-template-columns:repeat(5,1fr)">
+      ${c('MARKET GAMMA', (g.positive || 0) + ' + / ' + (g.negative || 0) + ' −', '', 'of ' + (g.total || 0))}
+      ${c('VIX TERM', vt.state || '—', vt.state === 'BACKWARDATION' ? 'num-dn' : vt.state === 'CONTANGO' ? 'num-up' : 'num-warn', 'VIX/VIX3M ' + n(vt.ratio_vix_vix3m, 3))}
+      ${(g.odte || []).map(o => c('0DTE ' + o.ticker, o.status || '—', '', 'pin ' + n(o.pin, 0))).join('')}
+    </div>`;
+    if (g.flashpoints && g.flashpoints.length) {
+      H += `<div class="mod-panel" style="font-size:11px"><b class="num-dn">Flashpoints (${g.flashpoints.length}):</b> ${g.flashpoints.map(x => escapeGex(x.ticker) + '(' + sg(x.cw_dist, 1) + '%)').join(', ')}`;
+      if (g.iv_high && g.iv_high.length) H += `<br><b>IV≥90:</b> ${g.iv_high.map(x => escapeGex(x.ticker) + '(' + n(x.iv_rank, 0) + ')').join(', ')}`;
+      H += `</div>`;
+    }
+
+    // Rotation + smart money + bonds
+    H += `<div class="mod-panel" style="font-size:11px"><b>Sector leaders:</b> <span class="num-up">${leaders.join(', ') || '—'}</span>`;
+    if (changes.length) H += `<br><b>Rotation changes:</b> ${changes.map(x => escapeGex(x.etf) + ' ' + escapeGex(x.prev_quadrant) + '→' + escapeGex(x.quadrant)).join(' · ')}`;
+    H += `<br><b>MOC buy:</b> <span class="num-up">${(sm.moc_buy || []).join(', ') || '—'}</span> · <b>sell:</b> <span class="num-dn">${(sm.moc_sell || []).join(', ') || '—'}</span>`;
+    if (b.bonds && b.bonds.length) H += `<br><b>Rates:</b> ${b.bonds.map(x => escapeGex(x.label) + ' ' + n(x.value, 2) + '% (' + sg(x.change_bps, 1) + 'bp)').join(' · ')}`;
+    H += `</div>`;
+
+    body.innerHTML = H;
+  }
+
   window.OC_MODULES = window.OC_MODULES || {};
   window.OC_MODULES['screener']    = { render: renderScreener };
   window.OC_MODULES['sctr']        = { render: renderSCTR };
   window.OC_MODULES['gex']         = { render: renderGEX };
   window.OC_MODULES['smart-money'] = { render: renderSmartMoney };
+  window.OC_MODULES['daily-brief'] = { render: renderDailyBrief };
 })();

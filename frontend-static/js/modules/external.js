@@ -543,7 +543,7 @@
       const volSeries = d.volume_series || [];
       const sigSeries = d.signal_series || {};
       const streaks = d.silence_streaks || [];
-      const posts = d.recent_posts || [];
+      const posts = (d.recent_posts || []).filter(p => (p.text || '').trim().length > 0);
 
       const riskCls = r.level && /high/i.test(r.level) ? 'num-dn'
                     : r.level && /low/i.test(r.level) ? 'num-up' : 'num-warn';
@@ -596,10 +596,10 @@
       // Posting-time heatmap
       const heatmap = buildTrumpHeatmap(d.hourly_heatmap);
 
-      // Silence streaks (>=8h)
-      const streakRows = streaks.slice(0, 12).map(s => {
-        const start = s.start ? new Date(s.start).toISOString().slice(0, 16).replace('T', ' ') : '—';
-        const end = s.end ? new Date(s.end).toISOString().slice(0, 16).replace('T', ' ') : '—';
+      // Silence streaks (>=8h) — source is sorted oldest-first; show newest-first
+      const streakRows = streaks.slice(-12).reverse().map(s => {
+        const start = _etTimeDated(s.start) || '—';
+        const end = _etTimeDated(s.end) || '—';
         const hcls = s.hours > 24 ? 'num-dn' : s.hours > 12 ? 'num-warn' : '';
         return `<tr>
           <td class="mono">${escNws(start)}</td>
@@ -610,7 +610,7 @@
 
       // Recent posts (with real Truth Social URLs)
       const postRows = posts.slice(0, 10).map(p => {
-        const tm = p.created_at ? new Date(p.created_at).toISOString().slice(0, 16).replace('T', ' ') : '——';
+        const tm = _etTimeDated(p.created_at) || '——';
         const sigs = (p.signals || []).map(s => {
           const meta = sigMeta[s] || {};
           return `<span class="trp-sigchip">${meta.emoji || ''} ${escNws(s)}</span>`;
@@ -764,7 +764,7 @@
               <div class="chart-legend"><span class="chart-note">positive weight (red bar) = bearish for market; negative weight (green) = bullish (deals/negotiation); zero = neutral. Wyckoff rule fires when MARKET_BRAG count is high alongside elevated total volume.</span></div>
             </div>
             <div class="mod-panel">
-              <div class="mod-panel-title">SILENCE STREAKS · gaps &gt; 8 hours · 60d window</div>
+              <div class="mod-panel-title">SILENCE STREAKS · gaps &gt; 8 hours · 60d window · ET</div>
               <div class="tbl-wrap"><table class="tbl-dense">
                 <thead><tr><th>START (UTC)</th><th>END (UTC)</th><th class="num">DURATION</th></tr></thead>
                 <tbody>${streakRows || '<tr><td colspan="3" class="empty">no significant gaps</td></tr>'}</tbody>
@@ -774,7 +774,7 @@
           </div>
 
           <div class="mod-panel">
-            <div class="mod-panel-title">RECENT POSTS · ${posts.length} most recent · with signal tags</div>
+            <div class="mod-panel-title">RECENT POSTS · ${posts.length} most recent · ET · with signal tags</div>
             ${postRows}
           </div>
 

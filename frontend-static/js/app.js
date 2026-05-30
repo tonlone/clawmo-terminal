@@ -6,6 +6,7 @@
 
   /* ── Module registry ──────────────────────────────────────── */
   const MODULES = [
+    { id: 'daily-brief',    code: 'BRF', fkey: null, label: 'Daily Brief',   labelCN: '每日簡報', group: 'Core',     src: 'stocks.clawmo.tech/daily-brief.html', pdfExportable: false },
     { id: 'stock-analysis', code: 'EQ',  fkey: 1,  label: 'Stock Analysis', labelCN: '股票分析', group: 'Core',     src: 'stocks.clawmo.tech', pdfExportable: true },
     { id: 'financials',     code: 'FIN', fkey: 2,  label: 'Financials',    labelCN: '財務深度',  group: 'Core',     src: 'stocks.clawmo.tech', pdfExportable: true },
     { id: 'holdings',       code: 'HLD', fkey: 3,  label: 'Holdings',      labelCN: '機構持股',  group: 'Core',     src: 'stocks.clawmo.tech', pdfExportable: true },
@@ -39,23 +40,15 @@
   // Expose registry for i18n helpers (OC_TITLE / OC_RAIL_LABEL)
   window.OC_MODULES_META = MODULE_BY_ID;
 
-  /* Watchlist for tape + palette ticker actions */
+  /* Palette watchlist (search/quick-action targets). Tape now sources movers.json,
+     not this list — see renderTape below. */
   const WATCHLIST = [
     { sym: 'SPY',  src: 'stocks.clawmo.tech' },
     { sym: 'QQQ',  src: 'stocks.clawmo.tech' },
-    { sym: 'NVDA', src: 'stocks.clawmo.tech' },
-    { sym: 'TSLA', src: 'stocks.clawmo.tech' },
-    { sym: 'GOOGL',src: 'stocks.clawmo.tech' },
-    { sym: 'AAPL', src: 'stocks.clawmo.tech' },
-    { sym: 'MSFT', src: 'stocks.clawmo.tech' },
-    { sym: 'META', src: 'stocks.clawmo.tech' },
-    { sym: 'AMZN', src: 'stocks.clawmo.tech' },
+    { sym: 'IWM',  src: 'stocks.clawmo.tech' },
     { sym: 'BTC',  src: 'stocks.clawmo.tech' },
     { sym: 'ETH',  src: 'stocks.clawmo.tech' },
     { sym: 'SOL',  src: 'stocks.clawmo.tech' },
-    { sym: 'IBIT', src: 'stocks.clawmo.tech' },
-    { sym: 'MARA', src: 'stocks.clawmo.tech' },
-    { sym: 'BMNR', src: 'stocks.clawmo.tech' },
   ];
 
   /* ── State ───────────────────────────────────────────────── */
@@ -857,45 +850,68 @@
   }
 
   /* ── Ticker tape ─────────────────────────────────────────── */
-  const PRICES_URL = 'https://stocks.clawmo.tech/api/signals/last-prices';
+  /* Tape layout: [SPY · QQQ · IWM]  [▲ top 10 gainers]  [▼ top 10 losers]  [BTC · ETH · SOL]
+     Universe = SPY ∪ QQQ constituents (515 stocks). No portfolio names. */
+  const MOVERS_URL = 'https://stocks.clawmo.tech/data/movers.json';
   const CRYPTO_URL = 'https://stocks.clawmo.tech/data/crypto.json';
+  const CRYPTO_SHOW = ['BTC', 'ETH', 'SOL'];
 
-  function tapeItem(sym, price, chg) {
+  function tapeItem(sym, price, chg, marker) {
     const cls = chg == null ? 'chg-flat' : chg > 0 ? 'chg-up' : chg < 0 ? 'chg-dn' : 'chg-flat';
     const priceStr = price == null ? '———' :
       price >= 1000 ? price.toFixed(0) :
       price < 1 ? price.toFixed(4) :
       price.toFixed(2);
     const chgStr = chg == null ? '' : ' <span class="' + cls + '">' + (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%</span>';
-    return `<span><span class="sym">${sym}</span> <span class="mono">${priceStr}</span>${chgStr}</span>`;
+    const prefix = marker ? '<span class="' + cls + '" style="margin-right:4px">' + marker + '</span>' : '';
+    return `<span>${prefix}<span class="sym">${sym}</span> <span class="mono">${priceStr}</span>${chgStr}</span>`;
+  }
+
+  function tapeLabel(text) {
+    return `<span style="opacity:0.55;letter-spacing:0.08em;font-size:0.78em">${text}</span>`;
   }
 
   async function renderTape() {
     const tape = document.getElementById('tape');
-    // initial skeleton so there's something to scroll
-    const skeleton = () => WATCHLIST.map(w => tapeItem(w.sym, null, null)).join('');
+    const skeleton = () => Array.from({ length: 23 }, () => tapeItem('—', null, null)).join('');
     tape.innerHTML = skeleton() + skeleton();
 
     try {
       const fetchJSON = window.OC_DATA && window.OC_DATA.fetchJSON;
       if (!fetchJSON) return;
-      const [prices, crypto] = await Promise.all([
-        fetchJSON(PRICES_URL, { ttl: 2 * 60 * 1000 }).catch(() => ({})),
+      const [movers, crypto] = await Promise.all([
+        fetchJSON(MOVERS_URL, { ttl: 2 * 60 * 1000 }).catch(() => null),
         fetchJSON(CRYPTO_URL, { ttl: 2 * 60 * 1000 }).catch(() => ({ top_coins: [] })),
       ]);
 
       const cryptoBy = {};
-      (crypto.top_coins || []).forEach(c => {
+      (crypto && crypto.top_coins || []).forEach(c => {
         if (c && c.symbol) cryptoBy[String(c.symbol).toUpperCase()] = c;
       });
 
-      const cells = WATCHLIST.map(w => {
-        const s = (prices || {})[w.sym];
-        const c = cryptoBy[w.sym];
-        if (c) return tapeItem(w.sym, c.price, c.change_24h);
-        if (s && typeof s.price === 'number') return tapeItem(w.sym, s.price, s.change_pct);
-        return tapeItem(w.sym, null, null);
-      }).join('');
+      const parts = [];
+      // Headline strip: ETFs (SPY/QQQ/IWM) + macro indicators (DXY/TNX/VIX/OIL).
+      // Fall back to legacy .etfs field if .headline is absent.
+      const headline = (movers && movers.headline) || (movers && movers.etfs) || [];
+      headline.forEach(e => parts.push(tapeItem(e.ticker, e.price, e.change_pct)));
+      if (movers && movers.gainers && movers.gainers.length) {
+        parts.push(tapeLabel('▲ TOP GAINERS'));
+        movers.gainers.forEach(g => parts.push(tapeItem(g.ticker, g.price, g.change_pct, '▲')));
+      }
+      if (movers && movers.losers && movers.losers.length) {
+        parts.push(tapeLabel('▼ TOP LOSERS'));
+        movers.losers.forEach(l => parts.push(tapeItem(l.ticker, l.price, l.change_pct, '▼')));
+      }
+      if (Object.keys(cryptoBy).length) {
+        parts.push(tapeLabel('CRYPTO'));
+        CRYPTO_SHOW.forEach(sym => {
+          const c = cryptoBy[sym];
+          if (c) parts.push(tapeItem(sym, c.price, c.change_24h));
+        });
+      }
+
+      if (!parts.length) return;
+      const cells = parts.join('');
       tape.innerHTML = cells + cells;
     } catch (e) {
       // keep skeleton on failure

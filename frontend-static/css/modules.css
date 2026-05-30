@@ -352,6 +352,7 @@
 .num-dn       { color: var(--pnl-dn); }
 .num-dn-soft  { color: color-mix(in srgb, var(--pnl-dn) 60%, var(--fg-dim)); }
 .num-warn     { color: #E6B84A; }
+.num-cyan     { color: #22d3ee; }
 /* Override .tbl-dense td { color: var(--fg) } which has higher specificity (0,1,1) */
 .tbl-dense td.num-up, .tbl-dense td.num-up-soft { color: var(--pnl-up); }
 .tbl-dense td.num-dn, .tbl-dense td.num-dn-soft { color: var(--pnl-dn); }

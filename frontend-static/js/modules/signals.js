@@ -7,6 +7,7 @@
   const SCORECARD_URL = 'https://stocks.clawmo.tech/data/weekly-scorecard.json';
   const SUMMARY_URL = 'https://stocks.clawmo.tech/data/signals-summary.json';
   const PLAYBOOK_URL = 'https://stocks.clawmo.tech/data/pattern-playbook.json';
+  const ANALYST_URL = 'https://stocks.clawmo.tech/data/analyst-signals.json';
   const CHART_URL = (t) => `https://stocks.clawmo.tech/api/signals/chart/${encodeURIComponent(t)}?days=90`;
   const HIST_URL  = (t) => `https://stocks.clawmo.tech/api/signals/history/${encodeURIComponent(t)}?days=90`;
 
@@ -317,6 +318,46 @@
 
   function escSig(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
+  // Pretty pattern labels — mirrors signals.html PATTERN_LABELS. Fallback title-cases the raw signal_type.
+  const PATTERN_LABELS = {
+    'vcp': 'VCP', 'cup_handle': 'Cup & Handle', 'bos': 'Break of Structure',
+    'golden_cross': 'Golden Cross', 'death_cross': 'Death Cross',
+    'pocket_pivot': 'Pocket Pivot', 'darvas_box': 'Darvas Box',
+    'trend_pullback': 'Trend Pullback', 'liquidity_sweep': 'Liquidity Sweep',
+    'asc_triangle': 'Asc Triangle', 'desc_triangle': 'Desc Triangle',
+    'range_breakout': 'Range Break', 'rsi_ma_divergence': 'RSI/MA Divergence',
+    'adam_eve_dbottom': 'Adam & Eve Bottom', 'adam_eve_dtop': 'Adam & Eve Top',
+    'ibs_oversold_pullback': 'IBS Pullback', 'mom_top_decile': 'Momentum Top 10%',
+    'pead_drift': 'PEAD Drift', 'value_top_decile': 'Value Top 10%',
+    'low_vol_top_decile': 'Low Vol Top 10%',
+    'episodic_pivot': 'Episodic Pivot', 'high_tight_flag': 'High Tight Flag',
+    'momentum_rest_entry': 'Momentum Rest',
+    'analyst_upgrade_drift': 'Analyst Upgrade Drift',
+    'target_upside_top_decile': 'Target Upside Top 10%',
+  };
+  function prettyPat(s) {
+    if (s == null || s === '') return '—';
+    if (PATTERN_LABELS[s]) return PATTERN_LABELS[s];
+    return escSig(String(s).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
+  }
+
+  // Outcome label/color — mirrors signals.html outcomeMap. 7 canonical outcomes from update-trade-status.py.
+  const OUTCOME_MAP = {
+    'tp_hit':          { label: 'Take Profit',     color: 'var(--up, #4ade80)'   },
+    'sl_hit':          { label: 'Stop Loss',       color: 'var(--dn, #f87171)'   },
+    'trail_stop':      { label: 'Trail Stop',      color: '#22d3ee'              },
+    'early_exit':      { label: 'Early Exit',      color: '#60a5fa'              },
+    'expired':         { label: 'Expired',         color: '#fbbf24'              },
+    'regime_exit':     { label: 'Regime Exit',     color: '#fb923c'              },
+    'exhaustion_exit': { label: 'Exhaustion Exit', color: '#a78bfa'              },
+  };
+  function outcomeCell(outcome) {
+    if (!outcome) return '—';
+    const m = OUTCOME_MAP[outcome];
+    if (!m) return escSig(outcome);
+    return `<span style="color:${m.color}">${escSig(m.label)}</span>`;
+  }
+
   // ── Position Sizer ─────────────────────────────────────────
   // Persisted in localStorage so it survives reloads. Applied to every
   // trade row (Setups, Open Trades, Closed Trades, Equity Curve).
@@ -419,12 +460,14 @@
   async function render(body) {
     body.innerHTML = `<div class="mod-loading">Loading signals…</div>`;
     try {
-      const [setups, scorecard, summary, playbook] = await Promise.all([
+      const [setups, scorecard, summary, playbook, analyst] = await Promise.all([
         fetchJSON(SETUPS_URL),
         fetchJSON(SCORECARD_URL),
         fetchJSON(SUMMARY_URL),
         fetchJSON(PLAYBOOK_URL).catch(() => ({ patterns: [] })),
+        fetchJSON(ANALYST_URL).catch(() => ({ tickers: {} })),
       ]);
+      const analystByTicker = (analyst && analyst.tickers) || {};
 
       // Build grade lookup
       const gradeByKey = {};
@@ -622,11 +665,19 @@
           regime: regName, patternStats: patternStatsFor(s.signal_type),
           grade: grade,
         });
+        // C1 analyst columns — PT↑% (implied_upside_pct) + Δ Rate (consensus_score_delta_1w). Populated for all 523 tickers in universe.
+        const an = analystByTicker[s.ticker] || {};
+        const ptUp = an.implied_upside_pct;
+        const dRate = an.consensus_score_delta_1w;
+        const ptCls = ptUp == null ? 'sig-dim' : ptUp >= 20 ? 'num-up' : ptUp <= 0 ? 'num-dn' : '';
+        const ptTxt = ptUp == null ? '—' : (ptUp > 0 ? '+' : '') + ptUp.toFixed(1) + '%';
+        const drCls = dRate == null ? 'sig-dim' : dRate > 0 ? 'num-up' : dRate < 0 ? 'num-dn' : '';
+        const drTxt = dRate == null ? '—' : (dRate > 0 ? '+' : '') + dRate.toFixed(2);
         return `
           <tr data-row-idx="${idx}" class="sig-row">
             <td class="tk clickable" data-tk="${s.ticker || ''}">${s.ticker || '—'}</td>
             <td class="${gradeCls}" title="${gradeTitle}">${grade || '—'}</td>
-            <td class="pat">${escSig(s.pattern_name || s.signal_type || '—')}</td>
+            <td class="pat">${prettyPat(s.pattern_name || s.signal_type)}</td>
             <td class="${dirC}">${dir}</td>
             <td class="tf">${(s.timeframe || '').slice(0,2).toUpperCase() || '—'}</td>
             <td class="mono">${fmt.money(s.entry_price)}</td>
@@ -639,6 +690,8 @@
             <td class="mono sig-pos-col">${ps.shares > 0 ? ps.shares : '—'}</td>
             <td class="mono sig-pos-col">${ps.positionValue > 0 ? fmtUsd(ps.positionValue, true) : '—'}</td>
             <td class="mono num-dn sig-pos-col">${ps.dollarRisk > 0 ? '-' + fmtUsd(ps.dollarRisk, true) : '—'}</td>
+            <td class="mono ${ptCls}" title="Analyst consensus price-target upside (target_high − current) / current, %. Source: FMP /stable/price-target-consensus. Drives target_upside_top_decile pattern (C1).">${ptTxt}</td>
+            <td class="mono ${drCls}" title="Δ consensus rating over last 1 week (1=Strong Sell … 5=Strong Buy). >0 = upgrades dominate, <0 = downgrades. Source: FMP /stable/grades-consensus. Drives analyst_upgrade_drift pattern (C1).">${drTxt}</td>
           </tr>
         `;
       }).join('');
@@ -647,7 +700,7 @@
       const byP = (scorecard && scorecard.by_pattern) || [];
       const byPatternRows = byP.slice(0, 12).map(p => `
         <tr>
-          <td class="pat">${escSig(p.signal_type)}</td>
+          <td class="pat">${prettyPat(p.signal_type)}</td>
           <td class="mono">${p.total ?? '—'}</td>
           <td class="mono">${p.closed ?? '—'}</td>
           <td class="mono ${wrClass(p.win_rate)}">${p.win_rate != null ? p.win_rate.toFixed(0) + '%' : '—'}</td>
@@ -667,9 +720,11 @@
                     <th>ENTRY</th><th>LAST</th><th>STOP</th><th>TGT</th>
                     <th>R:R</th><th>CONF</th><th>P&amp;L%</th>
                     <th class="num">SHARES</th><th class="num">POS $</th><th class="num">RISK $</th>
+                    <th class="num" title="Analyst consensus price-target upside (target_high − current) / current, %. Source: FMP. Drives target_upside_top_decile pattern (C1). Green ≥ +20%, red ≤ 0%.">PT↑%</th>
+                    <th class="num" title="Δ consensus rating over last 1 week (1=Strong Sell … 5=Strong Buy). >0 = upgrades dominate. Source: FMP. Drives analyst_upgrade_drift pattern (C1).">Δ RATE</th>
                   </tr>
                 </thead>
-                <tbody>${setupRows || '<tr><td colspan="15" class="empty">no active setups</td></tr>'}</tbody>
+                <tbody>${setupRows || '<tr><td colspan="17" class="empty">no active setups</td></tr>'}</tbody>
               </table>
             </div>
           </div>
@@ -717,7 +772,7 @@
       function sortHeatmap(patterns, col, dir) {
         return patterns.slice().sort((a, b) => {
           let av, bv;
-          if (col === 'pattern') return dir === 'asc' ? (a.signal_type||'').localeCompare(b.signal_type||'') : (b.signal_type||'').localeCompare(a.signal_type||'');
+          if (col === 'pattern') return dir === 'asc' ? prettyPat(a.signal_type).localeCompare(prettyPat(b.signal_type)) : prettyPat(b.signal_type).localeCompare(prettyPat(a.signal_type));
           if (col === 'grade')   return dir === 'asc' ? (a.grade||'').localeCompare(b.grade||'') : (b.grade||'').localeCompare(a.grade||'');
           if (col === 'status') {
             const s = x => x.quarantined ? 'Q' : x.passes_gate === false ? 'B' : 'A';
@@ -759,7 +814,7 @@
                        : p.passes_gate === false ? '<span class="sig-blocked">BLOCKED</span>'
                        : '<span class="sig-active">active</span>';
           return `<tr>
-            <td class="pat">${escSig(p.signal_type)}</td>
+            <td class="pat">${prettyPat(p.signal_type)}</td>
             <td class="${'gd-' + (p.grade || '').toLowerCase()}">${p.grade || '—'}</td>
             <td class="mono ${overall >= 1.1 ? 'num-up' : 'num-dn'}">${overall != null ? overall.toFixed(2) : '—'}</td>
             <td class="mono">${overallWr != null ? overallWr.toFixed(0) + '%' : '—'}</td>
@@ -800,6 +855,10 @@
                   <span><b>Cell</b> — profit factor for that pattern × regime pair · blank = no trades yet</span>
                   <span><b>PF ≥ 1.4</b> strong · <b>≥ 1.2</b> good · <b>≥ 1.0</b> marginal · <b>&lt; 1.0</b> losing</span>
                   <span><b>n</b> — sample size · PF 1.5 on n=10 is weak evidence; PF 1.2 on n=100 is solid</span>
+                </span>
+                <span style="display:block;margin-top:0.4rem;padding-top:0.35rem;border-top:1px dashed var(--border);color:var(--fg-dim);font-size:9.5px;line-height:1.45">
+                  <b>Not shown:</b> cross-sectional patterns — <code>mom_top_decile</code>, <code>low_vol_top_decile</code>, <code>ibs_oversold_pullback</code>, <code>pead_drift</code>, <code>value_top_decile</code> (151-TS), and <code>analyst_upgrade_drift</code>, <code>target_upside_top_decile</code> (C1).
+                  These rank tickers against each other on a given day, not per-ticker time series, so the per-ticker backtest harness can't score them. Tracked live on the Grades tab; harness extension is Task #10 (deferred post 2026-07-07 full review).
                 </span>
                 Click any column header to sort.
               </span>
@@ -861,7 +920,7 @@
                      : '';
         return `
           <tr>
-            <td class="pat">${escSig(p.signal_type)} ${status}</td>
+            <td class="pat">${prettyPat(p.signal_type)} ${status}</td>
             <td class="${'gd-' + (p.grade || '').toLowerCase()}">${p.grade || '—'}</td>
             <td class="num">${p.backtest_count != null ? fmt.compact(p.backtest_count) : '—'}</td>
             <td class="num ${p.live_count > 0 ? '' : 'sig-dim'}">${p.live_count ?? 0}</td>
@@ -1005,7 +1064,7 @@
         const tot = g.live_total_return;
 
         return `<tr${rowOpacity}>
-          <td class="pat">${escSig(g.signal_type.replace(/_/g,' '))}${lockBadge}${activeBadge}${downMark}</td>
+          <td class="pat">${prettyPat(g.signal_type)}${lockBadge}${activeBadge}${downMark}</td>
           <td class="${'gd-' + (g.grade || '').toLowerCase()}" style="font-weight:700">${g.grade || '—'}${blendHint}</td>
           <td class="num ${(g.blended_pf || 0) >= 1.1 ? 'num-up' : 'num-dn'}"><b>${g.blended_pf != null ? g.blended_pf.toFixed(2) : '—'}</b></td>
           <td class="num">${g.backtest_pf != null ? g.backtest_pf.toFixed(2) : '—'}</td>
@@ -1282,7 +1341,7 @@
             <div class="sig-tt-row"><span class="sig-tt-k">DATE</span><span class="sig-tt-v mono">${escSig(p.date || '—')}</span></div>
             ${p.isSeed ? '' : `
             <div class="sig-tt-row"><span class="sig-tt-k">TICKER</span><span class="sig-tt-v mono" style="color:var(--accent)">${escSig(p.ticker)}</span></div>
-            <div class="sig-tt-row"><span class="sig-tt-k">PATTERN</span><span class="sig-tt-v">${escSig(p.signal_type)}</span></div>
+            <div class="sig-tt-row"><span class="sig-tt-k">PATTERN</span><span class="sig-tt-v">${prettyPat(p.signal_type)}</span></div>
             <div class="sig-tt-row"><span class="sig-tt-k">TRADE RET</span><span class="sig-tt-v mono ${tradePnlCls}">${(p.tradePnl || 0) >= 0 ? '+' : ''}${(p.tradePnl || 0).toFixed(2)}%</span></div>
             `}
             ${isAlphaMode
@@ -1385,7 +1444,7 @@
         const dwc = t.days_to_window_close;
         return `<tr>
           <td class="tk clickable" data-tk="${escSig(t.ticker)}">${escSig(t.ticker)}</td>
-          <td class="pat">${escSig(t.signal_type)}</td>
+          <td class="pat">${prettyPat(t.signal_type)}</td>
           <td class="${dirC}">${t.direction === 'long' ? '▲' : '▼'}</td>
           <td class="mono">${escSig(t.signal_date || '—')}</td>
           <td class="mono">${fmt.money(t.entry_price)}</td>
@@ -1408,7 +1467,7 @@
         const pnlCls = unrlPct == null ? '' : unrlPct > 0 ? 'num-up' : 'num-dn';
         return `<tr>
           <td class="tk clickable" data-tk="${escSig(t.ticker)}">${escSig(t.ticker)}</td>
-          <td class="pat">${escSig(t.signal_type)}</td>
+          <td class="pat">${prettyPat(t.signal_type)}</td>
           <td class="${dirC}">${t.direction === 'long' ? '▲' : '▼'}</td>
           <td class="mono">${escSig(t.signal_date || '—')}</td>
           <td class="mono">${fmt.money(t.entry_price)}</td>
@@ -1431,7 +1490,7 @@
         const outcomeCls = t.outcome === 'tp_hit' ? 'num-up' : t.outcome === 'sl_hit' ? 'num-dn' : '';
         return `<tr>
           <td class="tk clickable" data-tk="${escSig(t.ticker)}">${escSig(t.ticker)}</td>
-          <td class="pat">${escSig(t.signal_type)}</td>
+          <td class="pat">${prettyPat(t.signal_type)}</td>
           <td class="${dirC}">${t.direction === 'long' ? '▲' : '▼'}</td>
           <td class="mono">${escSig(t.exit_date || '—')}</td>
           <td class="mono">${t.holding_days != null ? t.holding_days + 'd' : '—'}</td>
@@ -1439,7 +1498,7 @@
           <td class="mono">${fmt.money(t.exit_price)}</td>
           <td class="mono ${pnlCls}">${pct != null ? (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%' : '—'}</td>
           <td class="mono ${pnlCls}">${ps.dollarPnL != null ? (ps.dollarPnL >= 0 ? '+' : '') + fmtUsd(ps.dollarPnL, true) : '—'}</td>
-          <td class="mono ${outcomeCls}" style="font-size:10px">${escSig(t.outcome || '—')}</td>
+          <td style="font-size:10px">${outcomeCell(t.outcome)}</td>
         </tr>`;
       }).join('');
       const liveContent = `
@@ -1501,7 +1560,7 @@
               <thead><tr>
                 <th>TICKER</th><th>PATTERN</th><th>DIR</th><th>EXIT</th>
                 <th class="num">HOLD</th><th class="num">ENTRY</th><th class="num">EXIT $</th>
-                <th class="num">RET %</th><th class="num">P&amp;L $</th><th>OUTCOME</th>
+                <th class="num">RET %</th><th class="num">P&amp;L $</th><th title="How the trade closed. tp_hit = take-profit reached · sl_hit = original stop-loss hit (Chandelier stage 0) · trail_stop = trail-stop fired after stop moved up (stages 1-3: breakeven, +1R, peak−3ATR — see Trailing Stop 2026-05-06) · early_exit = early-exit model triggered (primary for VCP / Cup &amp; Handle since Patch D 2026-05-20: 60%+ of target hit in <40% of time) · expired = full holding window elapsed without TP/SL · regime_exit = confirmed market regime contradicted trade direction (long closed on locked BEAR, short closed on locked BULL) · exhaustion_exit = parabolic-exhaustion overlay (Luk #3, longs only, since 2026-05-26: price >2.5σ above SMA21 + 5 consecutive higher closes with daily range >1.5×ATR + RSI>80).">OUTCOME</th>
               </tr></thead>
               <tbody>${closedRows || '<tr><td colspan="10" class="empty">no closed trades yet</td></tr>'}</tbody>
             </table>
@@ -1517,7 +1576,7 @@
         return `<div class="sig-how-card">
           <div class="sig-how-head">
             <span class="${'gd-' + (p.grade || '').toLowerCase()}">${p.grade || '—'}</span>
-            <span class="pat" style="font-weight:700">${escSig(p.signal_type)}</span>
+            <span class="pat" style="font-weight:700">${prettyPat(p.signal_type)}</span>
             <span style="color:var(--fg-dim);font-size:10px">${p.direction || ''} · PF ${p.profit_factor != null ? p.profit_factor.toFixed(2) : '—'} · WR ${p.win_rate != null ? p.win_rate.toFixed(0) + '%' : '—'} · ${p.occurrences != null ? fmt.compact(p.occurrences) : '—'} backtests</span>
             ${p.quarantined ? '<span class="sig-quarantine">QUARANTINED</span>' : ''}
             ${p.passes_gate === false ? '<span class="sig-blocked">BLOCKED</span>' : ''}
@@ -1527,28 +1586,36 @@
       }).join('');
       const howContent = `
         <div class="mod-panel">
-          <div class="mod-panel-title">RECENT CHANGES · 2026-05-20 patches A–E shipped · Patch F queued for 05-26</div>
+          <div class="mod-panel-title">RECENT CHANGES · 2026-05-26 deploy (Luk Wave A+B + 2 patches + 1 backout)</div>
           <div class="sig-how-meth">
             <div class="sig-how-meth-row">
-              <b>Patch A</b> — <b>bos</b> per-pattern cap raised 5 → 15 (was the silent throttle dropping ~85 raw signals/day).
+              <b>Patch B (shipped 2026-05-26)</b> — quality-gate preservation: when a quarantined pattern auto-relocks, manual <code>gate_tightened_at</code> values (stricter <code>min_trades_required</code>, higher <code>reactivate_pf</code>) are preserved instead of being overwritten by tier defaults. Fixes the 05-15 → 05-19 silent overwrite that affected <b>rsi_ma_divergence</b> and <b>vcp</b>.
             </div>
             <div class="sig-how-meth-row">
-              <b>Patch B</b> — <b>mom_top_decile</b> ATR stop multiplier 2.0× → 1.5× (tighter stops, ~+25% expected fire rate).
+              <b>Patch F (shipped 2026-05-26)</b> — base risk per trade <b>2% → 1%</b> to align with Qullamaggie's published ceiling. Grade A effective sizing 2.5% → 1.25%, B 2.0% → 1.0%. Validation showed ~60% drawdown reduction vs the 05-15 risk-off cluster.
             </div>
             <div class="sig-how-meth-row">
-              <b>Patch C</b> — <b>vcp</b> take-profit scale 3× measured-move → 1.5× (4× was too ambitious — only 1/30 hit old TP).
+              <b>Luk Wave B (shipped 2026-05-26)</b> — 3 new long-entry patterns activated:
+              <ul style="margin:4px 0 0 18px; padding:0;">
+                <li><b>episodic_pivot</b> (Luk #2 / Stockbee MAGN) — gap-up ≥10% RVOL ≥3× on neglected stocks. Backtest n=71 PF 1.32.</li>
+                <li><b>high_tight_flag</b> (Luk #4 / Minervini HTF) — ≥90% rally then flag-then-breakout. Backtest n=18 PF 2.11.</li>
+                <li><b>momentum_rest_entry</b> (Luk #7 / Qullamaggie rest) — parabolic run then tight green rest bar. Backtest n=4 PF 5.09 (small-sample, graded B not A).</li>
+              </ul>
             </div>
             <div class="sig-how-meth-row">
-              <b>Patch D</b> — <b>early_exit</b> promoted to primary outcome for <b>vcp</b> + <b>cup_handle</b> (time-gate 0.6× target_days).
+              <b>Luk Wave A C1 (shipped 2026-05-26)</b> — 2 analyst-consensus detectors activated: <b>analyst_upgrade_drift</b> (positive 1w consensus delta, Buy/Strong Buy, ≥5 analysts) and <b>target_upside_top_decile</b> (implied price-target upside top decile). Both 45-day horizon. Per-pattern R:R override 1.9 to clear the execution-cost-widened gate — same trap as VCP Patch C (file comment at <code>lib/trade_setup.py:22-31</code>).
             </div>
             <div class="sig-how-meth-row">
-              <b>Patch E</b> — BULL+short hard-blocked at entry, mirroring the exit-side <code>regime_exit</code> policy. Stops same-cycle "generate then immediately kill" pollution (97.6% of all bos shorts ever — 40/41 — had been closing as regime_exit before this).
+              <b>Luk #3 parabolic_exhaustion (shipped 2026-05-26)</b> — exit overlay enabled. Closes long positions in climax terminal-acceleration state (RSI &gt; 80, 5+ consecutive higher closes with 1.5×ATR ranges). Only fires on longs.
             </div>
             <div class="sig-how-meth-row">
-              <b>Patch F (queued 2026-05-26)</b> — base risk per trade <b>2% → 1%</b> to align with Qullamaggie's published ceiling. Grade A effective sizing drops 2.5% → 1.25%. <span style="color:var(--fg-dim)">Today's $31.7k of $35.6k drawdown came from 19 Grade A breakouts at 2.5% sizing — at Patch F sizing the same cluster would have been -$12.7k.</span>
+              <b>VCP visibility restored 2026-05-26</b> — VCP had been silently missing from the Grades + Backtest tabs since 05-23 because the <code>vcp:1.4</code> R:R override completion patch landed AFTER the Sat 05-23 weekly backtest cron. Today's manual backtest refresh (post-revert) restored VCP at PF 1.13 grade C.
             </div>
             <div class="sig-how-meth-row">
-              <b>Drawdown drilldown</b> — Today's $35.6k Fix B drawdown was <b>regime-driven</b>, not signal-quality-driven. 19 A-grade breakouts hit SL during the 2026-05-15 risk-off cluster (SPY -1.20%, IWM -2.41%, VIX +6.78%). Patches A–D fix pattern mechanics; they don't address regime-cluster events. <code>regime.py</code> work is the right next lever for the 05-21–25 pre-work sprint.
+              <b>↩ Luk #1 Qullamaggie rewrite BACKED OUT (2026-05-26 evening)</b> — atomic swap for <b>trend_pullback</b> was reverted same evening after fresh backtest gave PF 0.81 (vs spec 1.71). The dormant-port pre-work shipped the per-ticker geometry detector but never wrote the required cross-sectional top-2% momentum leader pre-filter in <code>compute-signals.py</code>. Detector code remains dormant for proper re-activation (~2-3h: precompute leader rank + dispatcher wrap + backtest mirror). Original EMA21 detector restored.
+            </div>
+            <div class="sig-how-meth-row">
+              <b>Earlier 2026-05-20 patches A–E</b> — still active. <b>A</b>: bos per-pattern cap 5 → 15. <b>B/old</b>: mom_top_decile ATR stop 2.0× → 1.5×. <b>C</b>: vcp TP 3× → 1.5×. <b>D</b>: early_exit primary for vcp+cup_handle. <b>E</b>: BULL+short hard-blocked at entry. (Note: "Patch B" name was reused 2026-05-26 for the gate-preservation patch above; the 05-20 mom_top_decile fix is now sometimes referred to as the "stop-tightening patch.")
             </div>
           </div>
         </div>

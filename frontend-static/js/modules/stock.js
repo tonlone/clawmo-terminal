@@ -770,7 +770,7 @@
     overlay.querySelector('#stkAnClose').addEventListener('click', () => document.body.removeChild(overlay));
   }
 
-  /* ── AI panel: static qualitative topics + on-demand GLM/AI call ─── */
+  /* ── AI panel: static qualitative topics + on-demand AI call ─── */
   function renderAIBlock(d, sym, info) {
     const v = d.valuation || {};
     const topics = Array.isArray(v.qualitative_topics) ? v.qualitative_topics : [];
