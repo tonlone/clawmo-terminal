@@ -2922,7 +2922,7 @@
   }
 
   /* ── Daily Brief — post-close digest (reads daily-brief.json) ──── */
-  async function renderDailyBrief(body, ctx) {
+  async function renderDailyBriefContent(body, ctx) {
     body.innerHTML = `<div class="mod-loading">Loading daily brief…</div>`;
     let b;
     try { b = await fetchJSON(`${BASE}/daily-brief.json`); }
@@ -2942,11 +2942,81 @@
       <div class="acct-val"><span class="mono ${cls || ''}">${val}</span></div>
       ${sub ? `<div class="acct-meta"><span>${escapeGex(sub)}</span></div>` : ''}</div>`;
     const wcol = { high: '#f87171', med: '#E6B84A', change: '#60a5fa', info: 'var(--fg-dim)' };
+    // ticker → opens the EQ (Stock Analysis) module in the focused pane
+    const eqLink = (tk) => `<span class="eq-link mono" data-eq="${escapeGex(tk)}" style="cursor:pointer;text-decoration:underline;text-underline-offset:2px" title="Open ${escapeGex(tk)} in EQ · Stock Analysis">${escapeGex(tk)}</span>`;
+    // movers "why": real news headline (linked) primary, interpreted signals secondary
+    const whyHtml = (cd) => {
+      const h = cd.headline;
+      if (h && h.title) {
+        let o = h.url ? `<a href="${escapeGex(h.url)}" target="_blank" rel="noopener" style="color:#60a5fa;text-decoration:none">${escapeGex(h.title)}</a>` : escapeGex(h.title);
+        if (h.site) o += ` <span style="color:var(--fg-dim);font-size:9px">(${escapeGex(h.site)})</span>`;
+        if (cd.why) o += `<div style="color:var(--fg-dim);font-size:9px;margin-top:1px">${escapeGex(cd.why)}</div>`;
+        return o;
+      }
+      return `<span style="color:var(--fg-dim)">${escapeGex(cd.why || '—')}</span>`;
+    };
+
+    // ── Glossary: plain-English tooltips for options/market jargon ──
+    const GLOSS_DEFS = {
+      flashpoint: { term: 'Short-gamma flashpoint', tip: 'A stock where options dealers must BUY as price rises and SELL as it falls (they are "short gamma"), which amplifies the move. Near a big strike this can spark a fast squeeze higher, then a sharp reversal once it exhausts. Two-sided, higher-volatility risk.' },
+      callwall: { term: 'Call wall', tip: 'The strike where the most call options are stacked. Dealer hedging there acts like a ceiling/magnet — price often stalls at, or gets pinned to, the call wall.' },
+      iv: { term: 'IV — implied volatility', tip: 'How big a move the options market is pricing in. High IV = options are expensive because a large move (often an earnings report) is expected.' },
+      ivrank: { term: 'IV rank / percentile', tip: "Where today's IV sits vs this stock's own past year, on a 0-100 scale. 90 = IV near its 1-year high." },
+      crush: { term: 'IV crush', tip: 'Right after earnings the uncertainty is gone, so IV collapses and option prices drop fast. Long options into the print can lose even if the stock moves your way; a long-stock run-up often deflates too.' },
+      longearn: { term: 'Long into earnings at high IV', tip: 'Holding a bullish position INTO an earnings report while IV is already high — exposed to the binary event AND the post-report IV crush. Usually means size down or avoid expensive options.' },
+      rvol: { term: 'RVOL — relative volume', tip: "Today's trading volume / the stock's normal 20-day average. >=2x = more than double the usual volume = heavy conviction. High-RVOL moves tend to be more meaningful and durable than quiet drifts." },
+      gex: { term: 'GEX — gamma exposure', tip: 'Total options-dealer gamma. Positive/long gamma = dealer hedging DAMPENS moves (calmer). Negative/short gamma = hedging AMPLIFIES moves (whippier, trendier).' },
+      rrg: { term: 'RRG — Relative Rotation Graph', tip: 'A map of how each sector is performing vs the S&P 500 over time. Quadrants: Leading (strong & strengthening), Weakening (strong but fading), Lagging (weak), Improving (weak but recovering). Tracks sector rotation.' },
+      squeeze: { term: 'Squeeze', tip: 'A fast, often forced price spike higher — short sellers or dealers are pushed to buy, which lifts price, forcing still more buying.' },
+      reversal: { term: 'Reversal', tip: 'Price sharply changes direction — e.g. after a squeeze runs out of fuel it can snap back down just as fast.' }
+    };
+    const GLOSS_ORDER = [
+      ['long(?:\\s+setups?)?\\s+into\\s+earnings(?:\\s+at\\s+high\\s+iv)?', 'longearn'],
+      ['implied\\s+volatility', 'iv'],
+      ['short-?\\s?gamma\\s+flashpoints?', 'flashpoint'],
+      ['short-?γ\\s+flashpoints?', 'flashpoint'],
+      ['iv\\s*crush', 'crush'],
+      ['iv\\s*rank(?:/pctl|/percentile)?', 'ivrank'],
+      ['call\\s+wall', 'callwall'],
+      ['short-?γ', 'flashpoint'],
+      ['short-?\\s?gamma', 'flashpoint'],
+      ['flashpoints?', 'flashpoint'],
+      ['\\bsqueeze\\b', 'squeeze'],
+      ['\\breversal\\b', 'reversal'],
+      ['\\bcrush\\b', 'crush'],
+      ['\\bRVOL\\b', 'rvol'],
+      ['\\bRRG\\b', 'rrg'],
+      ['\\bGEX\\b', 'gex'],
+      ['\\bIV\\b', 'iv']
+    ];
+    const GLOSS_RE = new RegExp(GLOSS_ORDER.map(e => '(' + e[0] + ')').join('|'), 'gi');
+    // escape text, then wrap any known jargon term with a hover tooltip (native title)
+    const glossify = (s) => {
+      s = escapeGex(s); if (!s) return s;
+      return s.replace(GLOSS_RE, function () {
+        const a = arguments;
+        for (let i = 0; i < GLOSS_ORDER.length; i++) {
+          if (a[i + 1] != null) { const d = GLOSS_DEFS[GLOSS_ORDER[i][1]];
+            return `<span style="border-bottom:1px dotted currentColor;cursor:help" title="${escapeGex(d.term + ' — ' + d.tip)}">${a[0]}</span>`; }
+        }
+        return a[0];
+      });
+    };
+    const SECTORS = { XLK: 'Technology', XLV: 'Health Care', XLF: 'Financials', XLE: 'Energy', XLI: 'Industrials', XLP: 'Consumer Staples', XLY: 'Consumer Discretionary', XLU: 'Utilities', XLB: 'Materials', XLRE: 'Real Estate', XLC: 'Communication Services' };
+    const sectorName = (e) => { e = (e || '').toUpperCase(); return SECTORS[e] ? `${escapeGex(e)} <span style="color:var(--fg-dim)">(${SECTORS[e]})</span>` : escapeGex(e); };
+    const buildGlossary = () => {
+      const keys = ['flashpoint', 'squeeze', 'reversal', 'callwall', 'iv', 'ivrank', 'crush', 'longearn', 'rvol', 'gex', 'rrg'];
+      let h = `<details class="mod-panel" style="font-size:11px"><summary style="cursor:pointer;font-weight:700">📖 Glossary — options &amp; market terms (new to options? start here)</summary><div style="display:grid;grid-template-columns:max-content 1fr;gap:3px 12px;padding:6px 2px 2px">`;
+      keys.forEach(k => { const d = GLOSS_DEFS[k]; h += `<div style="color:#60a5fa;font-weight:700">${escapeGex(d.term)}</div><div style="color:var(--fg-dim)">${escapeGex(d.tip)}</div>`; });
+      h += `<div style="color:#60a5fa;font-weight:700">Sector ETFs</div><div style="color:var(--fg-dim)">${Object.keys(SECTORS).map(e => `<b>${e}</b> = ${SECTORS[e]}`).join(' · ')}</div>`;
+      h += `</div></details>`;
+      return h;
+    };
 
     const r = b.regime || {}, sgn = b.signals || {}, ct = sgn.closed_today || {};
     const g = b.gex || {}, vt = g.vix_term || {}, rec = b.recession || {}, sm = b.smart_money || {};
     const rot = b.rotation || [];
-    const leaders = rot.filter(x => x.quadrant === 'Leading').map(x => x.etf);
+    const leaders = rot.filter(x => x.quadrant === 'Leading').map(x => sectorName(x.etf));
     const changes = rot.filter(x => x.changed);
 
     let H = `
@@ -2960,35 +3030,127 @@
     // Watch
     H += `<div class="mod-panel"><div class="mod-panel-title">TOP THINGS TO WATCH</div><div style="display:flex;flex-direction:column;gap:5px;padding:4px 8px 8px">`;
     if (!b.watch || !b.watch.length) H += `<div style="color:var(--fg-dim);font-size:12px">Quiet day — no flags.</div>`;
-    else b.watch.forEach(x => { H += `<div style="border-left:3px solid ${wcol[x.level] || 'var(--fg-dim)'};padding:3px 9px;font-size:12px;line-height:1.45">${escapeGex(x.text)}</div>`; });
+    else b.watch.forEach(x => { H += `<div style="border-left:3px solid ${wcol[x.level] || 'var(--fg-dim)'};padding:3px 9px;font-size:12px;line-height:1.45">${glossify(x.text)}</div>`; });
     H += `</div></div>`;
 
+    // Stop-out auto-throttle card (aligned with signals SIG + daily-brief.html)
+    const _th = r.throttle || {}, _scl = r.stop_cluster || {};
+    const _tlbl = { NONE: 'Normal', WATCH: 'Watch', ELEVATED: 'Throttled', HIGH: 'Risk-Off' }[_th.tier || _scl.tier || 'NONE'] || 'Normal';
+    const _tcls = (_th.tier === 'HIGH') ? 'num-dn' : ((_th.tier === 'ELEVATED' || _th.tier === 'WATCH') ? 'num-warn' : 'num-up');
+    const _slr = _scl.total_closes ? Math.round((_scl.sl_rate || 0) * 100) : 0;
+    const _thCard = _scl.window_date
+      ? c('AUTO-THROTTLE', _tlbl, _tcls, (_scl.sl_count || 0) + ' SL/' + (_scl.total_closes || 0) + ' · ' + _slr + '% SL' + (_th.active && _th.max_new_today != null ? ' · max ' + _th.max_new_today : ''))
+      : '';
+    const _cols = _scl.window_date ? 6 : 5;
+
     // Regime strip
-    H += `<div class="acct-strip" style="grid-template-columns:repeat(5,1fr)">
+    H += `<div class="acct-strip" style="grid-template-columns:repeat(${_cols},1fr)">
       ${c('REGIME', (r.regime || '—') + (r.score != null ? ' ' + r.score + '/4' : ''), r.regime === 'BULL' ? 'num-up' : 'num-dn', 'RSI ' + n(r.rsi, 1))}
       ${c('SPX', n(r.price), '', 'SMA50 ' + n(r.sma50, 0))}
-      ${c('KILL SWITCH', r.kill_switch_active ? 'ARMED' : 'off', r.kill_switch_active ? 'num-dn' : 'num-up', '20d DD $' + n(r.drawdown_20d, 0))}
+      ${c('KILL SWITCH', r.kill_switch_active ? 'ARMED' : 'off', r.kill_switch_active ? 'num-dn' : 'num-up', 'avg trade ' + n(r.avg_trade_20d, 2) + '%')}
+      ${_thCard}
       ${c('POSITIONS', r.positions != null ? r.positions : '—', '', (r.net_direction || '') + ' · corr ' + n(r.avg_correlation, 2))}
       ${c('RECESSION', rec.composite != null ? rec.composite : '—', '', rec.regime || '')}
     </div>`;
+    // Auto-throttle "why" note when active
+    if (_th.active) {
+      const _cap = (_th.max_new_today != null) ? ', max ' + _th.max_new_today + ' new today' : '';
+      H += `<div style="border-left:3px solid #fb923c;padding:5px 9px;margin:4px 0;font-size:11.5px;line-height:1.45">
+        <b style="color:#fb923c">⚙ Auto-throttle active</b> — ${escapeGex(_th.reason || '')}
+        <span style="color:var(--fg-dim)"> · new exposure auto-cut${escapeGex(_cap)}; reverts when stop-outs normalize.</span></div>`;
+    }
 
     // Signals
     H += `<div class="mod-panel"><div class="mod-panel-title">SIGNALS · closed ${ct.count || 0} (${ct.winners || 0}W) avg <span class="${(ct.avg_return||0)>=0?'num-up':'num-dn'}">${sg(ct.avg_return)}%</span> · open ${sgn.open_count != null ? sgn.open_count : '—'} · new ${(sgn.new_setups||[]).length}</div>`;
     if (ct.items && ct.items.length) {
       H += `<table class="tbl-dense" style="width:100%;font-size:11px"><thead><tr><th>Ticker</th><th>Pattern</th><th style="text-align:right">Ret</th><th>Outcome</th></tr></thead><tbody>`;
       ct.items.slice(0, 12).forEach(t => {
-        H += `<tr><td class="mono">${escapeGex(t.ticker)}</td><td style="color:var(--fg-dim)">${escapeGex(t.pattern)}</td><td style="text-align:right" class="${(t.return_pct||0)>=0?'num-up':'num-dn'}">${sg(t.return_pct)}%</td><td style="color:var(--fg-dim)">${escapeGex(t.outcome)}</td></tr>`;
+        H += `<tr><td>${eqLink(t.ticker)}</td><td style="color:var(--fg-dim)">${escapeGex(t.pattern)}</td><td style="text-align:right" class="${(t.return_pct||0)>=0?'num-up':'num-dn'}">${sg(t.return_pct)}%</td><td style="color:var(--fg-dim)">${escapeGex(t.outcome)}</td></tr>`;
       });
       H += `</tbody></table>`;
     }
     if (sgn.new_setups && sgn.new_setups.length) {
       H += `<div class="mod-panel-title" style="margin-top:6px">NEW SETUPS</div><table class="tbl-dense" style="width:100%;font-size:11px"><thead><tr><th>Ticker</th><th>Pattern</th><th style="text-align:right">Entry</th><th style="text-align:right">Tgt</th><th style="text-align:right">Stop</th><th style="text-align:right">R:R</th></tr></thead><tbody>`;
       sgn.new_setups.forEach(s => {
-        H += `<tr><td class="mono">${escapeGex(s.ticker)}</td><td style="color:var(--fg-dim)">${escapeGex(s.pattern)}</td><td style="text-align:right">${n(s.entry)}</td><td style="text-align:right" class="num-up">${n(s.target)}</td><td style="text-align:right" class="num-dn">${n(s.stop)}</td><td style="text-align:right">${s.rr != null ? s.rr : '—'}</td></tr>`;
+        H += `<tr><td>${eqLink(s.ticker)}</td><td style="color:var(--fg-dim)">${escapeGex(s.pattern)}</td><td style="text-align:right">${n(s.entry)}</td><td style="text-align:right" class="num-up">${n(s.target)}</td><td style="text-align:right" class="num-dn">${n(s.stop)}</td><td style="text-align:right">${s.rr != null ? s.rr : '—'}</td></tr>`;
       });
       H += `</tbody></table>`;
     }
     H += `</div>`;
+
+    // Signal Cards — consolidated per-setup context (GEX · IV · earnings · smart money · news)
+    const sc = b.signal_cards || {}, cards = sc.cards || [], scs = sc.summary || {};
+    if (cards.length) {
+      H += `<div class="mod-panel"><div class="mod-panel-title">🎯 SIGNAL CARDS · GEX · IV · earnings · smart $ · news</div>`;
+      const hl = [];
+      if ((scs.iv_crush_risk || []).length) hl.push(`<b class="num-dn">⚠ Crush:</b> ${scs.iv_crush_risk.join(', ')}`);
+      if ((scs.earnings_imminent || []).length) hl.push(`<b class="num-warn">📅 Earn ≤5d:</b> ${scs.earnings_imminent.join(', ')}`);
+      if ((scs.short_gamma_flashpoints || []).length) hl.push(`<b style="color:#fb923c">Short-γ:</b> ${scs.short_gamma_flashpoints.join(', ')}`);
+      if (hl.length) H += `<div style="font-size:11px;padding:2px 8px 6px">${hl.join(' &nbsp;·&nbsp; ')}</div>`;
+      H += `<table class="tbl-dense" style="width:100%;font-size:11px"><thead><tr><th>Ticker</th>`
+        + `<th style="cursor:help" title="Pattern and direction of the detected trade setup">Setup</th>`
+        + `<th style="text-align:right;cursor:help" title="Risk to Reward — (target minus entry) over (entry minus stop). 2 or higher preferred">R:R</th>`
+        + `<th style="text-align:right;cursor:help" title="Implied-volatility rank / percentile (0-100) vs this stock over the past year. High = options pricing a big move; a long position into a high-IV earnings print eats the post-event IV crush">IV rk/pctl</th>`
+        + `<th style="cursor:help" title="Trading days to the next scheduled earnings (current-week calendar). Calendar icon marks 5 days or less - a binary event with elevated risk">Earnings</th>`
+        + `<th style="text-align:right;cursor:help" title="Distance from spot to the call wall (largest call-gamma strike - acts as resistance / magnet). Lightning = short-gamma flashpoint: dealers amplify moves, squeeze then reversal risk">→CW</th>`
+        + `<th style="cursor:help" title="In today's MOC/MOO smart-money auction imbalance - buy = institutional accumulation, sell = distribution">Smart$</th>`
+        + `<th style="text-align:right;cursor:help" title="Analyst consensus price-target implied upside vs current price">PT</th>`
+        + `<th style="cursor:help" title="Average sentiment of recent ticker-tagged headlines (-1 to +1) with article count in parentheses">News</th></tr></thead><tbody>`;
+      cards.forEach(cd => {
+        const iv = cd.iv || {}, e = cd.earnings || {}, gx = cd.gex || {}, smc = cd.smart_money || {}, an = cd.analyst || {}, nw = cd.news || {}, st = cd.setup || {};
+        const rowbg = iv.crush_risk ? ' style="background:rgba(248,113,113,0.07)"' : (e.flag === 'imminent' ? ' style="background:rgba(230,184,74,0.06)"' : '');
+        let ivt = '—';
+        if (iv.iv_rank != null) { ivt = n(iv.iv_rank, 0) + (iv.iv_percentile != null ? '/' + n(iv.iv_percentile, 0) : ''); if (iv.crush_risk) ivt = `<span class="num-dn">${ivt} ⚠</span>`; }
+        let et = '—';
+        if (e.days_to != null) { const lab = e.days_to === 0 ? 'today' : 'in ' + e.days_to + 'd'; et = e.flag ? `<span class="${e.flag === 'imminent' ? 'num-warn' : ''}">📅 ${lab}</span>` : lab; }
+        let gt = '—';
+        if (gx.cw_dist_pct != null) { gt = sg(gx.cw_dist_pct, 1) + '%'; if (gx.flashpoint) gt = `<span style="color:#fb923c">${gt} ⚡</span>`; }
+        const smt = smc.moc ? `<span class="${smc.moc === 'buy' ? 'num-up' : 'num-dn'}">${smc.moc}</span>` : '—';
+        const ptt = an.implied_upside_pct != null ? `<span class="${an.implied_upside_pct >= 0 ? 'num-up' : 'num-dn'}">${sg(an.implied_upside_pct, 0)}%</span>` : '—';
+        const nwt = nw.sentiment != null ? `<span class="${nw.sentiment > 0 ? 'num-up' : nw.sentiment < 0 ? 'num-dn' : ''}">${sg(nw.sentiment, 2)}(${nw.n || 0})</span>` : '—';
+        H += `<tr${rowbg}><td>${eqLink(cd.ticker)}</td><td style="color:var(--fg-dim)">${escapeGex(st.pattern)} ${escapeGex(st.direction)}</td><td style="text-align:right">${st.rr != null ? st.rr : '—'}</td><td style="text-align:right">${ivt}</td><td>${et}</td><td style="text-align:right">${gt}</td><td>${smt}</td><td style="text-align:right">${ptt}</td><td>${nwt}</td></tr>`;
+      });
+      H += `</tbody></table><div style="font-size:10px;color:var(--fg-dim);padding:3px 8px">${glossify('⚠ long into earnings at high IV (crush) · ⚡ short-γ flashpoint near call wall · News = avg sentiment(count)')}</div></div>`;
+    }
+
+    // Top Movers — why the biggest gainers/losers moved
+    const mv = b.movers || {};
+    if ((mv.gainers && mv.gainers.length) || (mv.losers && mv.losers.length)) {
+      const movHead = `<thead><tr><th>Ticker</th><th style="text-align:right" title="Today's % price change">Chg%</th>`
+        + `<th style="text-align:right" title="Relative volume: today vs 20-day avg. >=2x = heavy conviction">RVOL</th>`
+        + `<th style="text-align:right" title="IV rank / percentile vs the past year. High = options priced a big move (often an event)">IV rk/pctl</th>`
+        + `<th title="Recently reported earnings (usual cause of a big move) or days to next report">Earnings</th>`
+        + `<th style="text-align:right" title="Distance to call wall. Lightning = short-gamma flashpoint">→CW</th>`
+        + `<th title="In today's MOC/MOO smart-money auction imbalance">Smart$</th>`
+        + `<th style="text-align:right" title="Analyst price-target implied upside">PT</th>`
+        + `<th title="Avg sentiment of ticker-tagged headlines (count)">News</th>`
+        + `<th title="Best-guess driver from earnings, volume, IV, news, gamma">Why</th></tr></thead>`;
+      const movRow = (cd) => {
+        const iv = cd.iv || {}, e = cd.earnings || {}, rep = cd.earnings_reported, gx = cd.gex || {}, smc = cd.smart_money || {}, an = cd.analyst || {}, nw = cd.news || {}, p = cd.perf || {};
+        const chg = p.change_pct;
+        const rvtxt = cd.rvol != null ? (cd.rvol >= 2 ? `<b class="num-up">${cd.rvol.toFixed(1)}×</b>` : cd.rvol.toFixed(1) + '×') : '—';
+        const ivtxt = iv.iv_rank != null ? (n(iv.iv_rank, 0) + (iv.iv_percentile != null ? '/' + n(iv.iv_percentile, 0) : '')) : '—';
+        let et = '—';
+        if (rep) et = `<span class="num-warn">📅 ${escapeGex(rep.beat || 'reported')}${rep.days_ago != null ? ' ' + rep.days_ago + 'd' : ''}</span>`;
+        else if (e.days_to != null) et = e.days_to === 0 ? 'today' : 'in ' + e.days_to + 'd';
+        const gt = gx.cw_dist_pct != null ? (sg(gx.cw_dist_pct, 1) + '%' + (gx.flashpoint ? ' ⚡' : '')) : '—';
+        const smt = smc.moc ? `<span class="${smc.moc === 'buy' ? 'num-up' : 'num-dn'}">${smc.moc}</span>` : '—';
+        const ptt = an.implied_upside_pct != null ? `<span class="${an.implied_upside_pct >= 0 ? 'num-up' : 'num-dn'}">${sg(an.implied_upside_pct, 0)}%</span>` : '—';
+        const nwt = nw.sentiment != null ? `<span class="${nw.sentiment > 0 ? 'num-up' : nw.sentiment < 0 ? 'num-dn' : ''}">${sg(nw.sentiment, 2)}</span>` : '—';
+        return `<tr><td>${eqLink(cd.ticker)}</td>`
+          + `<td style="text-align:right" class="${(chg || 0) >= 0 ? 'num-up' : 'num-dn'}">${sg(chg, 1)}%</td>`
+          + `<td style="text-align:right">${rvtxt}</td><td style="text-align:right">${ivtxt}</td>`
+          + `<td>${et}</td><td style="text-align:right">${gt}</td><td>${smt}</td>`
+          + `<td style="text-align:right">${ptt}</td><td>${nwt}</td>`
+          + `<td style="max-width:300px">${whyHtml(cd)}</td></tr>`;
+      };
+      H += `<div class="mod-panel"><div class="mod-panel-title">🚀 TOP MOVERS · why they moved (volume · IV · earnings · news)</div>`;
+      if (mv.gainers && mv.gainers.length)
+        H += `<div class="mod-panel-title num-up">▲ GAINERS</div><table class="tbl-dense" style="width:100%;font-size:11px">${movHead}<tbody>${mv.gainers.map(movRow).join('')}</tbody></table>`;
+      if (mv.losers && mv.losers.length)
+        H += `<div class="mod-panel-title num-dn" style="margin-top:6px">▼ LOSERS</div><table class="tbl-dense" style="width:100%;font-size:11px">${movHead}<tbody>${mv.losers.map(movRow).join('')}</tbody></table>`;
+      H += `<div style="font-size:10px;color:var(--fg-dim);padding:3px 8px">${glossify('RVOL ≥2× = heavy volume · 📅 just reported earnings · ⚡ short-γ.')} "Why" synthesizes the likely driver.</div></div>`;
+    }
 
     // GEX
     H += `<div class="acct-strip" style="grid-template-columns:repeat(5,1fr)">
@@ -2997,19 +3159,435 @@
       ${(g.odte || []).map(o => c('0DTE ' + o.ticker, o.status || '—', '', 'pin ' + n(o.pin, 0))).join('')}
     </div>`;
     if (g.flashpoints && g.flashpoints.length) {
-      H += `<div class="mod-panel" style="font-size:11px"><b class="num-dn">Flashpoints (${g.flashpoints.length}):</b> ${g.flashpoints.map(x => escapeGex(x.ticker) + '(' + sg(x.cw_dist, 1) + '%)').join(', ')}`;
-      if (g.iv_high && g.iv_high.length) H += `<br><b>IV≥90:</b> ${g.iv_high.map(x => escapeGex(x.ticker) + '(' + n(x.iv_rank, 0) + ')').join(', ')}`;
+      H += `<div class="mod-panel" style="font-size:11px"><b class="num-dn">${glossify('Flashpoints')} (${g.flashpoints.length}):</b> ${g.flashpoints.map(x => escapeGex(x.ticker) + '(' + sg(x.cw_dist, 1) + '%)').join(', ')}`;
+      if (g.iv_high && g.iv_high.length) H += `<br><b>${glossify('IV')}≥90:</b> ${g.iv_high.map(x => escapeGex(x.ticker) + '(' + n(x.iv_rank, 0) + ')').join(', ')}`;
       H += `</div>`;
     }
 
     // Rotation + smart money + bonds
-    H += `<div class="mod-panel" style="font-size:11px"><b>Sector leaders:</b> <span class="num-up">${leaders.join(', ') || '—'}</span>`;
-    if (changes.length) H += `<br><b>Rotation changes:</b> ${changes.map(x => escapeGex(x.etf) + ' ' + escapeGex(x.prev_quadrant) + '→' + escapeGex(x.quadrant)).join(' · ')}`;
+    H += `<div class="mod-panel" style="font-size:11px"><b>Sector rotation (${glossify('RRG')} vs SPY) — leaders:</b> <span class="num-up">${leaders.join(', ') || '—'}</span>`;
+    if (changes.length) H += `<br><b>Rotation changes:</b> ${changes.map(x => sectorName(x.etf) + ' ' + escapeGex(x.prev_quadrant) + '→' + escapeGex(x.quadrant)).join(' · ')}`;
     H += `<br><b>MOC buy:</b> <span class="num-up">${(sm.moc_buy || []).join(', ') || '—'}</span> · <b>sell:</b> <span class="num-dn">${(sm.moc_sell || []).join(', ') || '—'}</span>`;
     if (b.bonds && b.bonds.length) H += `<br><b>Rates:</b> ${b.bonds.map(x => escapeGex(x.label) + ' ' + n(x.value, 2) + '% (' + sg(x.change_bps, 1) + 'bp)').join(' · ')}`;
     H += `</div>`;
 
+    // beginner glossary at the foot of the brief
+    H += buildGlossary();
+
     body.innerHTML = H;
+    // wire ticker → EQ (Stock Analysis) deep-links
+    body.querySelectorAll('.eq-link').forEach((el) => {
+      el.addEventListener('click', () => {
+        if (window.OC_OPEN_MODULE) window.OC_OPEN_MODULE('stock-analysis', { ticker: el.dataset.eq });
+      });
+    });
+    // daily-brief audio narration player — one ▶ button per available language (en, yue)
+    (function () {
+      const API = BASE.replace(/\/data\/?$/, '');
+      const LABELS = { en: { play: '▶ Listen', pause: '⏸ Pause' }, yue: { play: '▶ 廣東話', pause: '⏸ 暫停' } };
+      const ORDER = ['en', 'yue'];
+      fetch(API + '/api/voice-brief/status?v=' + Date.now()).then(r => r.json()).then(s => {
+        if (!s || !s.langs) return;
+        const avail = ORDER.filter(l => s.langs[l]); if (!avail.length) return;
+        const bar = document.createElement('div');
+        bar.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px 0';
+        const el = document.createElement('audio'); el.preload = 'none';
+        const meta = document.createElement('span'); meta.style.cssText = 'font-size:10px;color:var(--fg-dim)';
+        const buttons = {};
+        const resetLabels = () => avail.forEach(l => { buttons[l].textContent = LABELS[l].play; });
+        avail.forEach(lang => {
+          const info = s.langs[lang], lab = LABELS[lang] || { play: '▶ ' + lang, pause: '⏸' };
+          const btn = document.createElement('button'); btn.type = 'button'; btn.textContent = lab.play;
+          btn.style.cssText = 'cursor:pointer;border:1px solid #E6B84A;background:#E6B84A;color:#1a1a1a;border-radius:16px;padding:5px 13px;font-size:12px;font-weight:600';
+          btn.addEventListener('click', () => {
+            const playingThis = el.src.indexOf(info.url) !== -1 && !el.paused;
+            if (playingThis) { el.pause(); btn.textContent = lab.play; return; }
+            resetLabels();
+            if (el.src.indexOf(info.url) === -1) el.src = API + info.url + '?v=' + (info.uploaded_at || Date.now());
+            el.play(); btn.textContent = lab.pause;
+            try { meta.textContent = 'audio ' + etStamp(info.uploaded_at); } catch (e) {}
+          });
+          bar.appendChild(btn); buttons[lang] = btn;
+        });
+        bar.appendChild(meta); bar.appendChild(el);
+        el.addEventListener('ended', resetLabels);
+        try { meta.textContent = 'audio ' + etStamp(s.langs[avail[0]].uploaded_at); } catch (e) {}
+        body.insertBefore(bar, body.firstChild);
+      }).catch(() => {});
+    })();
+  }
+
+  /* ── Pre-Market Brief — pre-open digest (reads premarket-brief.json) ──── */
+  async function renderPremarket(body, ctx) {
+    body.innerHTML = `<div class="mod-loading">Loading pre-market brief…</div>`;
+    let b;
+    try { b = await fetchJSON(`${BASE}/premarket-brief.json`); }
+    catch (e) { body.innerHTML = `<div class="mod-err">No pre-market brief yet — runs ~07:05 ET on trading days.</div>`; return; }
+    let rateAlert = null;
+    try { rateAlert = await fetchJSON(`${BASE}/site-alerts.json`); } catch (e) {}
+
+    const n = (x, d) => x == null ? '—' : Number(x).toFixed(d == null ? 2 : d);
+    const sg = (x, d) => (x >= 0 ? '+' : '') + n(x, d);
+    const etStamp = (iso) => { try { return new Date(iso).toLocaleString('en-CA', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) + ' ET'; } catch (e) { return (iso || '').slice(0, 16); } };
+    const wcol = { high: '#f87171', med: '#E6B84A', change: '#60a5fa', info: 'var(--fg-dim)' };
+    const RAD = { red: '#f87171', orange: '#fb923c', yellow: '#E6B84A', green: '#4ade80', muted: 'var(--fg-dim)' };
+    const cls = (p) => (p || 0) > 0 ? 'num-up' : (p || 0) < 0 ? 'num-dn' : '';
+    const arr = (p) => (p || 0) > 0 ? '▲' : (p || 0) < 0 ? '▼' : '▫';
+    const eqLink = (tk) => `<span class="eq-link mono" data-eq="${escapeGex(tk)}" style="cursor:pointer;text-decoration:underline" title="Open ${escapeGex(tk)} in EQ">${escapeGex(tk)}</span>`;
+
+    const ov = b.overnight || {}, rad = b.bond_radar || {}, sen = b.sentiment || {}, cal = b.calendar || {}, geo = b.geopolitics || {};
+
+    let H = `<div class="mod-panel" style="padding:8px 12px">
+      <div class="mod-panel-title">🔭 PRE-MARKET BRIEF · ${escapeGex(b.as_of || '')} (${escapeGex(b.weekday || '')}) · before the 09:30 ET open</div>`;
+    if (b.summary) H += `<div style="font-size:12px;line-height:1.55;margin:4px 0">${escapeGex(b.summary)}</div>`;
+    H += `</div>`;
+
+    // Watch
+    H += `<div class="mod-panel"><div class="mod-panel-title">WHAT TO WATCH BEFORE THE OPEN</div>`;
+    if (!b.watch || !b.watch.length) H += `<div style="color:var(--fg-dim);font-size:11px">Quiet pre-market — no flags.</div>`;
+    else b.watch.forEach(x => { H += `<div style="border-left:3px solid ${wcol[x.level] || 'var(--fg-dim)'};padding:3px 8px;margin:3px 0;font-size:11px;line-height:1.45">${escapeGex(x.text)}</div>`; });
+    H += `</div>`;
+
+    // Overnight board
+    const board = (title, key) => {
+      const rows = ov[key] || []; if (!rows.length) return '';
+      let h = `<div class="acct-card"><div class="acct-name">${title}</div>`;
+      rows.forEach(r => { h += `<div style="display:flex;justify-content:space-between;gap:8px;font-size:11px"><span style="color:var(--fg-dim)">${escapeGex(r.label)}</span><span class="mono"><b>${escapeGex(r.value)}</b> <span class="${cls(r.change)}">${arr(r.change)} ${sg(r.change_pct)}%</span></span></div>`; });
+      return h + `</div>`;
+    };
+    const boards = board('Equities / futures', 'equities') + board('Rates', 'rates') + board('FX', 'fx') + board('Commodities', 'commodities') + board('Crypto', 'crypto');
+    if (boards) H += `<div class="mod-panel"><div class="mod-panel-title">🌍 OVERNIGHT BOARD</div><div class="acct-grid">${boards}</div></div>`;
+
+    // Bond radar
+    if (rad.label) {
+      const col = RAD[rad.color] || 'var(--fg-dim)';
+      H += `<div class="mod-panel" style="border-left:2px solid ${col}"><div class="mod-panel-title">💵 LONG-BOND RADAR</div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:11px;margin-bottom:4px">
+        <span style="font-weight:800;padding:2px 8px;border-radius:3px;background:${col};color:#1a1a1a">${escapeGex(rad.emoji || '')} ${escapeGex(rad.label)}</span>
+        <span style="color:var(--fg-dim)">score ${escapeGex(rad.score)}/${escapeGex(rad.max)}</span>
+        <span class="mono">30Y <b style="color:${col}">${n(rad.thirty_y)}%</b></span>
+        <span class="mono" style="color:var(--fg-dim)">10Y-2Y ${n(rad.t10y2y)}%</span></div>
+        <div style="font-size:11px;line-height:1.5">${escapeGex(rad.scenario || '')}</div></div>`;
+    }
+
+    // Rate Move & Equity Impact (intraday — expands the bonds alert; live from site-alerts.json)
+    if (rateAlert && rateAlert.active && Array.isArray(rateAlert.tenors_detail) && rateAlert.tenors_detail.length) {
+      const DIRC = { rising: '#f87171', falling: '#4ade80', mixed: '#c084fc', flat: 'var(--fg-dim)' };
+      const dc = DIRC[rateAlert.direction] || 'var(--fg-dim)';
+      const ti = { INFO: 'ℹ', WATCH: '⚡', WARN: '⚠', ALERT: '🚨' }[rateAlert.level] || '⚡';
+      // NB: rising yield = red (bad for equities) — explicit colors, NOT num-up/dn price semantics
+      let rt = `<table class="mod-table" style="width:100%;font-size:11px"><thead><tr><th>Tenor</th><th style="text-align:right">Prev</th><th></th><th style="text-align:right">Now</th><th style="text-align:right">Δ</th></tr></thead><tbody>`;
+      rateAlert.tenors_detail.forEach(td => {
+        const col = td.direction === 'rising' ? '#f87171' : (td.direction === 'falling' ? '#4ade80' : 'var(--fg-dim)');
+        const ar = td.direction === 'rising' ? '▲' : (td.direction === 'falling' ? '▼' : '—');
+        rt += `<tr><td>${escapeGex(td.label)}</td><td class="mono" style="text-align:right;color:var(--fg-dim)">${n(td.prev_close, 3)}</td><td class="mono" style="text-align:center;color:var(--fg-dim)">→</td><td class="mono" style="text-align:right">${n(td.value, 3)}</td><td class="mono" style="text-align:right;color:${col}">${sg(td.change_bps, 1)} bps ${ar}</td></tr>`;
+      });
+      rt += `</tbody></table>`;
+      const imp = rateAlert.impact || {};
+      H += `<div class="mod-panel" style="border-left:2px solid ${dc}"><div class="mod-panel-title">📉 RATE MOVE &amp; EQUITY IMPACT</div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px;margin-bottom:4px">
+          <span style="font-weight:800;padding:2px 8px;border-radius:3px;background:${dc};color:#1a1a1a">${ti} ${escapeGex(rateAlert.level)}</span>
+          <span style="font-weight:700;color:${dc}">${escapeGex((rateAlert.headline || '').split(' · ')[0])} · intraday</span>
+          <span style="color:var(--fg-dim);font-size:9px">updated ${escapeGex(etStamp(rateAlert.generated_at))}</span>
+        </div>
+        ${rt}
+        ${imp.stance ? `<div style="font-size:11px;line-height:1.5;margin-top:6px"><b style="color:${dc}">Equity impact — ${escapeGex(imp.stance)}.</b> ${escapeGex(imp.summary || '')}</div>` : ''}
+        ${imp.curve_note ? `<div style="font-size:10px;color:var(--fg-dim);line-height:1.4;margin-top:3px">${escapeGex(imp.curve_note)}</div>` : ''}
+        ${imp.level_note ? `<div style="font-size:10px;font-weight:600;color:${dc};margin-top:3px">${escapeGex(imp.level_note)}</div>` : ''}</div>`;
+    }
+
+    // Sentiment
+    if (sen.cnn || sen.crypto) {
+      const fg = (title, f) => { if (!f) return ''; const c2 = f.score < 25 ? 'num-dn' : f.score >= 75 ? 'num-up' : ''; return `<div class="acct-card"><div class="acct-name">${title}</div><div class="acct-val"><span class="mono ${c2}">${escapeGex(f.score)}</span></div><div class="acct-meta"><span>${escapeGex(f.rating)}${f.yesterday != null ? ' · prev ' + escapeGex(f.yesterday) : ''}</span></div></div>`; };
+      let s = fg('CNN F&amp;G (equities)', sen.cnn) + fg('Crypto F&amp;G', sen.crypto);
+      if (sen.aaii && sen.aaii.bullish != null) s += `<div class="acct-card"><div class="acct-name">AAII Survey</div><div class="acct-val"><span class="mono">${n(sen.aaii.bullish, 0)}/${n(sen.aaii.bearish, 0)}%</span></div><div class="acct-meta"><span>bull/bear · spread ${sg(sen.aaii.spread, 0)}</span></div></div>`;
+      H += `<div class="mod-panel"><div class="mod-panel-title">😱 SENTIMENT</div><div class="acct-grid">${s}</div></div>`;
+    }
+
+    // Economic calendar
+    H += `<div class="mod-panel"><div class="mod-panel-title">📅 ECONOMIC CALENDAR — today (${escapeGex(cal.weekday || '')})</div>`;
+    if (!cal.events || !cal.events.length) H += `<div style="color:var(--fg-dim);font-size:11px">No high-impact events.</div>`;
+    else {
+      H += `<table class="mod-table" style="width:100%;font-size:11px"><thead><tr><th>Time (ET)</th><th>Event</th><th style="text-align:right">Est.</th><th style="text-align:right">Prev.</th></tr></thead><tbody>`;
+      cal.events.forEach(e => { const star = (e.impact || 0) >= 3 ? '🔴' : '🟡'; H += `<tr><td class="mono">${escapeGex(e.time)}</td><td>${star} ${escapeGex(e.event)}</td><td class="mono" style="text-align:right">${e.estimate != null ? escapeGex(e.estimate) : '—'}</td><td class="mono" style="text-align:right;color:var(--fg-dim)">${e.previous != null ? escapeGex(e.previous) : '—'}</td></tr>`; });
+      H += `</tbody></table>`;
+    }
+    H += `</div>`;
+
+    // Geopolitics
+    if (geo.top && geo.top.length) {
+      H += `<div class="mod-panel"><div class="mod-panel-title">🌐 GEOPOLITICS &amp; MACRO WIRE</div>`;
+      if (geo.topic_counts) H += `<div style="margin-bottom:5px;font-size:10px;color:var(--fg-dim)">${Object.keys(geo.topic_counts).map(k => `${escapeGex(k)} (${geo.topic_counts[k]})`).join(' · ')}</div>`;
+      geo.top.forEach(m => { const pc = m.priority === 'high' ? '#f87171' : m.priority === 'medium' ? '#E6B84A' : 'var(--fg-dim)'; const imp = (m.asset_impact && m.asset_impact.length) ? ` <span style="color:var(--fg-dim);font-size:9px">[${escapeGex(m.asset_impact.join(', '))}]</span>` : ''; H += `<div style="padding:3px 0;border-bottom:1px solid var(--border-soft,#222);font-size:11px;line-height:1.4"><span style="color:${pc};font-weight:700">${escapeGex((m.priority || '').toUpperCase())}</span> <a href="${escapeGex(m.url)}" target="_blank" rel="noopener" style="color:var(--fg);text-decoration:none">${escapeGex(m.headline)}</a> <span style="color:var(--fg-dim);font-size:9px">(${escapeGex(m.source)}, ${n(m.age_hours, 1)}h)</span>${imp}</div>`; });
+      H += `</div>`;
+    }
+
+    // Portfolio news
+    if (b.portfolio_news && b.portfolio_news.length) {
+      H += `<div class="mod-panel"><div class="mod-panel-title">📰 PORTFOLIO NEWS</div>`;
+      b.portfolio_news.forEach(nw => { H += `<div style="padding:3px 0;font-size:11px">${eqLink(nw.ticker)} — ${escapeGex(nw.title)}${nw.site ? ` <span style="color:var(--fg-dim);font-size:9px">(${escapeGex(nw.site)})</span>` : ''}</div>`; });
+      H += `</div>`;
+    }
+
+    body.innerHTML = H;
+    body.querySelectorAll('.eq-link').forEach((el) => { el.addEventListener('click', () => { if (window.OC_OPEN_MODULE) window.OC_OPEN_MODULE('stock-analysis', { ticker: el.dataset.eq }); }); });
+    // pre-market audio narration player (mode=premarket) — one ▶ per language (en, yue)
+    (function () {
+      const API = BASE.replace(/\/data\/?$/, '');
+      const LABELS = { en: { play: '▶ Listen', pause: '⏸ Pause' }, yue: { play: '▶ 廣東話', pause: '⏸ 暫停' } };
+      const ORDER = ['en', 'yue'];
+      fetch(API + '/api/voice-brief/status?mode=premarket&v=' + Date.now()).then(r => r.json()).then(s => {
+        if (!s || !s.langs) return;
+        const avail = ORDER.filter(l => s.langs[l]); if (!avail.length) return;
+        const bar = document.createElement('div');
+        bar.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px 0';
+        const el = document.createElement('audio'); el.preload = 'none';
+        const meta = document.createElement('span'); meta.style.cssText = 'font-size:10px;color:var(--fg-dim)';
+        const buttons = {};
+        const resetLabels = () => avail.forEach(l => { buttons[l].textContent = LABELS[l].play; });
+        avail.forEach(lang => {
+          const info = s.langs[lang], lab = LABELS[lang] || { play: '▶ ' + lang, pause: '⏸' };
+          const btn = document.createElement('button'); btn.type = 'button'; btn.textContent = lab.play;
+          btn.style.cssText = 'cursor:pointer;border:1px solid #E6B84A;background:#E6B84A;color:#1a1a1a;border-radius:16px;padding:5px 13px;font-size:12px;font-weight:600';
+          btn.addEventListener('click', () => {
+            const playingThis = el.src.indexOf(info.url) !== -1 && !el.paused;
+            if (playingThis) { el.pause(); btn.textContent = lab.play; return; }
+            resetLabels();
+            if (el.src.indexOf(info.url) === -1) el.src = API + info.url + '?v=' + (info.uploaded_at || Date.now());
+            el.play(); btn.textContent = lab.pause;
+            try { meta.textContent = 'audio ' + etStamp(info.uploaded_at); } catch (e) {}
+          });
+          bar.appendChild(btn); buttons[lang] = btn;
+        });
+        bar.appendChild(meta); bar.appendChild(el);
+        el.addEventListener('ended', resetLabels);
+        try { meta.textContent = 'audio ' + etStamp(s.langs[avail[0]].uploaded_at); } catch (e) {}
+        body.insertBefore(bar, body.firstChild);
+      }).catch(() => {});
+    })();
+  }
+
+  /* ── BRF wrapper: Daily | Weekly | Monthly | Yearly period switcher ──
+     Daily = the post-close digest above. Weekly = period_report.py rollup
+     (period-report-weekly.json). Monthly/Yearly = coming-soon until enabled. */
+  async function renderDailyBrief(body, ctx) {
+    const TABS = [['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly'], ['yearly', 'Yearly']];
+    const ENABLED = { daily: true, weekly: true, monthly: false, yearly: false };
+    let cur = (ctx && ctx.params && ctx.params.period) || 'daily';
+    if (!ENABLED.hasOwnProperty(cur)) cur = 'daily';
+    const bar = document.createElement('div');
+    bar.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;padding:8px 12px 2px';
+    const sub = document.createElement('div');
+    const paint = () => Array.from(bar.children).forEach(el => {
+      const on = el.dataset.period === cur;
+      el.style.background = on ? 'var(--accent,#E6B84A)' : 'transparent';
+      el.style.color = on ? '#1a1a1a' : 'var(--fg-dim)';
+      el.style.borderColor = on ? 'var(--accent,#E6B84A)' : 'var(--border,#333)';
+    });
+    const load = () => {
+      if (cur === 'daily') return renderDailyBriefContent(sub, ctx);
+      if (ENABLED[cur]) return renderPeriodWeekly(sub, ctx);
+      sub.innerHTML = `<div class="mod-panel" style="text-align:center;color:var(--fg-dim);padding:26px 14px">`
+        + `<b style="color:var(--fg)">${cur.charAt(0).toUpperCase() + cur.slice(1)} review — coming soon.</b><br>`
+        + `<span style="font-size:11px">The engine already supports it; it just needs to be switched on.</span></div>`;
+    };
+    TABS.forEach(([p, lbl]) => {
+      const el = document.createElement('button'); el.type = 'button'; el.dataset.period = p; el.textContent = lbl;
+      el.style.cssText = 'cursor:pointer;border:1px solid var(--border,#333);border-radius:16px;padding:4px 14px;font-size:12px;font-weight:600;font-family:inherit';
+      el.addEventListener('click', () => { cur = p; paint(); load(); });
+      bar.appendChild(el);
+    });
+    body.innerHTML = ''; body.appendChild(bar); body.appendChild(sub); paint(); load();
+  }
+
+  /* ── SPX sector-performance donut (inline SVG, no chart lib) — sized by S&P 500
+     weight, colored by the period's % return. Mirrors stocks-app brief.html. ── */
+  function sectorDonutSVG(br) {
+    const sp = (br && br.sector_perf) || {}; if (!Object.keys(sp).length) return '';
+    const WEIGHT = { 'Information Technology': 31.8, 'Financials': 13.0, 'Health Care': 12.4, 'Consumer Discretionary': 10.0, 'Communication Services': 8.9, 'Industrials': 8.3, 'Consumer Staples': 5.5, 'Energy': 3.8, 'Utilities': 2.6, 'Materials': 2.4, 'Real Estate': 2.3 };
+    const SHORT = { 'Information Technology': 'Info Tech', 'Financials': 'Financials', 'Health Care': 'Health Care', 'Consumer Discretionary': 'Cons Discr', 'Communication Services': 'Comm Svc', 'Industrials': 'Industrials', 'Consumer Staples': 'Cons Stpl', 'Energy': 'Energy', 'Utilities': 'Utilities', 'Materials': 'Materials', 'Real Estate': 'Real Estate' };
+    const TINY = { 'Utilities': 'XLU', 'Materials': 'XLB', 'Real Estate': 'XLRE' };
+    const col = v => v == null ? '#6b7280' : v > 0 ? '#22c55e' : v < 0 ? '#ef4444' : '#6b7280';
+    const fmt = v => v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+    const d2r = g => (g - 90) * Math.PI / 180;
+    const sectors = Object.keys(WEIGHT).map(nm => ({ name: nm, weight: WEIGHT[nm], change: (sp[nm] ? sp[nm].pct : null) })).sort((a, b) => b.weight - a.weight);
+    const total = sectors.reduce((s, x) => s + x.weight, 0);
+    const W = 700, H = 480, cx = W / 2, cy = H / 2, R2 = 140, R1 = 92, RC = 75, GAP = 0.7;
+    const arc = (s, e, r1, r2) => { const a1 = d2r(s), a2 = d2r(e), x1 = cx + r2 * Math.cos(a1), y1 = cy + r2 * Math.sin(a1), x2 = cx + r2 * Math.cos(a2), y2 = cy + r2 * Math.sin(a2), x3 = cx + r1 * Math.cos(a2), y3 = cy + r1 * Math.sin(a2), x4 = cx + r1 * Math.cos(a1), y4 = cy + r1 * Math.sin(a1), lg = (e - s) > 180 ? 1 : 0; return `M${x1.toFixed(1)},${y1.toFixed(1)} A${r2},${r2},0,${lg},1,${x2.toFixed(1)},${y2.toFixed(1)} L${x3.toFixed(1)},${y3.toFixed(1)} A${r1},${r1},0,${lg},0,${x4.toFixed(1)},${y4.toFixed(1)} Z`; };
+    let slices = '', labels = '', angle = 0;
+    sectors.forEach(sec => { const span = (sec.weight / total) * 360, sa = angle + GAP / 2, ea = angle + span - GAP / 2, mid = (sa + ea) / 2; angle += span; const c = col(sec.change); slices += `<path d="${arc(sa, ea, R1, R2)}" fill="${c}" stroke="#0d1117" stroke-width="1.5"/>`; const tiny = span < 12, LR = R2 + (tiny ? 28 : 20), ma = d2r(mid), lx1 = cx + (R2 + 3) * Math.cos(ma), ly1 = cy + (R2 + 3) * Math.sin(ma), lx2 = cx + LR * Math.cos(ma), ly2 = cy + LR * Math.sin(ma), tx = cx + (LR + 8) * Math.cos(ma), ty = cy + (LR + 8) * Math.sin(ma), anch = tx > cx + 8 ? 'start' : tx < cx - 8 ? 'end' : 'middle', lab = tiny ? (TINY[sec.name] || sec.name.split(' ')[0]) : SHORT[sec.name], fs = tiny ? 8.5 : 9.5; labels += `<line x1="${lx1.toFixed(1)}" y1="${ly1.toFixed(1)}" x2="${lx2.toFixed(1)}" y2="${ly2.toFixed(1)}" stroke="${c}" stroke-width="0.8" opacity="0.65"/><text x="${tx.toFixed(1)}" y="${(ty - 3.5).toFixed(1)}" text-anchor="${anch}" font-size="${fs}" fill="#d1d5db">${lab}</text><text x="${tx.toFixed(1)}" y="${(ty + 7.5).toFixed(1)}" text-anchor="${anch}" font-size="${fs}" fill="${c}" font-family="ui-monospace,monospace">${fmt(sec.change)}</text>`; });
+    const spw = (br.spy_week_px != null ? br.spy_week_px : br.spy_week), cc = col(spw);
+    return `<div style="font-size:11px;font-weight:600;color:var(--fg-dim);letter-spacing:0.05em;margin:8px 0 2px">SPX SECTOR PERFORMANCE · week · SIZED BY S&amp;P 500 WEIGHT</div>`
+      + `<div style="display:flex;justify-content:center;overflow:visible"><svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px;overflow:visible;display:block">${slices}`
+      + `<circle cx="${cx}" cy="${cy}" r="${RC}" fill="${cc}" opacity="0.82"/><text x="${cx}" y="${cy - 8}" text-anchor="middle" font-size="11" fill="#fff" font-weight="600" opacity="0.85">S&amp;P 500</text><text x="${cx}" y="${cy + 10}" text-anchor="middle" font-size="14" fill="#fff" font-family="ui-monospace,monospace" font-weight="700">${fmt(spw)}</text>${labels}</svg></div>`
+      + `<div style="font-size:9px;color:var(--fg-dim);text-align:center;margin-top:2px">Slice size = S&amp;P 500 sector weight · Color = weekly % return · ETF proxy: XLK XLV XLF XLY XLC XLI XLP XLE XLRE XLB XLU</div>`;
+  }
+
+  /* ── Weekly (period) review — reads period-report-weekly.json ──── */
+  async function renderPeriodWeekly(body, ctx) {
+    body.innerHTML = `<div class="mod-loading">Loading weekly review…</div>`;
+    let d;
+    try { d = await fetchJSON(`${BASE}/period-report-weekly.json`); }
+    catch (e) { body.innerHTML = `<div class="mod-panel" style="text-align:center;color:var(--fg-dim);padding:26px 14px"><b style="color:var(--fg)">Weekly review — coming soon.</b><br><span style="font-size:11px">Not generated yet.</span></div>`; return; }
+    const n = (x, dp) => x == null ? '—' : Number(x).toFixed(dp == null ? 2 : dp);
+    const sg = (x, dp) => (x >= 0 ? '+' : '') + n(x, dp);
+    const cl = (x) => (x >= 0 ? 'num-up' : 'num-dn');
+    const eqLink = (tk) => `<span class="eq-link mono" data-eq="${escapeGex(tk)}" style="cursor:pointer;text-decoration:underline;text-underline-offset:2px" title="Open ${escapeGex(tk)} in EQ">${escapeGex(tk)}</span>`;
+    // expand bare sector ETF tickers in prose → "Financials (XLF)" (run ONCE on escaped text)
+    const SECTORS = { XLK: 'Technology', XLV: 'Health Care', XLF: 'Financials', XLE: 'Energy', XLI: 'Industrials', XLP: 'Consumer Staples', XLY: 'Consumer Discretionary', XLU: 'Utilities', XLB: 'Materials', XLRE: 'Real Estate', XLC: 'Communication Services' };
+    const SECTOR_RE = new RegExp('\\b(' + Object.keys(SECTORS).sort((a, b) => b.length - a.length).join('|') + ')\\b', 'g');
+    const sectorize = (s) => String(s || '').replace(SECTOR_RE, m => `${SECTORS[m]} (${m})`);
+    const VIX_NOTE = {
+      CONTANGO: 'Near-term VIX is BELOW longer-dated VIX — the normal, calm state: the market expects volatility to rise only gradually. A complacent / risk-on backdrop.',
+      BACKWARDATION: 'Near-term VIX is ABOVE longer-dated VIX — acute stress/fear right now; the market is pricing imminent risk. Often shows up near sell-off bottoms.',
+      FLAT: 'Near-term and longer-dated VIX are roughly EQUAL — a transition between calm and stress; indecision.'
+    };
+    // Weekly narrative → labeled, readable blocks (splits on newlines; bolds "Label:")
+    const sblocks = (s) => {
+      s = String(s || ''); if (!s) return '';
+      const parts = s.split(/\n+/).map(x => x.trim()).filter(Boolean);
+      if (parts.length <= 1) return `<div class="mod-panel" style="border-left:3px solid #60a5fa;font-size:13px;line-height:1.55">${sectorize(escapeGex(s))}</div>`;
+      let h = '<div class="mod-panel" style="border-left:3px solid #60a5fa;font-size:13px;line-height:1.6">';
+      parts.forEach(p => { const m = p.match(/^([A-Za-z][A-Za-z &/]{1,22}):\s+([\s\S]+)$/);
+        if (m) h += `<div style="margin-bottom:6px"><span style="font-weight:800;color:#60a5fa;text-transform:uppercase;font-size:10px;letter-spacing:0.04em;margin-right:5px">${escapeGex(m[1])}</span>${sectorize(escapeGex(m[2]))}</div>`;
+        else h += `<div style="margin-bottom:6px">${sectorize(escapeGex(p))}</div>`; });
+      return h + '</div>';
+    };
+    const w = d.window || {};
+    let H = `<div class="mod-panel" style="padding:8px 12px"><span class="mono" style="font-size:15px;font-weight:700">📊 ${escapeGex((d.label || 'WEEKLY').toUpperCase())} REVIEW</span>`
+      + `<span style="color:var(--fg-dim);margin-left:8px">${escapeGex(w.start)} → ${escapeGex(w.end)} · ${escapeGex(w.label)}</span></div>`;
+    if (d.summary) H += sblocks(d.summary);
+
+    // The week in daily briefs — table: scannable metrics + prose Highlights
+    const ds = d.daily_summaries || [];
+    H += `<div class="mod-panel"><div class="mod-panel-title">🗞️ THE WEEK IN DAILY BRIEFS</div>`;
+    if (ds.length) {
+      H += `<table class="mod-table" style="width:100%;font-size:11px"><thead><tr><th>Date</th><th>Regime</th><th style="text-align:right" title="S&P 500 RSI(14): ≥70 overbought, ≤30 oversold">RSI</th><th title="VIX term structure: CONTANGO calm / FLAT transition / BACKWARDATION stress">VIX</th><th style="text-align:right" title="Recession composite score (higher = more risk)">Rec</th><th style="text-align:right" title="Short-gamma flashpoint count — names where dealers amplify moves (squeeze then reversal). A market-fragility gauge, NOT directional: higher = whippier/less stable tape, lower = calmer.">Flash</th><th>Highlights</th></tr></thead><tbody>`;
+      ds.forEach(x => { const rc2 = (x.rsi != null && x.rsi >= 70) ? 'num-dn' : (x.rsi != null && x.rsi <= 30 ? 'num-up' : '');
+        const vixCell = x.vix ? `<span style="cursor:help;border-bottom:1px dotted var(--fg-dim)" title="${escapeGex(VIX_NOTE[x.vix] || 'VIX term structure state.')}">${escapeGex(x.vix)}</span>` : '—';
+        H += `<tr style="vertical-align:top"><td class="mono">${escapeGex(x.date)}</td><td>${escapeGex(x.regime || '—')}${x.score != null ? ` <span style="color:var(--fg-dim)">${escapeGex(x.score)}/5</span>` : ''}</td><td class="mono ${rc2}" style="text-align:right">${x.rsi != null ? n(x.rsi, 1) : '—'}</td><td>${vixCell}</td><td class="mono" style="text-align:right">${x.rec_composite != null ? escapeGex(x.rec_composite) : '—'}</td><td class="mono" style="text-align:right">${x.flash != null ? escapeGex(x.flash) : '—'}</td><td style="white-space:normal;line-height:1.4;min-width:240px">${sectorize(escapeGex(x.summary || ''))}</td></tr>`; });
+      H += `</tbody></table>`;
+    } else H += `<div style="color:var(--fg-dim);font-size:12px;padding:4px 8px">No archived daily briefs in window yet.</div>`;
+    H += `</div>`;
+
+    // Trade performance
+    const perf = d.performance || {}, p = perf.closed || {};
+    H += `<div class="mod-panel"><div class="mod-panel-title">📈 TRADE PERFORMANCE — closed this period</div>`;
+    H += `<div style="display:flex;gap:12px;flex-wrap:wrap;padding:2px 8px 8px;font-size:12px">`
+      + `<span>Closed <b>${p.count || 0}</b></span><span>Winners <b>${p.winners || 0}</b> (${p.win_rate != null ? p.win_rate + '%' : '—'})</span>`
+      + `<span>Avg <b class="${cl(p.avg_return || 0)}">${sg(p.avg_return)}%</b></span><span>Total <b class="${cl(p.total_return || 0)}">${sg(p.total_return)}%</b></span></div>`;
+    const trows = (p.best || []).concat(p.worst || []);
+    if (trows.length) {
+      H += `<table class="mod-table" style="width:100%;font-size:11px"><thead><tr><th>Ticker</th><th>Pattern</th><th style="text-align:right">Return</th><th>Outcome</th><th style="text-align:right">Days</th><th>Exit</th></tr></thead><tbody>`;
+      trows.forEach(t => { H += `<tr><td>${eqLink(t.ticker)}</td><td style="color:var(--fg-dim)">${escapeGex(t.pattern)}</td><td class="mono ${cl(t.return_pct || 0)}" style="text-align:right">${sg(t.return_pct)}%</td><td style="color:var(--fg-dim)">${escapeGex(t.outcome)}</td><td class="mono" style="text-align:right">${escapeGex(t.holding_days)}</td><td class="mono" style="color:var(--fg-dim)">${escapeGex(t.exit_date)}</td></tr>`; });
+      H += `</tbody></table>`;
+    }
+    const wt = perf.weekly_trend || [];
+    if (wt.length) {
+      H += `<div class="mod-panel-title" style="margin-top:8px">WEEKLY P&amp;L TREND</div><table class="mod-table" style="width:100%;font-size:11px"><thead><tr><th>Week</th><th style="text-align:right">Trades</th><th style="text-align:right">Win%</th><th style="text-align:right">Avg</th><th style="text-align:right">Total</th></tr></thead><tbody>`;
+      wt.forEach(x => { const curw = x.week === w.label; H += `<tr${curw ? ' style="background:rgba(230,184,74,0.10)"' : ''}><td class="mono">${escapeGex(x.week)}${curw ? ' ◄' : ''}</td><td class="mono" style="text-align:right">${escapeGex(x.total)}</td><td class="mono" style="text-align:right">${n(x.win_rate, 1)}%</td><td class="mono ${cl(x.avg_return || 0)}" style="text-align:right">${sg(x.avg_return)}%</td><td class="mono ${cl(x.total_return || 0)}" style="text-align:right">${sg(x.total_return)}%</td></tr>`; });
+      H += `</tbody></table>`;
+    }
+    H += `</div>`;
+
+    // Pattern scorecard
+    const pat = (d.patterns || {}).in_window || [];
+    if (pat.length) {
+      H += `<div class="mod-panel"><div class="mod-panel-title">🎯 PATTERN SCORECARD — closed this period</div><table class="mod-table" style="width:100%;font-size:11px"><thead><tr><th>Pattern</th><th style="text-align:right">Closed</th><th style="text-align:right">Win%</th><th style="text-align:right">Avg</th></tr></thead><tbody>`;
+      pat.forEach(a => { H += `<tr><td>${escapeGex(a.signal_type)}</td><td class="mono" style="text-align:right">${escapeGex(a.closed)}</td><td class="mono" style="text-align:right">${n(a.win_rate, 1)}%</td><td class="mono ${cl(a.avg_return || 0)}" style="text-align:right">${sg(a.avg_return)}%</td></tr>`; });
+      H += `</tbody></table></div>`;
+    }
+
+    // Valuation map
+    const v = d.valuation || {};
+    if (v.spy) {
+      const vc = (lbl, o) => `<div class="acct-card"><div class="acct-name">${lbl} fwd P/E</div><div class="acct-val"><span class="mono">${n(o.avg_fwd_pe, 1)}</span></div><div class="acct-meta"><span>median ${n(o.median_fwd_pe, 1)} · ${o.cheap_count} cheap / ${o.expensive_count} rich</span></div></div>`;
+      H += `<div class="mod-panel"><div class="mod-panel-title">💵 VALUATION MAP</div><div class="acct-grid">${vc('SPY100', v.spy)}${v.qqq ? vc('QQQ100', v.qqq) : ''}</div>`;
+      if ((v.spy.cheapest || []).length) H += `<div style="font-size:11px;margin-top:5px"><b>Cheapest SPY:</b> ${v.spy.cheapest.map(x => eqLink(x.ticker) + ' ' + n(x.forwardPE, 1)).join(' · ')}</div>`;
+      if (v.qqq && (v.qqq.cheapest || []).length) H += `<div style="font-size:11px;margin-top:3px"><b>Cheapest QQQ:</b> ${v.qqq.cheapest.map(x => eqLink(x.ticker) + ' ' + n(x.forwardPE, 1)).join(' · ')}</div>`;
+      H += `</div>`;
+    }
+
+    // Breadth & rotation — market internals (from breadth.html)
+    const br = d.breadth || {};
+    if (br.as_of) {
+      const bcard = (lbl, val, cls, meta) => `<div class="acct-card"><div class="acct-name">${lbl}</div><div class="acct-val"><span class="mono ${cls || ''}">${val}</span></div>${meta ? `<div class="acct-meta"><span>${meta}</span></div>` : ''}</div>`;
+      const secName = (etf) => SECTORS[etf] ? `${etf} (${SECTORS[etf]})` : etf;
+      let bc = '';
+      bc += bcard('SPY (week)', sg(br.spy_week) + '%', cl(br.spy_week || 0), 'last day ' + sg(br.spy_change) + '%');
+      bc += bcard('QQQ (week)', sg(br.qqq_week) + '%', cl(br.qqq_week || 0), 'last day ' + sg(br.qqq_change) + '%');
+      bc += bcard('S&amp;P 500 breadth', (br.sp500_breadth != null ? br.sp500_breadth + '%' : '—'), '', 'above 50-day MA');
+      bc += bcard('Nasdaq-100 breadth', (br.qqq_breadth != null ? br.qqq_breadth + '%' : '—'), '', 'above 50-day MA');
+      bc += bcard('Sectors above 50%', `${br.sectors_above} / ${br.sectors_total}`, '', `${br.sectors_total - br.sectors_above} below 50%`);
+      bc += bcard('Breadth regime', escapeGex(br.regime || '—'), '', 'score ' + (br.breadth_score_start != null ? br.breadth_score_start + '→' : '') + br.breadth_score);
+      H += `<div class="mod-panel"><div class="mod-panel-title">🧭 BREADTH &amp; ROTATION <span style="color:var(--fg-dim);font-weight:400;font-size:10px">— from breadth.html</span></div><div class="acct-grid">${bc}</div>`;
+      if ((br.leaders || []).length) H += `<div style="font-size:11px;margin-top:5px"><b>Sector leaders (% &gt; 50-day MA):</b> ${br.leaders.map(l => `${escapeGex(l.sector)} <span style="color:var(--fg-dim)">${l.pct}%</span>`).join(' · ')}</div>`;
+      if ((br.laggards || []).length) H += `<div style="font-size:11px;margin-top:3px"><b>Laggards:</b> ${br.laggards.map(l => `${escapeGex(l.sector)} <span style="color:var(--fg-dim)">${l.pct}%</span>`).join(' · ')}</div>`;
+      const rr = br.rotation || [];
+      if (rr.length) {
+        const leadrs = rr.filter(x => x.quadrant === 'Leading').map(x => secName(x.etf));
+        const chg = rr.filter(x => x.changed);
+        H += `<div style="font-size:11px;margin-top:4px"><b>RRG weekly — Leading:</b> ${leadrs.join(', ') || '—'}</div>`;
+        if (chg.length) H += `<div style="font-size:11px;margin-top:3px"><b>Quadrant changes:</b> ${chg.map(x => `${secName(x.etf)} → ${escapeGex(x.quadrant)}`).join(' · ')}</div>`;
+      }
+      H += sectorDonutSVG(br);
+      H += `</div>`;
+    }
+
+    // Figures — rates / sentiment / recession, with plain-English tooltips
+    const ev = d.events || {}, fig = ev.figures || {}, fgs = fig.fear_greed || {}, kr = fig.key_rates || {}, rc = fig.recession || {};
+    const RATE_INFO = {
+      DFF: { label: 'Fed Funds (eff)', tip: 'Effective federal funds rate — the actual overnight rate banks lend reserves to each other. The Fed’s main policy lever.' },
+      DFEDTARU: { label: 'Fed Target up', tip: 'Upper bound of the FOMC target range for the fed funds rate.' },
+      DFEDTARL: { label: 'Fed Target dn', tip: 'Lower bound of the FOMC target range for the fed funds rate.' },
+      SOFR: { label: 'SOFR', tip: 'Secured Overnight Financing Rate — benchmark overnight rate secured by US Treasuries; the post-LIBOR reference rate.' },
+      DGS2: { label: '2Y Treasury', tip: '2-year US Treasury yield — closely tracks expected Fed policy.' },
+      DGS10: { label: '10Y Treasury', tip: '10-year US Treasury yield — benchmark long rate behind mortgages and equity valuations.' }
+    };
+    const figcard = (lbl, val, cls, meta, tip) => `<div class="acct-card"><div class="acct-name"${tip ? ` title="${escapeGex(tip)}" style="cursor:help;border-bottom:1px dotted var(--fg-dim);display:inline-block"` : ''}>${lbl}</div><div class="acct-val"><span class="mono ${cls || ''}">${val}</span></div>${meta ? `<div class="acct-meta"><span>${meta}</span></div>` : ''}</div>`;
+    // past-week move in basis points (1 bp = 0.01%); rising yields = red
+    const chgBps = (wc) => { if (wc == null) return '<span style="color:var(--fg-dim)">— 1w</span>'; const bps = wc * 100; const c = bps > 0 ? 'num-dn' : bps < 0 ? 'num-up' : ''; return `<span class="${c}">${bps >= 0 ? '+' : ''}${bps.toFixed(1)} bps</span> <span style="color:var(--fg-dim)">1w</span>`; };
+    let figcards = '';
+    if (fgs.score != null) {
+      const c2 = fgs.score < 25 ? 'num-dn' : fgs.score >= 75 ? 'num-up' : '';
+      const lw = (fgs.comparisons && fgs.comparisons.lastWeek) ? fgs.comparisons.lastWeek.value : null;
+      let meta = '0→100';
+      if (lw != null) { const dv = fgs.score - lw; const dc = dv > 0 ? 'num-up' : dv < 0 ? 'num-dn' : ''; meta = `<span class="${dc}">${dv >= 0 ? '+' : ''}${dv.toFixed(1)}</span> <span style="color:var(--fg-dim)">vs last wk (${escapeGex(lw)})</span>`; }
+      figcards += figcard('CNN F&amp;G', escapeGex(fgs.score), c2, meta, 'CNN Fear & Greed Index — market sentiment 0 (extreme fear) to 100 (extreme greed). Below 25 = Fear, above 75 = Greed.');
+    }
+    if (kr.DFF) figcards += figcard(escapeGex(RATE_INFO.DFF.label), n(kr.DFF.value, 2) + '%', '', chgBps(kr.DFF.weekly_change), RATE_INFO.DFF.tip);
+    if (kr.SOFR) figcards += figcard('SOFR', n(kr.SOFR.value, 2) + '%', '', chgBps(kr.SOFR.weekly_change), RATE_INFO.SOFR.tip);
+    const ty = fig.treasury_yields || [];
+    ['2Y', '10Y', '30Y'].forEach(L => { const t = ty.filter(x => x.label === L)[0]; if (t) figcards += figcard(escapeGex(L) + ' Treasury', n(t.value, 2) + '%', '', chgBps(t.weekly_change), `${L} US Treasury yield. Past-week change in basis points (1 bp = 0.01%). Rising yields (red) pressure rate-sensitive stocks.`); });
+    if (rc.composite != null) figcards += figcard('Recession', escapeGex(rc.composite), '', escapeGex(rc.regime || ''), 'Composite recession-risk score from macro indicators (yield curve, jobless claims, etc.). Higher = more risk.');
+    if (figcards) H += `<div class="mod-panel"><div class="mod-panel-title">📐 FIGURES <span style="color:var(--fg-dim);font-weight:400;font-size:10px">— level + past-week change</span></div><div class="acct-grid">${figcards}</div></div>`;
+
+    // Key economic prints
+    const econ = ev.econ || [];
+    if (econ.length) {
+      H += `<div class="mod-panel"><div class="mod-panel-title">🗓️ KEY ECONOMIC PRINTS</div><table class="mod-table" style="width:100%;font-size:11px"><thead><tr><th>Date</th><th>Event</th><th style="text-align:right">Actual</th><th style="text-align:right">Est.</th><th style="text-align:right">Prev.</th></tr></thead><tbody>`;
+      econ.slice(0, 20).forEach(e => { const u = e.unit || ''; H += `<tr><td class="mono" style="color:var(--fg-dim)">${escapeGex(e.date)}</td><td>${escapeGex(e.event)}</td><td class="mono" style="text-align:right"><b>${escapeGex(e.actual)}${escapeGex(u)}</b></td><td class="mono" style="text-align:right;color:var(--fg-dim)">${e.estimate != null ? escapeGex(e.estimate) + escapeGex(u) : '—'}</td><td class="mono" style="text-align:right;color:var(--fg-dim)">${e.previous != null ? escapeGex(e.previous) + escapeGex(u) : '—'}</td></tr>`; });
+      H += `</tbody></table></div>`;
+    }
+
+    // News & geopolitics — grouped by topic (China/Trade War, Fed/Rates, Middle East…)
+    const news = d.news || [];
+    if (news.length) {
+      const grp = {}, ord = [];
+      news.forEach(m => { const t = m.topic || 'Other'; if (!grp[t]) { grp[t] = []; ord.push(t); } grp[t].push(m); });
+      ord.sort((a, b) => { const ha = grp[a].some(x => ((x.priority || '') + '').toLowerCase() === 'high');
+        const hb = grp[b].some(x => ((x.priority || '') + '').toLowerCase() === 'high');
+        if (ha !== hb) return ha ? -1 : 1; return grp[b].length - grp[a].length; });
+      H += `<div class="mod-panel"><div class="mod-panel-title">🌍 NEWS &amp; GEOPOLITICS</div>`;
+      ord.forEach(t => {
+        H += `<div style="margin:7px 0 2px;font-weight:800;color:#60a5fa;font-size:10px;text-transform:uppercase;letter-spacing:0.04em;border-bottom:1px solid var(--border-soft,#222);padding-bottom:2px">${escapeGex(t)} <span style="color:var(--fg-dim)">(${grp[t].length})</span></div>`;
+        grp[t].forEach(m => { H += `<div style="padding:3px 0;font-size:11px;line-height:1.4"><a href="${escapeGex(m.url)}" target="_blank" rel="noopener" style="color:var(--fg);text-decoration:none">${escapeGex(m.headline)}</a>${m.source ? ` <span style="color:var(--fg-dim);font-size:9px">(${escapeGex(m.source)})</span>` : ''}</div>`; });
+      });
+      H += `</div>`;
+    }
+
+    body.innerHTML = H;
+    body.querySelectorAll('.eq-link').forEach(el => { el.addEventListener('click', () => { if (window.OC_OPEN_MODULE) window.OC_OPEN_MODULE('stock-analysis', { ticker: el.dataset.eq }); }); });
   }
 
   window.OC_MODULES = window.OC_MODULES || {};
@@ -3018,4 +3596,5 @@
   window.OC_MODULES['gex']         = { render: renderGEX };
   window.OC_MODULES['smart-money'] = { render: renderSmartMoney };
   window.OC_MODULES['daily-brief'] = { render: renderDailyBrief };
+  window.OC_MODULES['premarket']   = { render: renderPremarket };
 })();

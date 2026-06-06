@@ -31,6 +31,7 @@
         <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Portfolio impact:</b> India LNG demand surge (Petronet, GAIL) · tanker utilisation (TK, DHT) · Red Sea / Gulf of Aden disruptions reroute vessels through this corridor adding days and freight cost.</p>`,
       marinetraffic: 'https://www.marinetraffic.com/en/ais/home/centerx:67/centery:17/zoom:5',
       center: [17, 67], zoom: 5,
+      cronTracked: true, dataUrl: '/geo-arabian_sea.json',
     },
     indian_ocean: {
       label: 'Indian Ocean',
@@ -42,6 +43,7 @@
         <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Portfolio impact:</b> Malacca congestion signals Asia demand acceleration · piracy / weather delays add freight premium · diversion around Lombok Strait adds ~3 days of cost.</p>`,
       marinetraffic: 'https://www.marinetraffic.com/en/ais/home/centerx:90/centery:8/zoom:5',
       center: [8, 90], zoom: 4,
+      cronTracked: true, dataUrl: '/geo-indian_ocean.json',
     },
     asia_pacific: {
       label: 'Asia-Pacific',
@@ -53,6 +55,7 @@
         <p style="margin:0 0 6px 0"><b style="color:var(--fg)">Portfolio impact:</b> LNG demand surge (QatarEnergy partners, Woodside) · tanker oversupply signals pricing pressure · Taiwan tensions → Asia risk premium across tech + energy.</p>`,
       marinetraffic: 'https://www.marinetraffic.com/en/ais/home/centerx:125/centery:25/zoom:5',
       center: [25, 125], zoom: 4,
+      cronTracked: true, dataUrl: '/geo-asia_pacific.json',
     },
     // ── Americas cron-tracked regions ──────────────────────────────────────
     gulf_mexico: {
@@ -245,7 +248,9 @@
     };
   }
 
-  /* ── Daily aggregate helper — collapses intraday snapshots to one avg per calendar day ── */
+  /* ── Daily aggregate helper — collapses intraday snapshots to one avg per calendar day.
+       The most recent (current, still-incomplete) day plots its LATEST snapshot rather than
+       the running average, so the chart's last point matches the live map count. ── */
   function dailyAggregate(history) {
     const byDay = {};
     for (const h of history) {
@@ -254,12 +259,20 @@
       byDay[day].tankers.push(h.tankers || 0);
       byDay[day].total.push(h.total || 0);
     }
-    return Object.keys(byDay).sort().map(day => ({
-      ts:      byDay[day].ts,
-      tankers: Math.round(byDay[day].tankers.reduce((a,b)=>a+b,0) / byDay[day].tankers.length),
-      total:   Math.round(byDay[day].total.reduce((a,b)=>a+b,0)   / byDay[day].total.length),
-    }));
+    const days = Object.keys(byDay).sort();
+    const lastDay = days[days.length - 1];
+    return days.map(day => {
+      const bucket = byDay[day];
+      const latest = day === lastDay;   // current day → use latest snapshot, not the mean
+      const pick = (arr) => latest
+        ? arr[arr.length - 1]
+        : Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
+      return { ts: bucket.ts, tankers: pick(bucket.tankers), total: pick(bucket.total) };
+    });
   }
+
+  /* Hover state for the history chart — set by geoHistoryChart, consumed by initHistoryChart */
+  let _histState = null;
 
   /* ── History chart: tankers + total over time with ±1σ band ── */
   function geoHistoryChart(history) {
@@ -303,6 +316,19 @@
     const totalPath  = sp(totals.map((v,i)  => ({ x: sx(i), y: sy(v) })));
     const tankerPath = sp(tankers.map((v,i) => ({ x: sx(i), y: sy(v) })));
 
+    // Per-point geometry + values for the hover crosshair
+    _histState = {
+      W, H, padT, padB,
+      pts: chartData.map((h, i) => ({
+        x:       +sx(i).toFixed(2),
+        yT:      +sy(h.tankers || 0).toFixed(2),
+        yTot:    +sy(h.total   || 0).toFixed(2),
+        ts:      h.ts,
+        tankers: h.tankers || 0,
+        total:   h.total   || 0,
+      })),
+    };
+
     // X labels — show up to 6 date ticks
     const step = Math.max(1, Math.floor(n / 5));
     let xLabels = '';
@@ -336,7 +362,8 @@
     }
 
     return `
-      <div style="margin:6px 0 10px 0;padding:8px 10px;background:var(--panel);border-radius:4px">
+      <div style="margin:6px 0 10px 0;padding:8px 10px;background:var(--panel);border-radius:4px;position:relative">
+        <div id="geo-hist-tip" style="position:absolute;display:none;pointer-events:none;background:var(--bg,#11151c);border:1px solid var(--border,#2a2f3a);border-radius:3px;padding:3px 6px;font-size:9px;line-height:1.4;white-space:nowrap;z-index:20;box-shadow:0 1px 5px rgba(0,0,0,0.5)"></div>
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;flex-wrap:wrap">
           <span style="font-size:10px;color:var(--fg-dim);letter-spacing:.05em">TANKERS · ${daySpan}d HISTORY (${n} daily avg · ${snapshots} snapshots)</span>
           ${baseline ? `<span class="mono" style="font-size:9px;color:var(--fg-faint)">μ=${baseline.mean} ±${baseline.sigma}</span>${statusHtml}` : ''}
@@ -348,11 +375,14 @@
             ${baseline ? `<span style="width:10px;height:8px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.3);display:inline-block;vertical-align:middle"></span><span style="font-size:9px;color:var(--fg-faint)">±1σ</span>` : ''}
           </span>
         </div>
-        <svg class="oc-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;max-width:${W}px;height:${H}px">
+        <svg id="geo-hist-svg" class="oc-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;max-width:${W}px;height:${H}px;cursor:crosshair">
           ${grid}${bandSvg}
           <path d="${totalPath}"  style="fill:none;stroke:rgba(148,163,184,0.4);stroke-width:1;stroke-dasharray:3 2"/>
           <path d="${tankerPath}" style="fill:none;stroke:#f59e0b;stroke-width:1.6"/>
           ${xLabels}${yLabels}
+          <line   id="geo-cross-x" y1="${padT}" y2="${H - padB}" stroke="var(--fg-faint,#8a93a3)" stroke-width="0.7" stroke-dasharray="2 2" vector-effect="non-scaling-stroke" style="display:none"/>
+          <circle id="geo-cross-dt" r="2.6" fill="rgba(148,163,184,0.95)" stroke="var(--panel)" stroke-width="0.6" style="display:none"/>
+          <circle id="geo-cross-dk" r="2.8" fill="#f59e0b" stroke="var(--panel)" stroke-width="0.6" style="display:none"/>
         </svg>
       </div>`;
   }
@@ -469,12 +499,27 @@
       _allMarkers.push({ marker, type, flow, mmsi: v.mmsi });
     });
 
-    if (bbox?.sw && bbox?.ne) {
-      _map.fitBounds([
-        [bbox.sw.lat, bbox.sw.lon],
-        [bbox.ne.lat, bbox.ne.lon],
-      ], { padding: [8, 8] });
-    }
+    const fitMapBounds = () => {
+      if (bbox?.sw && bbox?.ne) {
+        _map.fitBounds([
+          [bbox.sw.lat, bbox.sw.lon],
+          [bbox.ne.lat, bbox.ne.lon],
+        ], { padding: [8, 8] });
+      }
+    };
+    fitMapBounds();
+
+    /* Leaflet locks its tile grid to the container size at init. On wide desktop
+       layouts the map sits below the fold and isn't fully laid out yet, so only the
+       initially-visible tiles load (gray/partial map). Recompute once the browser has
+       laid out, then re-fit so the view is correct at the true size. (Mobile single-
+       column lays out before init, so it never hit this.) */
+    const _settleMap = () => {
+      if (!_map) return;
+      try { _map.invalidateSize(false); fitMapBounds(); } catch (_) {}
+    };
+    requestAnimationFrame(_settleMap);
+    setTimeout(_settleMap, 300);
 
     /* Type toggle buttons */
     document.querySelectorAll('.geo-type-btn').forEach(btn => {
@@ -831,6 +876,61 @@
       + historyBlock + typeTable + vesselTable + context;
     initGeoMap(vessels, d.bbox);
     initVesselSection(vessels);
+    initHistoryChart();
+  }
+
+  /* ── History chart hover: crosshair + tooltip reading each point's values ── */
+  function initHistoryChart() {
+    const st = _histState;
+    const svg = document.getElementById('geo-hist-svg');
+    if (!st || !svg || !st.pts.length) return;
+
+    const lineX = document.getElementById('geo-cross-x');
+    const dotT  = document.getElementById('geo-cross-dt');
+    const dotK  = document.getElementById('geo-cross-dk');
+    const tip   = document.getElementById('geo-hist-tip');
+
+    const move = (ev) => {
+      const rect    = svg.getBoundingClientRect();
+      const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
+      const svgX    = ((clientX - rect.left) / rect.width) * st.W;
+
+      // nearest point by x
+      let best = 0, bd = Infinity;
+      for (let i = 0; i < st.pts.length; i++) {
+        const dx = Math.abs(st.pts[i].x - svgX);
+        if (dx < bd) { bd = dx; best = i; }
+      }
+      const p = st.pts[best];
+
+      lineX.setAttribute('x1', p.x); lineX.setAttribute('x2', p.x); lineX.style.display = '';
+      dotK.setAttribute('cx', p.x);  dotK.setAttribute('cy', p.yT);   dotK.style.display = '';
+      dotT.setAttribute('cx', p.x);  dotT.setAttribute('cy', p.yTot); dotT.style.display = '';
+
+      const dt = new Date(p.ts);
+      tip.innerHTML =
+        `<b>${dt.getMonth() + 1}/${dt.getDate()}</b>&nbsp; ` +
+        `<span style="color:#f59e0b">${p.tankers}</span> tankers · ` +
+        `<span style="color:rgba(148,163,184,0.95)">${p.total}</span> total`;
+      tip.style.display = '';
+
+      // position tooltip near the point, flipping left if it would overflow
+      const leftPx = svg.offsetLeft + (p.x / st.W) * svg.clientWidth;
+      let tl = leftPx + 9;
+      if (tl + tip.offsetWidth > svg.offsetLeft + svg.clientWidth) tl = leftPx - tip.offsetWidth - 9;
+      tip.style.left = Math.max(0, tl) + 'px';
+      tip.style.top  = (svg.offsetTop + 1) + 'px';
+    };
+
+    const leave = () => {
+      lineX.style.display = dotT.style.display = dotK.style.display = tip.style.display = 'none';
+    };
+
+    svg.addEventListener('mousemove', move);
+    svg.addEventListener('mouseleave', leave);
+    svg.addEventListener('touchstart', move, { passive: true });
+    svg.addEventListener('touchmove',  move, { passive: true });
+    svg.addEventListener('touchend',   leave);
   }
 
   /* ── Vessel table: filter + pagination ──────────────────────── */

@@ -672,10 +672,12 @@
   async function renderBonds(body) {
     body.innerHTML = `<div class="mod-loading">Loading bonds…</div>`;
     try {
-      const [d, fw, cot] = await Promise.all([
+      const [d, fw, cot, radar, rateAlert] = await Promise.all([
         fetchJSON(`${BASE}/bonds.json`),
         fetchJSON(`${BASE}/fedwatch.json`).catch(() => null),
         fetchJSON(`${BASE}/cot.json`).catch(() => null),
+        fetchJSON(`${BASE}/bond-radar.json`).catch(() => null),
+        fetchJSON(`${BASE}/site-alerts.json`).catch(() => null),
       ]);
       const tys = d.treasury_yields || [];
       const rows = tys.map(y => `
@@ -772,6 +774,84 @@
         </tr>
       `).join('') : '';
 
+      // Long-Bond 5% Danger Radar panel
+      let radarPanel = '';
+      if (radar && radar.verdict) {
+        const RC = { red: '#f87171', orange: '#fb923c', yellow: '#fbbf24', green: '#4ade80', muted: 'var(--fg-dim)' };
+        const v = radar.verdict;
+        const vc = RC[v.color] || 'var(--fg-dim)';
+        const pct = v.max ? Math.min(100, Math.round((v.score / v.max) * 100)) : 0;
+        const rfRows = (radar.factors || []).map(f => {
+          const c = RC[f.status] || 'var(--fg-dim)';
+          return `<tr>
+            <td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c};margin-right:6px"></span>${f.label}</td>
+            <td class="mono" style="color:${c};text-align:right">${f.value}</td>
+            <td class="small" style="color:var(--fg-dim)">${f.note || ''}</td>
+            <td class="mono small" style="text-align:right;color:var(--fg-dim)">+${f.contrib}/${f.max}</td>
+          </tr>`;
+        }).join('');
+        radarPanel = `
+          <div class="mod-panel" style="border-left:2px solid ${vc}">
+            <div class="mod-panel-title">LONG-BOND 5% DANGER RADAR · 30Y regime gauge${radar.as_of ? ' · as of ' + radar.as_of : ''}</div>
+            <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:6px 0 4px">
+              <div style="font-family:var(--font-mono)">
+                <div class="small" style="color:var(--fg-dim)">30Y</div>
+                <div style="font-size:22px;font-weight:700;color:${vc}">${radar.thirty_y != null ? radar.thirty_y.toFixed(2) + '%' : '—'}</div>
+              </div>
+              <div style="font-weight:800;padding:4px 10px;border-radius:3px;background:${vc};color:#0d1117;white-space:nowrap">${v.emoji || ''} ${v.label}</div>
+              <div style="flex:1;min-width:160px">
+                <div style="height:7px;border-radius:4px;background:var(--bg-elev,#21262d);overflow:hidden"><div style="height:100%;width:${pct}%;background:${vc}"></div></div>
+                <div class="small" style="color:var(--fg-dim);display:flex;justify-content:space-between;margin-top:2px"><span>score ${v.score}/${v.max}</span><span>🟢&lt;20 · 🟡20 · 🟠40 · 🔴60+</span></div>
+              </div>
+            </div>
+            <div style="font-size:11px;color:var(--fg);line-height:1.5;margin:6px 0">${radar.scenario || ''}</div>
+            <table class="mod-table" style="width:100%"><tbody>${rfRows}</tbody></table>
+            <div class="small" style="color:var(--fg-dim);font-style:italic;margin-top:6px">${radar.disclaimer || ''} · 30Y: ${radar.thirty_y_source || ''}</div>
+          </div>`;
+      }
+
+      // Rate Move & Equity Impact panel (intraday — from site-alerts.json; expands the bonds banner)
+      let rateMovePanel = '';
+      if (rateAlert && rateAlert.active && Array.isArray(rateAlert.tenors_detail) && rateAlert.tenors_detail.length) {
+        const DIRC = { rising: '#f87171', falling: '#4ade80', mixed: '#c084fc', flat: 'var(--fg-dim)' };
+        const dc = DIRC[rateAlert.direction] || 'var(--fg-dim)';
+        const ti = { INFO: 'ℹ', WATCH: '⚡', WARN: '⚠', ALERT: '🚨' }[rateAlert.level] || '⚡';
+        let upd = '';
+        try { upd = new Date(rateAlert.generated_at).toLocaleString('en-CA', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) + ' ET'; } catch (e) {}
+        // NB rising yield = RED (bad for equities) — explicit colors, not pnl price semantics
+        const tmRows = rateAlert.tenors_detail.map(td => {
+          const col = td.direction === 'rising' ? '#f87171' : (td.direction === 'falling' ? '#4ade80' : 'var(--fg-dim)');
+          const ar = td.direction === 'rising' ? '▲' : (td.direction === 'falling' ? '▼' : '—');
+          const sg = (td.change_bps >= 0 ? '+' : '') + fmt.num(td.change_bps, 1);
+          return `<tr>
+            <td class="pat">${td.label}</td>
+            <td class="mono" style="text-align:right;color:var(--fg-dim)">${fmt.num(td.prev_close, 3)}</td>
+            <td class="mono" style="text-align:center;color:var(--fg-dim)">→</td>
+            <td class="mono" style="text-align:right">${fmt.num(td.value, 3)}</td>
+            <td class="mono" style="text-align:right;color:${col}">${sg} bps ${ar}</td>
+          </tr>`;
+        }).join('');
+        const imp = rateAlert.impact || {};
+        const headLead = (rateAlert.headline || '').split(' · ')[0];
+        rateMovePanel = `
+          <div class="mod-panel" style="border-left:2px solid ${dc}">
+            <div class="mod-panel-title">RATE MOVE &amp; EQUITY IMPACT · intraday</div>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:6px 0 4px">
+              <span style="font-weight:800;padding:4px 10px;border-radius:3px;background:${dc};color:#0d1117;white-space:nowrap">${ti} ${rateAlert.level}</span>
+              <span style="font-weight:700;color:${dc}">${headLead}</span>
+              <span class="small" style="color:var(--fg-dim);margin-left:auto">updated ${upd}</span>
+            </div>
+            <table class="mod-table" style="width:100%">
+              <thead><tr><th>Tenor</th><th style="text-align:right">Prev close</th><th></th><th style="text-align:right">Now</th><th style="text-align:right">Δ</th></tr></thead>
+              <tbody>${tmRows}</tbody>
+            </table>
+            ${imp.stance ? `<div style="font-size:11px;line-height:1.5;margin-top:6px"><b style="color:${dc}">Equity impact — ${imp.stance}.</b> ${imp.summary || ''}</div>` : ''}
+            ${imp.curve_note ? `<div class="small" style="color:var(--fg-dim);line-height:1.4;margin-top:3px">${imp.curve_note}</div>` : ''}
+            ${imp.level_note ? `<div class="small" style="font-weight:600;color:${dc};margin-top:3px">${imp.level_note}</div>` : ''}
+            <div class="small" style="color:var(--fg-dim);font-style:italic;margin-top:6px">Intraday CBOE yield indices (~15-min delayed) vs prior close · auto-generated read, not advice</div>
+          </div>`;
+      }
+
       body.innerHTML = `
         <style>
           [data-mod-panel="bnd"] .bnd-chart-3 { display:grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 6px; }
@@ -807,6 +887,8 @@
         </div>
 
         <div data-mod-panel="bnd">
+          ${radarPanel}
+          ${rateMovePanel}
           ${fwChart ? `
             <div class="mod-panel">
               <div class="mod-panel-title">

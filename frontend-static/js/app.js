@@ -6,7 +6,8 @@
 
   /* ── Module registry ──────────────────────────────────────── */
   const MODULES = [
-    { id: 'daily-brief',    code: 'BRF', fkey: null, label: 'Daily Brief',   labelCN: '每日簡報', group: 'Core',     src: 'stocks.clawmo.tech/daily-brief.html', pdfExportable: false },
+    { id: 'premarket',      code: 'PRE', fkey: null, label: 'Pre-Market',   labelCN: '盤前簡報', group: 'Core',     src: 'stocks.clawmo.tech/premarket.html', pdfExportable: false },
+    { id: 'daily-brief',    code: 'BRF', fkey: null, label: 'Brief',         labelCN: '簡報',     group: 'Core',     src: 'stocks.clawmo.tech/brief.html', pdfExportable: false },
     { id: 'stock-analysis', code: 'EQ',  fkey: 1,  label: 'Stock Analysis', labelCN: '股票分析', group: 'Core',     src: 'stocks.clawmo.tech', pdfExportable: true },
     { id: 'financials',     code: 'FIN', fkey: 2,  label: 'Financials',    labelCN: '財務深度',  group: 'Core',     src: 'stocks.clawmo.tech', pdfExportable: true },
     { id: 'holdings',       code: 'HLD', fkey: 3,  label: 'Holdings',      labelCN: '機構持股',  group: 'Core',     src: 'stocks.clawmo.tech', pdfExportable: true },
@@ -464,12 +465,24 @@
   // Read ?module=...&... from the current URL. Returns { id, params } if a
   // known module is present, else null. Called once during init() so a pasted
   // deep-link overrides whatever is in localStorage for this tab.
+  // Resolve a ?module= value to a canonical module id. Accepts either the id
+  // ('smart-money') or the display code ('SMY'/'smy'), case-insensitive — the
+  // code is what users read off the terminal rail, so deep-links naturally use
+  // it (mirrors the command-palette code match).
+  function resolveModuleKey(raw) {
+    if (!raw) return null;
+    if (MODULE_BY_ID[raw]) return raw;
+    const lc = raw.toLowerCase();
+    const hit = MODULES.find(m => m.id.toLowerCase() === lc || m.code.toLowerCase() === lc);
+    return hit ? hit.id : null;
+  }
+
   function readUrlState() {
     const qs = window.location.search;
     if (!qs || qs.length < 2) return null;
     const p = new URLSearchParams(qs);
-    const id = p.get('module');
-    if (!id || !MODULE_BY_ID[id]) return null;
+    const id = resolveModuleKey(p.get('module'));
+    if (!id) return null;
     const params = {};
     p.forEach((v, k) => { if (k !== 'module' && v !== '') params[k] = v; });
     return { id, params };

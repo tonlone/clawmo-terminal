@@ -329,7 +329,7 @@
     'adam_eve_dbottom': 'Adam & Eve Bottom', 'adam_eve_dtop': 'Adam & Eve Top',
     'ibs_oversold_pullback': 'IBS Pullback', 'mom_top_decile': 'Momentum Top 10%',
     'pead_drift': 'PEAD Drift', 'value_top_decile': 'Value Top 10%',
-    'low_vol_top_decile': 'Low Vol Top 10%',
+    'low_vol_top_decile': 'Low Vol Top 10%', 'earnings_run_up': 'Earnings Run-Up',
     'episodic_pivot': 'Episodic Pivot', 'high_tight_flag': 'High Tight Flag',
     'momentum_rest_entry': 'Momentum Rest',
     'analyst_upgrade_drift': 'Analyst Upgrade Drift',
@@ -504,9 +504,17 @@
       const rollingWR        = summary?.rolling_win_rates || {};
       const qualityGates     = summary?.quality_gates     || {};
       const equityCurve = scorecard?.equity_curve || [];
-      const openTrades = scorecard?.open_trades || [];
-      const paperTracked = scorecard?.paper_tracked_signals || [];
-      const closedTrades = scorecard?.closed_trades || [];
+      // Ticker search (window-scoped so it survives the full re-render, like pagination).
+      const _sigOS = (window._sigOpenSearch || '').trim().toLowerCase();
+      const _sigPS = (window._sigPaperSearch || '').trim().toLowerCase();
+      const _sigCS = (window._sigClosedSearch || '').trim().toLowerCase();
+      const _tkMatch = (arr, q) => q ? arr.filter(t => (t.ticker || '').toLowerCase().includes(q)) : arr;
+      const _allOpenTrades = scorecard?.open_trades || [];
+      const _allPaperTracked = scorecard?.paper_tracked_signals || [];
+      const _allClosedTrades = scorecard?.closed_trades || [];
+      const openTrades = _tkMatch(_allOpenTrades, _sigOS);
+      const paperTracked = _tkMatch(_allPaperTracked, _sigPS);
+      const closedTrades = _tkMatch(_allClosedTrades, _sigCS);
       const patternVsBacktest = scorecard?.pattern_vs_backtest || [];
 
       // ── Compute KPI aggregates ──────────────────────────────
@@ -542,11 +550,26 @@
           <div class="sig-ks-body">
             <div class="sig-ks-title">${escSig((ks.level || 'CAUTION_ONLY').replace(/_/g, '-'))} MODE — ${escSig(ks.reason || '')}</div>
             <div class="sig-ks-detail">
-              ${ks.drawdown_20d != null ? `20d drawdown: <b class="num-dn">${ks.drawdown_20d.toFixed(2)}%</b>` : ''}
+              ${ks.avg_trade_20d != null ? `avg trade (20d): <b>${ks.avg_trade_20d.toFixed(2)}%</b>` : ''}
               ${ks.consecutive_losses != null ? ` · consec losses: <b>${ks.consecutive_losses}</b>` : ''}
               ${(ks.triggers || []).length > 1 ? ` · triggers: ${escSig(ks.triggers.join(' · '))}` : ''}
             </div>
           </div>
+        </div>
+      ` : '';
+
+      // ── Stop-out auto-throttle card (SL-weighted; see lib/kill_switch) ──
+      const scl = ks.stop_cluster || {};
+      const th = ks.throttle || {};
+      const thTier = th.tier || scl.tier || 'NONE';
+      const thLabelMap = { NONE: 'Normal', WATCH: 'Watch', ELEVATED: 'Throttled', HIGH: 'Risk-Off' };
+      const thColorMap = { NONE: 'num-up', WATCH: 'num-warn', ELEVATED: 'num-warn', HIGH: 'num-dn' };
+      const slRatePct = scl.total_closes ? Math.round((scl.sl_rate || 0) * 100) : 0;
+      const throttleCard = scl.window_date ? `
+        <div class="sig-macro" title="${escSig(th.active ? (th.reason || '') : 'Stop-outs within normal range — full signal generation')}">
+          <div class="sig-macro-lbl">Stop-Out Throttle</div>
+          <div class="sig-macro-val mono ${thColorMap[thTier] || ''}">${thLabelMap[thTier] || 'Normal'}</div>
+          <div class="sig-macro-sub mono">${scl.sl_count || 0} SL / ${scl.total_closes || 0} closes · ${slRatePct}% SL${th.active && th.allowed_grades ? ' · ' + th.allowed_grades.join('/') + ' only' : ''}</div>
         </div>
       ` : '';
 
@@ -598,6 +621,7 @@
             </div>
             <div class="sig-macro-sub mono">${greenPct != null ? greenPct.toFixed(0) : '—'}% bull · ${redPct != null ? redPct.toFixed(0) : '—'}% bear · ${universeCount} stocks</div>
           </div>
+          ${throttleCard}
         </div>
       `;
 
@@ -857,8 +881,8 @@
                   <span><b>n</b> — sample size · PF 1.5 on n=10 is weak evidence; PF 1.2 on n=100 is solid</span>
                 </span>
                 <span style="display:block;margin-top:0.4rem;padding-top:0.35rem;border-top:1px dashed var(--border);color:var(--fg-dim);font-size:9.5px;line-height:1.45">
-                  <b>Not shown:</b> cross-sectional patterns — <code>mom_top_decile</code>, <code>low_vol_top_decile</code>, <code>ibs_oversold_pullback</code>, <code>pead_drift</code>, <code>value_top_decile</code> (151-TS), and <code>analyst_upgrade_drift</code>, <code>target_upside_top_decile</code> (C1).
-                  These rank tickers against each other on a given day, not per-ticker time series, so the per-ticker backtest harness can't score them. Tracked live on the Grades tab; harness extension is Task #10 (deferred post 2026-07-07 full review).
+                  <b>Not shown:</b> cross-sectional patterns — <code>mom_top_decile</code>, <code>low_vol_top_decile</code>, <code>ibs_oversold_pullback</code>, <code>pead_drift</code>, <code>value_top_decile</code> (151-TS), <code>analyst_upgrade_drift</code>, <code>target_upside_top_decile</code> (C1), and <code>earnings_run_up</code> (pre-earnings premium — needs forward earnings dates; validated by a dedicated historical-earnings backtest, PF 1.262, activated 2026-05-31).
+                  These rank tickers against each other on a given day (or need external/forward data), not per-ticker time series, so the per-ticker backtest harness can't score them. Tracked live on the Grades tab; harness extension is Task #10 (deferred post 2026-07-07 full review).
                 </span>
                 Click any column header to sort.
               </span>
@@ -1378,6 +1402,10 @@
       window._sigClosedPage = closedPage;
       const openSliceStart = openPage * TRADES_PER_PAGE;
       const closedSliceStart = closedPage * TRADES_PER_PAGE;
+      function searchHTML(id, val) {
+        const v = (val || '').replace(/"/g, '&quot;');
+        return `<input type="text" class="sig-search" id="${id}" placeholder="search ticker" value="${v}" autocomplete="off" spellcheck="false">`;
+      }
       function pagerHTML(kind, page, totalPages, total) {
         if (total === 0 || totalPages <= 1) return '';
         const from = page * TRADES_PER_PAGE + 1;
@@ -1521,7 +1549,7 @@
           }<span style="display:block;margin-top:0.35rem;padding-top:0.35rem;border-top:1px solid var(--border);color:var(--fg-dim)"><b style="color:var(--fg)">Drawdown context (2026-05-20):</b> The latest peak-to-trough drawdown was <b>-$35,588</b> at $100K × 2% × grade-tier sizing. 19 A-grade breakouts contributed -$31,767 of that, hitting SL during a 4-day risk-off cluster — regime-driven, not signal-quality-driven. <b>Patch F (ships 2026-05-26)</b> halves base risk 2% → 1%; the same drawdown at the new sizing would have been ~-$12.7k. To preview now: drop Risk% to 1% in the sizer bar above. Patch E also stops BULL+short bos same-cycle pollution from showing up as -0.1% to -0.5% regime_exit dots going forward.</span></span></div>
         </div>
         <div class="mod-panel">
-          <div class="mod-panel-title">OPEN TRADES · ${openTrades.length} active${openTotalPages > 1 ? ` · page ${openPage + 1}/${openTotalPages}` : ''}</div>
+          <div class="mod-panel-title">OPEN TRADES · ${openTrades.length}${_sigOS ? ` of ${_allOpenTrades.length}` : ''} active${openTotalPages > 1 ? ` · page ${openPage + 1}/${openTotalPages}` : ''} ${searchHTML('sig-open-search', window._sigOpenSearch)}</div>
           <div class="tbl-wrap">
             <table class="tbl-dense">
               <thead><tr>
@@ -1540,7 +1568,7 @@
         </div>
         <div class="mod-panel">
           <div class="mod-panel-title" title="Paper-tracked signals from quarantined / locked patterns. The system fires these as if they were real but does NOT allocate capital — pure paper-tracking so live PF can be measured and the pattern can be unlocked once it proves itself. Same TP/SL/early-exit/expire rules apply on paper.">
-            PAPER-TRACKED SIGNALS · ${paperTracked.length} active · <span style="color:var(--muted);font-size:10px;font-weight:400">no capital · feeds adaptive grades</span>
+            PAPER-TRACKED SIGNALS · ${paperTracked.length}${_sigPS ? ` of ${_allPaperTracked.length}` : ''} active · <span style="color:var(--muted);font-size:10px;font-weight:400">no capital · feeds adaptive grades</span> ${searchHTML('sig-paper-search', window._sigPaperSearch)}
           </div>
           <div class="tbl-wrap">
             <table class="tbl-dense">
@@ -1554,7 +1582,7 @@
           </div>
         </div>
         <div class="mod-panel">
-          <div class="mod-panel-title">CLOSED TRADES · ${closedTrades.length} closed${closedTotalPages > 1 ? ` · page ${closedPage + 1}/${closedTotalPages}` : ''}</div>
+          <div class="mod-panel-title">CLOSED TRADES · ${closedTrades.length}${_sigCS ? ` of ${_allClosedTrades.length}` : ''} closed${closedTotalPages > 1 ? ` · page ${closedPage + 1}/${closedTotalPages}` : ''} ${searchHTML('sig-closed-search', window._sigClosedSearch)}</div>
           <div class="tbl-wrap">
             <table class="tbl-dense">
               <thead><tr>
@@ -1586,8 +1614,11 @@
       }).join('');
       const howContent = `
         <div class="mod-panel">
-          <div class="mod-panel-title">RECENT CHANGES · 2026-05-26 deploy (Luk Wave A+B + 2 patches + 1 backout)</div>
+          <div class="mod-panel-title">RECENT CHANGES · 2026-05-31 earnings_run_up activation · 2026-05-26 deploy (Luk Wave A+B + 2 patches + 1 backout)</div>
           <div class="sig-how-meth">
+            <div class="sig-how-meth-row">
+              <b>earnings_run_up ACTIVATED (2026-05-31)</b> — the <b>PRE-earnings mirror of PEAD</b> (NBER earnings-announcement premium). Goes long 3–10 calendar days before a scheduled report when price is above EMA50 with a 5-day run-up <b>≥ 2%</b>, then <b>exits the day BEFORE the print</b> to capture the premium while sidestepping the binary event + IV crush. Stop entry−1.5×ATR, target +2R (most exits are the pre-earnings time-stop, not the target). Unblocked by a dedicated historical-earnings backtest (FMP report dates → <code>backtests/earnings_run_up_backtest.py</code>): per-event <b>PF 1.262</b> on n=4,681, and the drift-threshold sweep was monotonic & &gt;1.20 across 0.5–3% (real effect, not overfit). Seeded grade C; in a ~2-week isolated-cohort watch; <code>adaptive_grades</code> rescores after ~30 closed live trades. Reads <code>earnings-forward.json</code>, so it's not in the per-ticker Backtest tab (see Backtest tab note).
+            </div>
             <div class="sig-how-meth-row">
               <b>Patch B (shipped 2026-05-26)</b> — quality-gate preservation: when a quarantined pattern auto-relocks, manual <code>gate_tightened_at</code> values (stricter <code>min_trades_required</code>, higher <code>reactivate_pf</code>) are preserved instead of being overwritten by tier defaults. Fixes the 05-15 → 05-19 silent overwrite that affected <b>rsi_ma_divergence</b> and <b>vcp</b>.
             </div>
@@ -1797,6 +1828,15 @@
           [data-mod-panel="sig"] .sig-pager-btn:disabled { opacity:0.35; cursor:not-allowed; }
           [data-mod-panel="sig"] .sig-pager-info { font-size:10px; color:var(--fg-dim); font-family:var(--font-mono); letter-spacing:0.3px; }
 
+          [data-mod-panel="sig"] .sig-search {
+            background:#0d1117; color:var(--fg); border:1px solid #30363d;
+            padding:2px 8px; font-size:10px; font-family:var(--font-mono);
+            border-radius:3px; letter-spacing:0.3px; width:120px; outline:none;
+            margin-left:6px; vertical-align:middle; text-transform:uppercase;
+          }
+          [data-mod-panel="sig"] .sig-search::placeholder { color:var(--fg-dim); text-transform:none; letter-spacing:0; }
+          [data-mod-panel="sig"] .sig-search:focus { border-color:var(--accent); }
+
           [data-mod-panel="sig"] .sig-how-card {
             background:var(--bg-card); border:1px solid var(--border); border-radius:3px;
             padding:8px 10px; margin-bottom:6px;
@@ -1913,6 +1953,24 @@
               render(body);
             });
           });
+          // Ticker search — full-render pattern; reset page + restore focus/caret after re-render.
+          body.querySelectorAll('.sig-search').forEach(inp => {
+            inp.addEventListener('input', () => {
+              const map = { 'sig-open-search': '_sigOpenSearch', 'sig-paper-search': '_sigPaperSearch', 'sig-closed-search': '_sigClosedSearch' };
+              const key = map[inp.id];
+              if (!key) return;
+              window[key] = inp.value;
+              if (inp.id === 'sig-open-search') window._sigOpenPage = 0;
+              if (inp.id === 'sig-closed-search') window._sigClosedPage = 0;
+              window._sigFocusId = inp.id;
+              render(body);
+            });
+          });
+          if (window._sigFocusId) {
+            const _fi = body.querySelector('#' + window._sigFocusId);
+            window._sigFocusId = null;
+            if (_fi) { _fi.focus(); try { const _v = _fi.value; _fi.setSelectionRange(_v.length, _v.length); } catch (e) {} }
+          }
         }
       }
 

@@ -18,7 +18,14 @@
   const POLL_MS = 5 * 60 * 1000;
 
   // Tier icons (severity)
-  const TIER_ICON = { WATCH: '⚡', WARN: '⚠', ALERT: '🚨' };
+  const TIER_ICON = { INFO: 'ℹ', WATCH: '⚡', WARN: '⚠', ALERT: '🚨' };
+
+  // INFO is a passive, low-weight "rates are nudging" chip: always blue,
+  // regardless of rising/falling/mixed direction. Sits below WATCH.
+  // (Blue, not grey — grey blended into the dark page background.)
+  const INFO_STYLE = {
+    color: '#60a5fa', bg: 'rgba(96, 165, 250, 0.18)', border: 'rgba(96, 165, 250, 0.55)',
+  };
 
   // Direction arrow (compact directional indicator for the chip)
   const DIRECTION_ARROW = { falling: '▼', rising: '▲', mixed: '◆' };
@@ -54,6 +61,9 @@
 
   function styleFor(alert) {
     const tier = alert.level || 'WATCH';
+    if (tier === 'INFO') {
+      return { ...INFO_STYLE, icon: TIER_ICON.INFO };
+    }
     const dir = alert.direction;
     if (dir && DIRECTION_TIER_STYLE[dir]) {
       const s = DIRECTION_TIER_STYLE[dir][tier] || DIRECTION_TIER_STYLE[dir].WATCH;
