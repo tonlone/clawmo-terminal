@@ -88,16 +88,25 @@
   }
 
   /* Zone-banded time-series chart — background bands for Extreme Fear / Fear /
-     Neutral / Greed / Extreme Greed, single or double line overlay, optional
-     date labels + current-value callout. Uses pure SVG; no OC_CHART dep. */
+     Neutral / Greed / Extreme Greed. Each series carries its own {date,value}
+     points and x is scaled by REAL calendar date, so series with different
+     cadences (CNN = trading days, Crypto = calendar days) stay date-aligned
+     on the shared axis. Uses pure SVG; no OC_CHART dep. */
   function buildFGHistoryChart(seriesList, opts) {
     opts = opts || {};
     const W = opts.w || 820, H = opts.h || 180, padL = 32, padR = 10, padT = 8, padB = 24;
     const innerW = W - padL - padR, innerH = H - padT - padB;
-    if (!seriesList.length) return '';
-    const n = Math.max(...seriesList.map(s => s.values.length));
-    if (n < 2) return '<div class="mod-loading">not enough history</div>';
-    const sx = (i) => padL + (i / (n - 1)) * innerW;
+    const parsed = (seriesList || []).map(s => ({
+      color: s.color,
+      pts: (s.points || [])
+        .map(p => ({ t: Date.parse(p.date), v: p.value }))
+        .filter(p => isFinite(p.t) && p.v != null && isFinite(p.v)),
+    })).filter(s => s.pts.length >= 2);
+    if (!parsed.length) return '<div class="mod-loading">not enough history</div>';
+    const allT = parsed.flatMap(s => s.pts.map(p => p.t));
+    const t0 = Math.min(...allT), t1 = Math.max(...allT);
+    if (t1 <= t0) return '<div class="mod-loading">not enough history</div>';
+    const sx = (t) => padL + ((t - t0) / (t1 - t0)) * innerW;
     const sy = (v) => padT + (1 - v / 100) * innerH;
     let svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:${H}px">`;
     // Zone bands (5 colored backgrounds)
@@ -112,29 +121,18 @@
     });
     svg += `<text x="${padL - 4}" y="${sy(0) + 3}" fill="#6e7681" font-size="9" text-anchor="end" font-family="monospace">0</text>`;
     svg += `<text x="${padL - 4}" y="${sy(100) + 3}" fill="#6e7681" font-size="9" text-anchor="end" font-family="monospace">100</text>`;
-    // Lines — skip null segments (used when a series starts later in the
-    // window; see the padLeft() alignment in renderSentiment).
-    seriesList.forEach(s => {
-      let cmd = '';
-      let needMove = true;
-      s.values.forEach((v, i) => {
-        if (v == null || !isFinite(v)) { needMove = true; return; }
-        cmd += `${needMove ? ' M' : ' L'} ${sx(i).toFixed(1)} ${sy(v).toFixed(1)}`;
-        needMove = false;
-      });
-      if (cmd) svg += `<path d="${cmd.trim()}" fill="none" stroke="${s.color}" stroke-width="1.4"/>`;
+    // Lines
+    parsed.forEach(s => {
+      const d = s.pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${sx(p.t).toFixed(1)} ${sy(p.v).toFixed(1)}`).join(' ');
+      svg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="1.4"/>`;
     });
-    // Date labels
-    if (opts.xLabels && opts.xLabels.length) {
-      const lbls = [0, Math.floor(n / 2), n - 1];
-      lbls.forEach(i => {
-        const lab = opts.xLabels[i];
-        if (!lab) return;
-        const x = sx(i);
-        const anchor = i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle';
-        svg += `<text x="${x}" y="${H - 8}" fill="#8b949e" font-size="9" text-anchor="${anchor}" font-family="monospace">${lab}</text>`;
-      });
-    }
+    // Date labels at start / middle / end of the shared time span
+    [t0, (t0 + t1) / 2, t1].forEach((t, i) => {
+      const dte = new Date(t);
+      const lab = String(dte.getUTCMonth() + 1).padStart(2, '0') + '-' + String(dte.getUTCDate()).padStart(2, '0');
+      const anchor = i === 0 ? 'start' : i === 2 ? 'end' : 'middle';
+      svg += `<text x="${sx(t)}" y="${H - 8}" fill="#8b949e" font-size="9" text-anchor="${anchor}" font-family="monospace">${lab}</text>`;
+    });
     svg += '</svg>';
     return svg;
   }
@@ -188,24 +186,14 @@
       };
 
       // ── F&G 90-day historical ─────────────────────────────
-      // CNN gives us ~365 days; Crypto from alternative.me is typically only
-      // the last ~30 days. Align both series to the same 90-day window by
-      // padding the shorter one with leading nulls (so Crypto occupies the
-      // right side of the chart, aligned with the most-recent CNN points).
-      const cnnHist = (cnn.history || []).slice(-90);
-      const cryHist = (cry.history || []).slice(-90);
-      const alignedLen = Math.max(cnnHist.length, cryHist.length, 1);
-      const padLeft = (arr, n) => Array(Math.max(0, n - arr.length)).fill(null).concat(arr);
-      const cnnVals = padLeft(cnnHist.map(x => x.value), alignedLen);
-      const cryVals = padLeft(cryHist.map(x => x.value), alignedLen);
-      // Use CNN dates for x-axis labels since its coverage is longer; if
-      // cryHist happens to be longer, fall back to that.
-      const xLabelsSource = cnnHist.length >= cryHist.length ? cnnHist : cryHist;
-      const xLabelsFull = padLeft(xLabelsSource.map(x => x.date ? x.date.slice(5) : ''), alignedLen);
+      // Window = last 90 CALENDAR days; buildFGHistoryChart scales x by real
+      // date, so CNN (trading days) and Crypto (calendar days) stay aligned.
+      const fgCutoff = Date.now() - 90 * 86400e3;
+      const inWindow = (hist) => (hist || []).filter(x => x.date && Date.parse(x.date) >= fgCutoff);
       const fgChart = buildFGHistoryChart([
-        { name: 'CNN F&G',    values: cnnVals, color: '#E5B94C' },
-        { name: 'Crypto F&G', values: cryVals, color: '#60A5FA' },
-      ], { xLabels: xLabelsFull });
+        { name: 'CNN F&G',    points: inWindow(cnn.history), color: '#E5B94C' },
+        { name: 'Crypto F&G', points: inWindow(cry.history), color: '#60A5FA' },
+      ]);
 
       // ── AAII 26w triple-line + spread ─────────────────────
       const aaiiHist = (aaii.history || []).slice(-26);
@@ -368,17 +356,18 @@
     { id: 'geopolitical', label: 'GEOPOLITICAL' },
   ];
 
+  /* predictions.json pct is ALWAYS 0-100 (fetch_predictions.py multiplies
+     by 100 at every source) — no 0-1 heuristic, it turned true long-shots
+     (e.g. a 1.0% market) into near-certainties (100%). */
   function predPctCls(p) {
     if (p == null || !isFinite(p)) return '';
-    const v = p > 1 ? p : p * 100;  // accept 0-1 or 0-100
-    if (v < 30) return 'low';
-    if (v > 70) return 'high';
+    if (p < 30) return 'low';
+    if (p > 70) return 'high';
     return 'mid';
   }
   function predPctFmt(p) {
     if (p == null || !isFinite(p)) return '—';
-    const v = p > 1 ? p : p * 100;
-    return v.toFixed(0) + '%';
+    return p < 1 ? p.toFixed(1) + '%' : p.toFixed(0) + '%';
   }
   function fmtVolume(v) {
     if (v == null || !isFinite(v)) return '—';
@@ -584,6 +573,35 @@
         </div>
       ` : '';
 
+      /* Live 4-stage tracker — mirrors the web page's explainer-step status.
+         Stage 4 state comes from drawdown tiers, not the chart corner. */
+      let stageStrip = '';
+      if (currentCycle) {
+        const dd = pctFromATH;
+        let s4txt, s4cls;
+        if (isNaN(dd))        { s4txt = '— no data';                                s4cls = ''; }
+        else if (dd > -3)     { s4txt = `○ NOT TRIGGERED · ${dd.toFixed(1)}% from ATH`; s4cls = 'num-up'; }
+        else if (dd > -10)    { s4txt = `◐ PULLBACK · ${dd.toFixed(1)}%`;            s4cls = ''; }
+        else if (dd > -20)    { s4txt = `● CORRECTION · ${dd.toFixed(1)}%`;          s4cls = 'num-warn'; }
+        else                  { s4txt = `● BEAR · ${dd.toFixed(1)}% · STAGE 4 ACTIVE`; s4cls = 'num-dn'; }
+        const stepCell = (num, name, val) =>
+          `<span style="white-space:nowrap">${num} ${name} ${val ? `<span class="num-up">✓ ${val}</span>` : '<span style="opacity:.4">○ —</span>'}</span>`;
+        stageStrip = `
+          <div class="mod-panel" style="padding:6px 12px">
+            <div class="mod-panel-title">CYCLE STAGE TRACKER · the 4-step pattern before past declines</div>
+            <div class="mono" style="font-size:0.72rem;display:flex;gap:16px;flex-wrap:wrap;align-items:baseline;padding:3px 0">
+              ${stepCell('①', 'INVERTS', currentCycle.inversionStart)}
+              <span style="opacity:.3">→</span>
+              ${stepCell('②', 'FED CUTS', currentCycle.firstCutDate)}
+              <span style="opacity:.3">→</span>
+              ${stepCell('③', 'UN-INVERTS', currentCycle.uninversionDate)}
+              <span style="opacity:.3">→</span>
+              <span style="white-space:nowrap">④ DECLINE <span class="${s4cls}">${s4txt}</span></span>
+              <span style="opacity:.5;font-size:0.65rem">T+${monthsSinceUninversion ?? '—'} since un-inversion · historical window ${sc.historicalMinRecLag ?? '—'}–${sc.historicalMaxRecLag ?? '—'} mo</span>
+            </div>
+          </div>`;
+      }
+
       /* Cycle comparison — 3 past cycles + current */
       const cycleRows = [
         ['name',             'CYCLE'],
@@ -616,9 +634,10 @@
             `).join('')}</tbody>
           </table></div>
           <div class="small" style="margin-top:4pt;color:var(--fg-dim);font-size:10px;line-height:1.5">
-            Standard macro framework: past cycles (Dot-Com 2000, GFC 2008, COVID 2020) anchor expectations for current uninversion →
-            first-cut → recession lag. Historical average lag from yield-curve uninversion to NBER-dated recession is 6–24 months;
+            Standard macro framework: past cycles anchor expectations for current uninversion → first-cut → recession lag.
+            Measured on the two complete analog cycles (Dot-Com, GFC), recession started 4–10 months after un-inversion (avg 7);
             if months-since-uninversion exceeds that window without recession, either the signal is wrong this time, or it arrives late.
+            COVID 2020 had no monthly-close inversion beforehand and was an external shock — it is not in the lag stats.
           </div>
         </div>
       ` : '';
@@ -659,7 +678,10 @@
         color: '#F87171',
         yFmt: v => v.toFixed(2) + '%',
         recessionBands,
-        thresholds: [{ value: 5, label: 'stress >5%', color: '#f87171' }],
+        thresholds: [
+          { value: 4.5, label: 'warning 4.5%', color: '#fbbf24' },
+          { value: 6,   label: 'crisis 6%',    color: '#f87171' },
+        ],
       }) : '';
       const sahmChart = sahmHist.length ? buildRecessionChart(sahmHist, {
         color: '#A78BFA',
@@ -685,6 +707,7 @@
         </div>
 
         ${scorecardStrip}
+        ${stageStrip}
 
         <div class="mod-panel">
           <div class="mod-panel-title">LEADING INDICATORS · ${(d.indicators || []).length} signals</div>
@@ -747,7 +770,7 @@
                   <div class="chart-wrap">${hyOasChart}</div>
                   <div class="chart-legend">
                     <span><span class="lg-line" style="background:#F87171"></span>HY OAS (%)</span>
-                    <span class="chart-note">widens during stress · &gt;5% historically marks recession territory</span>
+                    <span class="chart-note">widens during stress · &gt;4.5% warning · &gt;6% crisis-level (recession territory)</span>
                   </div>
                 </div>
               ` : ''}
@@ -1057,14 +1080,22 @@
     svg += `<text x="${padL}" y="${padT - 4}" fill="#8b949e" font-size="9" font-family="var(--font-mono)">Fwd P/E</text>`;
     svg += `<text x="${W - padR}" y="${H - padB + 14}" fill="#8b949e" font-size="9" text-anchor="end" font-family="var(--font-mono)">Market Cap (log)</text>`;
 
-    // Dots
+    // Dots. P/E above the axis cap is drawn as an up-triangle pinned at the
+    // top edge (true value in the hover title) instead of a silently
+    // misplaced circle.
     valid.forEach(s => {
+      const clipped = s.forwardPE > yHi;
       const cx = sx(Math.log10(s.marketCap)), cy = sy(s.forwardPE);
       const r = Math.max(3, Math.min(10, Math.log10(s.marketCap) - 9));
-      svg += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${peColor(s.forwardPE)}" opacity="0.78" stroke="rgba(0,0,0,0.4)" stroke-width="0.4" data-tk="${s.ticker}"><title>${s.ticker} · ${s.name || ''} · Cap ${fmtBig(s.marketCap)} · Fwd P/E ${s.forwardPE.toFixed(1)}</title></circle>`;
+      const title = `<title>${s.ticker} · ${s.name || ''} · Cap ${fmtBig(s.marketCap)} · Fwd P/E ${s.forwardPE.toFixed(1)}${clipped ? ' (above chart scale)' : ''}</title>`;
+      if (clipped) {
+        svg += `<path d="M ${cx} ${padT + 1} l ${r} ${r * 1.8} h ${-2 * r} z" fill="${peColor(s.forwardPE)}" opacity="0.9" stroke="rgba(0,0,0,0.4)" stroke-width="0.4" data-tk="${s.ticker}" style="cursor:pointer">${title}</path>`;
+      } else {
+        svg += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${peColor(s.forwardPE)}" opacity="0.78" stroke="rgba(0,0,0,0.4)" stroke-width="0.4" data-tk="${s.ticker}">${title}</circle>`;
+      }
       // Label mega-caps
       if (s.marketCap > 1e12) {
-        svg += `<text x="${cx + r + 2}" y="${cy + 3}" fill="#e6edf3" font-size="8" font-weight="700" font-family="var(--font-mono)">${s.ticker}</text>`;
+        svg += `<text x="${cx + r + 2}" y="${cy + (clipped ? r * 1.8 + 1 : 3)}" fill="#e6edf3" font-size="8" font-weight="700" font-family="var(--font-mono)">${s.ticker}${clipped ? ' ' + s.forwardPE.toFixed(0) + '×' : ''}</text>`;
       }
     });
     svg += '</svg>';
@@ -1151,7 +1182,7 @@
           <div class="acct-card">
             <div class="acct-name">${m.name || key}</div>
             <div class="acct-val"><span class="mono ${cls}">${fmt.num(m.current, 2)}${key.includes('yield') || key === 'buffett_indicator' ? '%' : ''}</span></div>
-            <div class="acct-meta"><span class="${cls}">${zoneLbl}</span> · mean ${fmt.num(m.mean, 2)} · ${diff != null ? (diff >= 0 ? '+' : '') + diff.toFixed(1) + '%' : '—'}</div>
+            <div class="acct-meta"><span class="${cls}">${zoneLbl}</span> · long-run mean ${fmt.num(m.mean, 2)} · ${diff != null ? (diff >= 0 ? '+' : '') + diff.toFixed(1) + '%' : '—'}</div>
           </div>
         `;
       };
@@ -1236,7 +1267,7 @@
 
         <div class="mod-head" data-mod-panel="val">
           <div class="mod-title">${window.OC_TITLE('valuation-map')}</div>
-          <div class="mod-meta"><span class="chip chip-dim">${fmt.ago(mv.generated_at)}</span></div>
+          <div class="mod-meta"><span class="chip chip-dim">metrics ${fmt.ago(mv.generated_at)}</span>${val && val.generated_at ? `<span class="chip chip-dim">top-100 ${fmt.ago(val.generated_at)}</span>` : ''}</div>
         </div>
 
         <div data-mod-panel="val">
@@ -1269,7 +1300,7 @@
                 <span><span class="lg-line" style="background:#5BB77A"></span>15–25 fair</span>
                 <span><span class="lg-line" style="background:#E5B94C"></span>25–35 expensive</span>
                 <span><span class="lg-line" style="background:#DC2626"></span>&gt;35 bubble</span>
-                <span class="chart-note">dot size ~ log(market cap); hover for ticker · name · cap · P/E</span>
+                <span class="chart-note">dot size ~ log(market cap); hover for ticker · name · cap · P/E. ▲ = P/E above 60× — pinned at top edge, true value in hover</span>
               </div>
             </div>
 
@@ -1362,7 +1393,7 @@
               ? `${coverage.found} of ${coverage.total} tickers had data`
               : '';
           }
-          body.querySelectorAll('.val-heat-tile, [data-val-scatter] circle[data-tk]').forEach(el => {
+          body.querySelectorAll('.val-heat-tile, [data-val-scatter] [data-tk]').forEach(el => {
             el.addEventListener('click', () => {
               const tk = el.dataset.tk;
               if (tk && window.OC_OPEN_MODULE) window.OC_OPEN_MODULE('stock-analysis', { ticker: tk });

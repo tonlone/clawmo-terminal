@@ -1038,9 +1038,12 @@
         const isActive = passed ? true : (blocked || locked) ? false : null;
         const inactiveReason = blocked?.reason || (locked ? 'Quarantined' : '');
 
-        // Blend hint
+        // Blend hint. LIVE-ONLY = pattern's backtest lives outside the daily
+        // harness (dedicated / cross-sectional) — grade comes from live trades.
         const blendColor = g.blend_weights === '100/0' ? 'var(--fg-dim)' : 'var(--yellow)';
-        const blendHint = g.blend_weights ? `<div style="font-size:9px;color:${blendColor};font-weight:400;margin-top:1px">${escSig(g.blend_weights)}</div>` : '';
+        const blendHint = g.no_backtest
+          ? `<div style="font-size:9px;color:var(--cyan);font-weight:600;margin-top:1px" title="${escSig(g.grade_note || 'Live-only grade — no daily-backtest baseline')}">LIVE-ONLY</div>`
+          : (g.blend_weights ? `<div style="font-size:9px;color:${blendColor};font-weight:400;margin-top:1px">${escSig(g.blend_weights)}</div>` : '');
 
         // Regime lock badge
         const allowedRegimes = g.regime_lock_allowed;
@@ -1131,7 +1134,7 @@
           <div class="chart-legend">
             <span class="chart-note" style="display:block">
               <span style="display:grid;grid-template-columns:1fr 1fr;gap:0.1rem 1.2rem;margin-bottom:0.35rem">
-                <span><b>GD</b> — letter grade (A ≥ 1.2 · B ≥ 1.1 · C ≥ 1.0 · D &lt; 1.0); ratio below = blend weight (100/0 = backtest-only)</span>
+                <span><b>GD</b> — letter grade (A ≥ 1.2 · B ≥ 1.1 · C ≥ 1.0 · D &lt; 1.0); ratio below = blend weight (100/0 = backtest-only); LIVE-ONLY = graded from live trades (no daily-backtest baseline, A capped to B until n≥30)</span>
                 <span><b>BLEND PF</b> — working profit factor = backtest + live weighted blend</span>
                 <span><b>BT PF</b> — 5-year backtest profit factor</span>
                 <span><b>LIVE PF</b> — closed live trades PF · ▲/▼ = 20%+ divergence from backtest</span>

@@ -358,7 +358,7 @@
       const [lbl, cls] = cur > baseline.high_threshold ? ['ABOVE NORMAL','num-dn']
                        : cur < baseline.low_threshold  ? ['BELOW NORMAL','num-warn']
                        : ['NORMAL','num-up'];
-      statusHtml = `<span class="mono ${cls}" style="font-size:9px;margin-left:6px">${lbl}</span>`;
+      statusHtml = `<span class="mono ${cls}" style="font-size:9px;margin-left:6px;cursor:help" title="Latest tanker snapshot (${cur}) vs the rolling mean ±1σ band — same gauge as the status badge in the header above.">${lbl}</span>`;
     }
 
     return `
@@ -627,12 +627,15 @@
     const history = d.history || [];
     const withCog = vessels.filter(v => v.cog != null).length;
 
-    const baseline = isCronTracked ? computeBaseline(history) : null;
-    const baselineStatus = (isCronTracked && baseline) ? (() => {
+    // Gulf is cron-tracked too (its history rides in hormuz.json), so it gets the
+    // same tanker-count μ/σ baseline as the other regions — this keeps the hero
+    // badge consistent with the history chart's ABOVE/BELOW NORMAL badge.
+    const baseline = (isGulf || isCronTracked) ? computeBaseline(history) : null;
+    const baselineStatus = baseline ? (() => {
       const cur = d.summary?.tankers || 0;
-      if (cur > baseline.high_threshold) return { label: 'ABOVE NORMAL', cls: 'num-dn' };
-      if (cur < baseline.low_threshold)  return { label: 'BELOW NORMAL', cls: 'num-warn' };
-      return { label: 'NORMAL', cls: 'num-up' };
+      if (cur > baseline.high_threshold) return { label: 'TANKERS ABOVE NORMAL', cls: 'num-dn' };
+      if (cur < baseline.low_threshold)  return { label: 'TANKERS BELOW NORMAL', cls: 'num-warn' };
+      return { label: 'TANKERS NORMAL', cls: 'num-up' };
     })() : null;
 
     /* Format generated_at in US Eastern Time */
@@ -645,16 +648,21 @@
       : (d.as_of || '');
 
     /* ── State hero ── */
-    // All cron-tracked regions (incl. Gulf) use μ/σ baseline once enough history exists.
-    // Fall back to hardcoded AIS-ping thresholds only while baseline is still building.
-    const activeStatus = (isCronTracked && baselineStatus) ? baselineStatus
+    // All cron-tracked regions (incl. Gulf) use the tanker μ/σ baseline once enough
+    // history exists. Gulf falls back to hardcoded AIS-ping thresholds only while
+    // the baseline is still building (<5 snapshots).
+    const activeStatus = baselineStatus
+      ? baselineStatus
       : (isGulf ? { label: reg.label, cls: reg.cls } : null);
     const heroCls = activeStatus
       ? (activeStatus.cls === 'num-dn' ? 'brd-hero-risk' : activeStatus.cls === 'num-warn' ? 'brd-hero-caution' : 'brd-hero-healthy')
       : 'brd-hero-healthy';
     const heroTag   = isGulf ? 'PERSIAN GULF + HORMUZ + GULF OF OMAN · TANKER ACTIVITY' : `${rCfg.desc.toUpperCase()} · VESSEL ACTIVITY`;
+    const heroScoreTip = baselineStatus
+      ? `Current tanker count (${d.summary?.tankers ?? '—'}) vs its rolling 60-day mean ±1σ (μ=${baseline.mean} ±${baseline.sigma}) — same gauge as the history chart below.`
+      : 'Total AIS pings vs fixed thresholds (≥1500 high · ≥800 normal · ≥300 low) — used only while the tanker baseline is still building.';
     const heroScore = activeStatus
-      ? `<span class="brd-state-score mono ${activeStatus.cls}">${activeStatus.label}</span>`
+      ? `<span class="brd-state-score mono ${activeStatus.cls}" title="${heroScoreTip}" style="cursor:help">${activeStatus.label}</span>`
       : '';
     const hero = `
       <div class="brd-state-hero ${heroCls}">
@@ -663,7 +671,7 @@
           ${heroScore}
         </div>
         <div class="brd-state-stats">
-          <span class="chip"><span class="mono">${s.total_sfl ?? '—'}</span> AIS pings</span>
+          <span class="chip" ${isGulf ? `title="Total AIS pings across all 3 tiles vs fixed thresholds: ≥1500 high · ≥800 normal · ≥300 low. Measures overall traffic, not tankers — can read HIGH while tankers run below their baseline." style="cursor:help"` : ''}><span class="mono">${s.total_sfl ?? '—'}</span> AIS pings${isGulf ? ` · <span class="mono ${reg.cls}">${reg.label.replace(' TRAFFIC', '')}</span>` : ''}</span>
           <span class="chip"><span class="mono">${s.total_vessels ?? '—'}</span> named vessels</span>
           <span class="chip"><span class="mono num-warn">${s.tankers ?? '—'}</span> tankers (${tankerPct}%)</span>
           <span class="chip"><span class="mono">${withCog}</span> with heading</span>

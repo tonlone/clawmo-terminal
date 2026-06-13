@@ -647,7 +647,8 @@
   function renderSectorDonut(br) {
     const sc = br.sector_changes || {};
     if (!Object.keys(sc).length) return '';
-    const latest = ((br.data || br)['50'] || []).slice(-1)[0] || {};
+    // Rows are newest-first — [0] is the latest day (matching the slices' date)
+    const latest = ((br.data || br)['50'] || [])[0] || {};
     const spyChange = latest.spy_change ?? null;
 
     const WEIGHT = {

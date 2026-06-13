@@ -325,6 +325,7 @@
     { id: 'cashflow',  label: 'Cash Flow' },
     { id: 'ratios',    label: 'Ratios' },
     { id: 'valuation', label: 'Valuation' },
+    { id: 'fairvalue', label: 'Fair Value' },
     { id: 'health',    label: 'Health' },
     { id: 'returns',   label: 'Returns' },
     { id: 'peers',     label: 'Peers' },
@@ -890,6 +891,117 @@
         </div>
         <div class="fin-chart-wrap" id="fin-val-chart">${chart}</div>
         <div class="fin-legend">${legend}</div>
+      </div>
+    `;
+  }
+
+  /* ── Fair Value (FAST Graphs-style) ──────────────────────────────────
+     Shared math in /js/fastgraph-core.js (window.FastGraphCore) — kept in
+     lockstep with the stocks-app copy. This render fn matches the terminal
+     idiom (OC_CHART SVG + fin-kpi strip), NOT Chart.js. Spec:
+     workspace/roadmaps/fastgraph-fair-value-chart-spec.md (Phase A). */
+  /* ── Fair Value (FAST Graphs-style) ──────────────────────────────────
+     Shared math in /js/fastgraph-core.js (window.FastGraphCore) — kept in
+     lockstep with the stocks-app copy. This render fn matches the terminal
+     idiom (OC_CHART SVG + fin-kpi strip), NOT Chart.js. Spec:
+     workspace/roadmaps/fastgraph-fair-value-chart-spec.md (Phase B).
+     Terminal-specific: no secondary-axis earnings mountain (OC_CHART has no
+     2nd axis); the analyst target shows in the KPI strip, not as a chart
+     marker. Forward = dashed extension lines (P/E only). */
+  const FV_METRICS = [
+    { key: 'pe', label: 'P/E' }, { key: 'ps', label: 'P/S' },
+    { key: 'pb', label: 'P/B' }, { key: 'div_yield', label: 'Yield' }
+  ];
+  function renderFairValue(d, state) {
+    state = state || (window._finFvState = window._finFvState || { metric: 'pe', window: '10y', refPeMode: 'gdf', priceBasis: 'close', forward: false });
+    if (!window.FastGraphCore) return `<div class="mod-err">Fair-value engine not loaded</div>`;
+    const sym = (d.ticker || (d.profile || {}).symbol || '').toUpperCase();
+    const cache = (window._finFvFwdCache || {})[sym];
+    const fwdOpts = (state.forward && cache) ? { horizonMonths: 24, analystTarget: cache.analystTarget, analystReturnPct: cache.analystReturnPct, nextEarningsDate: cache.nextEarningsDate } : null;
+    const s = window.FastGraphCore.buildSeries(d, { metric: state.metric, window: state.window, refPeMode: state.refPeMode, priceBasis: state.priceBasis, forward: fwdOpts });
+    if (!s) return `<div class="mod-loading">No monthly price / valuation history for this ticker</div>`;
+    const r = s.readout, isY = s.isYield, ML = s.metricLabel;
+    const ccy = d.reporting_currency || 'USD';
+
+    const money = (v) => (v == null || !isFinite(v)) ? '—' : (ccy === 'USD' ? '$' : '') + Number(v).toFixed(2) + (ccy === 'USD' ? '' : ' ' + ccy);
+    const mult = (v) => (v == null || !isFinite(v)) ? '—' : (isY ? (v * 100).toFixed(2) + '%' : Number(v).toFixed(1) + 'x');
+    const multP = (v) => (v == null || !isFinite(v)) ? '—' : Number(v).toFixed(1) + 'x';
+    const pct = (v) => (v == null || !isFinite(v)) ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+
+    const pdCls = r.premiumDiscountPct == null ? '' : (r.premiumDiscountPct > 0 ? 'num-dn' : 'num-up');
+    const pdWord = r.premiumDiscountPct == null ? '' : (r.premiumDiscountPct > 0 ? 'premium' : 'discount');
+    const upCls = r.upsideNormalPct == null ? '' : (r.upsideNormalPct >= 0 ? 'num-up' : 'num-dn');
+    function kpi(lbl, val, color, sub, subCls) {
+      return `<div class="fin-kpi">
+        <div class="fin-kpi-lbl">${lbl}</div>
+        <div class="fin-kpi-val mono"${color ? ` style="color:${color}"` : ''}>${val}</div>
+        <div class="fin-kpi-sub mono ${subCls || ''}">${sub || ''}</div>
+      </div>`;
+    }
+
+    // Chart series (shared absolute Y, price units). Forward = dashed extension.
+    const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const lbl = (ds) => { const p = ds.split('-'); return MON[(parseInt(p[1],10)||1)-1] + " '" + p[0].slice(2); };
+    const fwd = s.forward;
+    const nPast = s.dates.length, nFwd = fwd ? fwd.dates.length : 0, total = nPast + nFwd;
+    const xLabels = s.dates.map(lbl).concat(fwd ? fwd.dates.map(lbl) : []);
+    const padF = (arr) => arr.concat(new Array(nFwd).fill(null));
+    const padFwd = (arr, connect) => { const out = new Array(total).fill(null); if (connect != null && nPast - 1 >= 0) out[nPast - 1] = connect; for (let i = 0; i < arr.length; i++) out[nPast + i] = arr[i]; return out; };
+
+    let chartSeries = [
+      { name: 'Price', values: padF(s.price), color: 'var(--fg, #e6edf3)' },
+      { name: 'Normal', values: padF(s.normalVal), color: 'var(--accent)' },
+    ];
+    if (s.hasReference) chartSeries.push({ name: 'Reference', values: padF(s.refVal), color: '#e3a008', dashed: true });
+    if (fwd) {
+      chartSeries.push({ name: 'Fwd normal', values: padFwd(fwd.normalVal, s.normalVal[nPast - 1]), color: 'var(--accent)', dashed: true });
+      if (s.hasReference) chartSeries.push({ name: 'Fwd ref', values: padFwd(fwd.refVal, s.refVal[nPast - 1]), color: '#e3a008', dashed: true });
+      if (fwd.analystTarget != null) { const tg = new Array(total).fill(null); const ti = Math.min(nPast + 11, total - 1); tg[ti] = fwd.analystTarget; tg[ti - 1] = fwd.analystTarget; chartSeries.push({ name: 'Analyst tgt', values: tg, color: '#f0a020' }); }
+    }
+    chartSeries = chartSeries.filter((c) => c.values.filter((v) => typeof v === 'number' && isFinite(v)).length >= 2);
+
+    let chart;
+    if (!chartSeries.length) chart = '<div class="mod-loading">No plottable series</div>';
+    else if (!window.OC_CHART) chart = '<div class="mod-err">Chart engine not loaded</div>';
+    else chart = window.OC_CHART.lineAbs(chartSeries, { w: 900, h: 240, xLabels, dots: false, yFmt: (v) => (ccy === 'USD' ? '$' : '') + v.toFixed(0) });
+
+    const legend = chartSeries.map((c) => `<span><span class="fin-legend-swatch" style="background:${c.color}"></span>${c.name}</span>`).join('') +
+      `<span class="fin-legend-range">P/E lines break at metric≤0 · forward dashed</span>`;
+
+    const noPE = r.trailingMultiple == null
+      ? `<div class="fin-note">No positive TTM ${s.mountainLabel} — ${ML} undefined, valuation lines hidden (price only). Try P/S for unprofitable names.</div>` : '';
+
+    // Metric / window / ref / forward toggles
+    const mBtns = FV_METRICS.map((m) => `<button class="fin-fv-btn${state.metric===m.key?' active':''}" data-fvmetric="${m.key}">${m.label}</button>`).join('');
+    const wBtns = ['5y','10y','all'].map((w) => `<button class="fin-fv-btn${state.window===w?' active':''}" data-fvwin="${w}">${w.toUpperCase()}</button>`).join('');
+    const rBtns = s.hasReference ? `<span class="fin-toggle-sep">·</span><button class="fin-fv-btn${state.refPeMode==='gdf'?' active':''}" data-fvref="gdf">GDF</button><button class="fin-fv-btn${state.refPeMode==='15x'?' active':''}" data-fvref="15x">15×</button>` : '';
+    const fBtn = s.hasForward ? `<span class="fin-toggle-sep">·</span><button class="fin-fv-btn${state.forward?' active':''}" data-fvfwd="1">FWD${state.forward&&!cache?' …':''}</button>` : '';
+
+    const fwdKpis = fwd ? (
+      kpi('IMPLIED ANN. RETURN', pct(fwd.impliedAnnualReturnPct), 'var(--accent)', 'to 2y fair value @ normal', fwd.impliedAnnualReturnPct==null?'':(fwd.impliedAnnualReturnPct>=0?'num-up':'num-dn')) +
+      (fwd.analystTarget != null ? kpi('ANALYST TARGET', money(fwd.analystTarget), '#f0a020', (fwd.analystReturnPct!=null?pct(fwd.analystReturnPct)+' · ':'') + (fwd.nextEarningsDate?'next EPS '+fwd.nextEarningsDate:'median'), fwd.analystReturnPct==null?'':(fwd.analystReturnPct>=0?'num-up':'num-dn')) : '')
+    ) : '';
+
+    return `
+      <div class="fin-summary-strip">
+        ${kpi('CURRENT PRICE', money(r.currentPrice), 'var(--fg)', 'TTM ' + s.mountainLabel + ' ' + money(r.ttmPerShare))}
+        ${kpi('CURRENT ' + ML.toUpperCase() + (isY?' (YIELD)':''), mult(r.trailingMultiple), 'var(--fg)', r.premiumDiscountPct != null ? pct(r.premiumDiscountPct) + ' ' + pdWord : 'undefined', pdCls)}
+        ${kpi('NORMAL ' + ML.toUpperCase(), mult(r.normalMult10y), 'var(--accent)', '5y ' + mult(r.normalMult5y) + ' · 10y avg')}
+        ${s.hasReference ? kpi('REFERENCE P/E', multP(r.refPe) + ' <span style="color:var(--fg-dim);font-size:11px">' + r.refPeBasis + '</span>', '#e3a008', 'EPS g5y ' + pct(r.epsGrowth5yPct)) : ''}
+        ${kpi('FAIR VALUE @ NORMAL', money(r.fairValueNormal), 'var(--accent)', pct(r.upsideNormalPct) + ' vs price', upCls)}
+        ${s.hasReference ? kpi('FAIR VALUE @ REF', money(r.fairValueRef), '#e3a008', s.mountainLabel + ' × reference P/E') : ''}
+        ${fwdKpis}
+      </div>
+
+      <div class="mod-panel">
+        <div class="mod-panel-title">
+          FAIR VALUE · MONTHLY · ${ML} · price vs normal/reference
+          <span class="fin-stmt-toggles">${mBtns}<span class="fin-toggle-sep">·</span>${wBtns}${rBtns}${fBtn}</span>
+        </div>
+        <div class="fin-chart-wrap" id="fin-fv-chart">${chart}</div>
+        <div class="fin-legend">${legend}</div>
+        ${noPE}
+        <div class="fin-note">Monthly valuation research lens — not a trading signal. Per-share interpolated between annual year-ends (+TTM). Normal multiple computed on this chart's monthly basis (may differ slightly from the Valuation tab). Fundamentals ${fmt.ago(d.fetched_at)}. Currency ${ccy}.</div>
       </div>
     `;
   }
@@ -1619,6 +1731,7 @@
       case 'cashflow':  return renderStatementTab(d, 'cashflow', period);
       case 'ratios':    return renderRatios(d);
       case 'valuation': return renderValuation(d, window._finValMode || 'normalized');
+      case 'fairvalue': return renderFairValue(d, window._finFvState);
       case 'health':    return renderHealth(d);
       case 'returns':   return renderReturns(d);
       case 'peers':     return renderPeers(d);
@@ -1780,6 +1893,7 @@
     attachPeerClicks(body);
     attachHealthHandlers(body, d);
     attachValuationHandlers(body, d);
+    attachFairValueHandlers(body, d);
     if (tab === 'peers') {
       attachPeersUI(body, d);
       loadPeersTable(body, d);
@@ -1849,6 +1963,7 @@
         attachPeerClicks(body);
         attachHealthHandlers(body, d);
         attachValuationHandlers(body, d);
+        attachFairValueHandlers(body, d);
         if (tab === 'peers') {
           attachPeersUI(body, d);
           loadPeersTable(body, d);
@@ -1874,6 +1989,57 @@
         attachValuationHandlers(body, d);
       });
     });
+  }
+
+  function attachFairValueHandlers(body, d) {
+    const rerender = () => {
+      const activeTab = body.querySelector('.fin-subtab-btn.active')?.dataset.fintab;
+      if (activeTab !== 'fairvalue') return;
+      const bodyEl = body.querySelector('#finBody');
+      if (bodyEl) bodyEl.innerHTML = renderTab('fairvalue', d);
+      attachFairValueHandlers(body, d);
+    };
+    body.querySelectorAll('.fin-fv-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const st = window._finFvState = window._finFvState || { metric: 'pe', window: '10y', refPeMode: 'gdf', priceBasis: 'close', forward: false };
+        if (btn.dataset.fvmetric) {
+          st.metric = btn.dataset.fvmetric;
+          if (st.metric !== 'pe') st.forward = false;  // forward is P/E-only
+        }
+        if (btn.dataset.fvwin) st.window = btn.dataset.fvwin;
+        if (btn.dataset.fvref) st.refPeMode = btn.dataset.fvref;
+        if (btn.dataset.fvfwd) {
+          st.forward = !st.forward;
+          if (st.forward) {
+            const sym = (d.ticker || (d.profile || {}).symbol || '').toUpperCase();
+            window._finFvFwdCache = window._finFvFwdCache || {};
+            if (!window._finFvFwdCache[sym]) {
+              btn.classList.add('active'); btn.textContent = 'FWD …';
+              loadFairValueForward(sym).then(() => rerender());
+              return;
+            }
+          }
+        }
+        rerender();
+      });
+    });
+  }
+
+  // Fetch forward-EPS next date + analyst median target for the forward overlay.
+  async function loadFairValueForward(sym) {
+    window._finFvFwdCache = window._finFvFwdCache || {};
+    if (window._finFvFwdCache[sym]) return;
+    const base = 'https://stocks.clawmo.tech';
+    let ef = null, an = null;
+    try { const r = await fetch(base + '/data/earnings-forward.json', { cache: 'no-cache' }); if (r.ok) ef = await r.json(); } catch (e) {}
+    try { const r = await fetch(base + '/data/analyst/' + encodeURIComponent(sym) + '.json', { cache: 'no-cache' }); if (r.ok) an = await r.json(); } catch (e) {}
+    const ne = ef && ef.tickers && ef.tickers[sym] ? ef.tickers[sym] : null;
+    const pt = an && an.price_target ? an.price_target : null;
+    window._finFvFwdCache[sym] = {
+      analystTarget: pt && pt.median != null ? pt.median : (pt && pt.mean != null ? pt.mean : null),
+      analystReturnPct: pt && pt.return_potential_pct != null ? pt.return_potential_pct : null,
+      nextEarningsDate: ne && ne.date ? ne.date : null
+    };
   }
 
   function attachHealthHandlers(body, d) {

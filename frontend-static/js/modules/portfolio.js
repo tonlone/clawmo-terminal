@@ -568,7 +568,13 @@
     if (yMax === 0) yMax = 10;
     yMax *= 1.12;
 
-    const sx = i => padL + (n > 1 ? (i / (n - 1)) * innerW : innerW / 2);
+    /* Date-proportional x (index spacing made a 1-day and a 14-day gap
+       between snapshots look identical); falls back to index spacing if
+       any date fails to parse. */
+    const tms = hist.map(snap => Date.parse((snap.date || '') + 'T12:00:00Z'));
+    const tOK = tms.every(t => !isNaN(t)) && tms[n - 1] > tms[0];
+    const xfrac = i => tOK ? (tms[i] - tms[0]) / (tms[n - 1] - tms[0]) : (n > 1 ? i / (n - 1) : 0.5);
+    const sx = i => padL + (n > 1 ? xfrac(i) * innerW : innerW / 2);
     const sy = v => padT + (1 - (v - yMin) / (yMax - yMin)) * innerH;
 
     /* Points for crosshair hit-test */

@@ -474,7 +474,10 @@
     if (MODULE_BY_ID[raw]) return raw;
     const lc = raw.toLowerCase();
     const hit = MODULES.find(m => m.id.toLowerCase() === lc || m.code.toLowerCase() === lc);
-    return hit ? hit.id : null;
+    if (hit) return hit.id;
+    // Hyphen-less convenience form ('smartmoney', 'valuationmap', …)
+    const squashed = MODULES.find(m => m.id.toLowerCase().replace(/-/g, '') === lc);
+    return squashed ? squashed.id : null;
   }
 
   function readUrlState() {

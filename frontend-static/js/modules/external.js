@@ -814,9 +814,12 @@
     const acc = accountsByHandle[s.handle] || {};
     const avgL = acc.avg_likes || 0, avgR = acc.avg_retweets || 0;
     const curL = eng.likes || 0, curR = eng.retweets || 0;
-    // Anomaly ratio: current vs baseline (if baseline exists)
+    // Anomaly ratio: current vs baseline (if baseline exists). Heat scale only:
+    // ≥2× gold (unusual attention, matches VIRAL pill), 1.3–2× amber. Low ratios
+    // mostly mean the post is young (likes counted at scrape time), so they stay
+    // dim — green would wrongly flag duds as good.
     const ratio = avgL > 0 ? (curL / avgL) : null;
-    const ratioCls = ratio == null ? '' : ratio >= 2 ? 'num-dn' : ratio >= 1.3 ? 'num-warn' : ratio < 0.5 ? 'num-up' : '';
+    const ratioCls = ratio == null ? '' : ratio >= 2 ? 'twt-ratio-hot' : ratio >= 1.3 ? 'num-warn' : 'twt-ratio-dim';
     const ratioLbl = ratio == null ? '' : `${ratio.toFixed(1)}× avg`;
     const tags = (s.signals || []).slice(0, 4);
     const tagsHtml = tags.map(t => `<span class="twt-sigtag${s.is_viral ? ' viral' : ''}">${escFn(t)}</span>`).join('');
@@ -888,6 +891,9 @@
 
       // Compute available filter values
       const cats = [...new Set(signals.map(s => s.category).filter(Boolean))].sort();
+      // A persisted category that no longer exists in the feed would silently
+      // show "0 of N" with no active button — reset it.
+      { const f0 = _twtFiltersGet(); if (f0.category !== 'all' && !cats.includes(f0.category)) f0.category = 'all'; }
       const viralCount = signals.filter(s => s.is_viral).length;
       const portfolioMatchCount = signals.filter(s => s.portfolio_match && s.portfolio_match.length).length;
       const highPriCount = signals.filter(s => s.priority === 'high').length;
@@ -904,13 +910,19 @@
         const silentCls = lastT == null ? '' : lastT > 168 ? 'num-dn' : lastT > 48 ? 'num-warn' : 'num-up';
         const silentLbl = lastT == null ? '——' : lastT < 1 ? Math.round(lastT * 60) + 'm' : lastT < 24 ? lastT.toFixed(1) + 'h' : (lastT / 24).toFixed(1) + 'd';
         const profileUrl = `https://x.com/${encodeURIComponent(a.handle || '')}`;
-        const desc = (a.description || '').replace(/"/g, '&quot;');
-        const reason = (a.why_monitor || '').replace(/"/g, '&quot;');
-        const tip = `${desc}${reason ? '\n\nWhy monitor: ' + reason : ''}`;
-        return `<div class="twt-acct-card" title="${escNws(tip)}">
+        const desc = a.description || '';
+        const reason = a.why_monitor || '';
+        // Quote-escape at the attribute boundary (escNws covers & < > only;
+        // pre-replacing quotes before escNws double-escaped them to &amp;quot;)
+        const tip = escNws(`${desc}${reason ? '\n\nWhy monitor: ' + reason : ''}`).replace(/"/g, '&quot;');
+        const statusPill = a.status === 'stale' ? '<span class="twt-pri-pill twt-status-stale">STALE</span>'
+                         : a.status === 'viral' ? '<span class="twt-pri-pill twt-pri-viral">VIRAL</span>'
+                         : a.status === 'alert' ? '<span class="twt-pri-pill twt-pri-high">ALERT</span>' : '';
+        return `<div class="twt-acct-card${a.status === 'stale' ? ' twt-acct-stale' : ''}" title="${tip}">
           <div class="twt-acct-head">
             <a class="twt-acct-handle" href="${profileUrl}" target="_blank" rel="noopener">@${escNws(a.handle || '')}</a>
             ${a.priority === 'high' ? '<span class="twt-pri-pill twt-pri-high">HIGH</span>' : ''}
+            ${statusPill}
           </div>
           <div class="twt-acct-cat">${escNws(a.category || '—')}</div>
           <div class="twt-acct-meta">
@@ -993,6 +1005,10 @@
           }
           [data-mod-panel="twt"] .twt-pri-high { background:rgba(248,113,113,0.22); color:#f87171; }
           [data-mod-panel="twt"] .twt-pri-viral { background:rgba(229,185,76,0.22); color:#E5B94C; }
+          [data-mod-panel="twt"] .twt-status-stale { background:rgba(251,191,36,0.22); color:#fbbf24; }
+          [data-mod-panel="twt"] .twt-acct-stale { opacity:0.65; }
+          [data-mod-panel="twt"] .twt-ratio-hot { color:#E5B94C; font-weight:700; }
+          [data-mod-panel="twt"] .twt-ratio-dim { color:var(--fg-faint); }
           [data-mod-panel="twt"] .twt-portfolio {
             font-size:9px; padding:1px 5px; border-radius:2px;
             background:rgba(74,222,128,0.18); color:#4ADE80; font-family:var(--font-mono); font-weight:700;
@@ -1027,6 +1043,14 @@
         <div class="mod-head" data-mod-panel="twt">
           <div class="mod-title">${window.OC_TITLE('twitter')} · X SIGNAL MONITOR</div>
           <div class="mod-meta">
+            ${(() => {
+              // X scraper heartbeat — the dashboard regen chip alone would keep
+              // looking fresh even with a dead scraper. Producer treats >6h stale.
+              const h = xs.last_scan ? (Date.now() - new Date(xs.last_scan).getTime()) / 36e5 : null;
+              const cls = h == null || h > 6 ? 'num-dn' : h > 3 ? 'num-warn' : 'num-up';
+              const lbl = h == null ? 'X scan: never' : `X scan ${h < 1 ? Math.round(h * 60) + 'm' : h.toFixed(1) + 'h'} ago`;
+              return `<span class="chip ${cls}" title="last successful X scrape across all accounts · scraper considered stale after 6h">${lbl}</span>`;
+            })()}
             <span class="chip chip-dim">${escNws(d.generated_at_et || fmt.ago(d.generated_at))}</span>
           </div>
         </div>
@@ -1042,7 +1066,7 @@
             <div class="twt-kpi">
               <div class="twt-kpi-lbl">Viral Count</div>
               <div class="twt-kpi-val mono num-warn">${viralCount}</div>
-              <div class="twt-kpi-sub">${viralRate.toFixed(0)}% of feed · cumulative ${xs.viral_count ?? '—'}</div>
+              <div class="twt-kpi-sub">${viralRate.toFixed(0)}% of feed · 24h total ${xs.viral_count ?? '—'}</div>
             </div>
             <div class="twt-kpi">
               <div class="twt-kpi-lbl">Portfolio Matches</div>
@@ -1055,7 +1079,7 @@
               <div class="twt-kpi-sub">${cats.length} categories</div>
             </div>
             <div class="twt-kpi">
-              <div class="twt-kpi-lbl">Most Active Account</div>
+              <div class="twt-kpi-lbl">Most Recently Active</div>
               <div class="twt-kpi-val mono" style="font-size:13px">@${escNws(((accountsSorted[0] || {}).handle || '—').slice(0, 18))}</div>
               <div class="twt-kpi-sub">latest of all watched handles</div>
             </div>
@@ -1163,7 +1187,7 @@
       const topRows = stocks.map(s => {
         const p = s.position || {};
         const discCls = (s.discount_pct || 0) > 0 ? 'num-up' : 'num-dn';
-        const scoreCls = (s.score || 0) >= 75 ? 'num-up' : (s.score || 0) >= 60 ? 'num-warn' : '';
+        const scoreCls = (s.score || 0) >= 70 ? 'num-up' : (s.score || 0) >= 50 ? 'num-warn' : '';
         return `<tr>
           <td class="mono">${s.rank ?? '—'}</td>
           <td class="tk clickable" data-tk="${escNws(s.ticker)}">${escNws(s.ticker)}</td>
@@ -1171,7 +1195,7 @@
           <td class="mono ${scoreCls}">${fmt.num(s.score, 1)}</td>
           <td class="mono">${fmt.num(s.pe, 1)}</td>
           <td class="mono">${fmt.num(s.median_pe, 1)}</td>
-          <td class="mono ${discCls}">${(s.discount_pct >= 0 ? '+' : '') + fmt.num(s.discount_pct, 1)}%</td>
+          <td class="mono ${discCls}">${s.discount_pct != null ? (s.discount_pct >= 0 ? '+' : '') + fmt.num(s.discount_pct, 1) + '%' : '—'}</td>
           <td class="mono">${fmt.num(s.roe, 1)}%</td>
           <td class="mono">${s.growth != null ? (s.growth >= 0 ? '+' : '') + fmt.num(s.growth, 0) + '%' : '—'}</td>
           <td class="mono">${fmt.num(s.de_ratio, 2)}</td>
@@ -1193,7 +1217,7 @@
           <td class="mono">${fmt.num(s.growth_score, 0)}</td>
           <td class="mono">${fmt.num(s.health_score, 0)}</td>
           <td class="mono">${fmt.num(s.dcf_ratio, 2)}</td>
-          <td class="mono ${s.dcf_penalty > 0 ? 'num-dn' : ''}">${fmt.num(s.dcf_penalty, 1)}</td>
+          <td class="mono ${s.dcf_penalty < 0 ? 'num-dn' : ''}">${fmt.num(s.dcf_penalty, 1)}</td>
         </tr>
       `).join('');
 
@@ -1234,7 +1258,10 @@
       // Alpha tracker card (forward cohort tracking from snapshot_picks.py + compute_alpha.py cron)
       const basket = alpha && alpha.baskets && alpha.baskets[idx];
       const cohorts = (basket && basket.cohorts) || [];
-      const recentCohort = cohorts.length ? cohorts[cohorts.length - 1] : null;
+      // cohorts are stored newest-first; pick by date so ordering can't bite
+      const recentCohort = cohorts.length
+        ? cohorts.reduce((a, b) => ((a.date || '') >= (b.date || '') ? a : b))
+        : null;
       const alphaHtml = recentCohort ? `
         <div class="mod-panel">
           <div class="mod-panel-title">FORWARD ALPHA · cohort tracking · ${escNws(alpha.asof_date || '—')} · vs ${escNws(basket.benchmark || idx)}</div>
@@ -1263,7 +1290,7 @@
             </div>
           </div>
           <div class="chart-legend">
-            <span class="chart-note">forward-alpha cohort tracking from snapshot_picks.py + compute_alpha.py (22:30 ET Mon-Fri cron)</span>
+            <span class="chart-note">forward-alpha cohort tracking from snapshot_picks.py + compute_alpha.py (18:45 ET Mon-Fri cron)</span>
           </div>
         </div>
       ` : '';
@@ -1362,34 +1389,34 @@
             <div class="mod-panel-title">TOP ${stocks.length} · FUNDAMENTALS + POSITION SIZING · the algo's actual picks</div>
             <div class="tbl-wrap"><table class="tbl-dense">
               <thead><tr>
-                <th>#</th><th>TICKER</th><th>SECTOR</th>
-                <th class="num">SCORE</th>
-                <th class="num">PE</th><th class="num">MED</th><th class="num">DISC</th>
+                <th data-glossary="dv-rank">#</th><th>TICKER</th><th>SECTOR</th>
+                <th class="num" data-glossary="dv-score">SCORE</th>
+                <th class="num">PE</th><th class="num" data-glossary="dv-med">MED</th><th class="num" data-glossary="dv-disc">DISC</th>
                 <th class="num">ROE</th><th class="num" data-glossary="dv-growth">GROWTH</th><th class="num">DE</th>
-                <th class="num">SHARES</th><th class="num">WEIGHT</th><th class="num">RC%</th><th class="num">VOL</th>
+                <th class="num" data-glossary="dv-shares">SHARES</th><th class="num">WEIGHT</th><th class="num">RC%</th><th class="num">VOL</th>
               </tr></thead>
               <tbody>${topRows || '<tr><td colspan="14" class="empty">no picks</td></tr>'}</tbody>
             </table></div>
-            <div class="chart-legend"><span class="chart-note"><b>SCORE</b> ≥75 green · <b>DISC</b> = current PE vs sector median (positive = trading at discount) · <b>SHARES/WEIGHT</b> = portfolio simulator allocation on $${fmt.compact(pf.capital)} capital · <b>RC%</b> = risk contribution vs portfolio · <b>VOL</b> = annualized vol</span></div>
+            <div class="chart-legend"><span class="chart-note"><b>SCORE</b> ≥70 green · <b>DISC</b> = current PE vs sector median (positive = trading at discount) · <b>SHARES/WEIGHT</b> = portfolio simulator allocation on $${fmt.compact(pf.capital)} capital · <b>RC%</b> = risk contribution vs portfolio · <b>VOL</b> = annualized vol</span></div>
           </div>
 
           <div class="mod-panel">
             <div class="mod-panel-title">SCORE COMPOSITION · 4 sub-scores → composite + DCF check</div>
             <div class="tbl-wrap"><table class="tbl-dense">
               <thead><tr>
-                <th>#</th><th>TICKER</th>
-                <th class="num">COMPOSITE</th>
+                <th data-glossary="dv-rank">#</th><th>TICKER</th>
+                <th class="num" data-glossary="dv-score">COMPOSITE</th>
                 <th class="num" data-glossary="dv-val">VAL</th><th class="num">ROE</th><th class="num" data-glossary="dv-growth">GROWTH</th><th class="num">HEALTH</th>
                 <th class="num">DCF RATIO</th><th class="num">DCF PENALTY</th>
               </tr></thead>
               <tbody>${scoreRows}</tbody>
             </table></div>
-            <div class="chart-legend"><span class="chart-note">sub-scores 0-100 · DCF ratio &gt;1 = market price below intrinsic value · DCF penalty &gt;0 trims composite when stock looks overvalued vs DCF</span></div>
+            <div class="chart-legend"><span class="chart-note">sub-scores 0-100 · DCF ratio &gt;1 = market price below intrinsic value · DCF penalty (negative points) trims composite when stock looks overvalued vs DCF</span></div>
           </div>
 
           ${trapBars ? `
             <div class="mod-panel">
-              <div class="mod-panel-title">VALUE TRAPS · ${trapTotal} flagged in this universe · by trap type</div>
+              <div class="mod-panel-title">VALUE TRAPS · ${trapTotal} flagged in this universe · by trap type${traps.length > 20 ? ` · showing first 20 of ${traps.length}` : ''}</div>
               <div style="margin-bottom:8px">${trapBars}</div>
               <div class="tbl-wrap"><table class="tbl-dense">
                 <thead><tr>

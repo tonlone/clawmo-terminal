@@ -337,7 +337,7 @@
         s = today - halfMs; e = today + halfMs;
         if (e > futureEnd) { s -= (e - futureEnd); e = futureEnd; }
       } else {
-        e = today; s = today - yrs * 365.25 * 86400000;
+        e = Math.min(today, dataEnd); s = e - yrs * 365.25 * 86400000;
       }
       if (s < dataStart) s = dataStart;
       return { startMs: s, endMs: Math.min(e, fullEnd), dataStart: fullStart, dataEnd: fullEnd };
@@ -696,14 +696,16 @@
     function drawForwardClusters() {
       const today = new Date();
       const todayStr = today.toISOString().slice(0, 10);
-      const horizon  = new Date(today.getTime() + 730 * 86400000);
+      const horizon  = new Date(today.getFullYear(), today.getMonth() + 24, 1);
 
-      // Group active aspects by month
+      // Group active aspects by month. Keys come from local-time fields, NOT
+      // toISOString() — UTC conversion shifts local-midnight dates back a day
+      // in UTC+ timezones, mislabeling every month bucket.
       const byMonth = new Map();
       const monthsArr = [];
       for (let m = 0; m < 24; m++) {
         const d = new Date(today.getFullYear(), today.getMonth() + m, 1);
-        const key = d.toISOString().slice(0, 7);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
         monthsArr.push(key);
         byMonth.set(key, []);
       }
@@ -712,7 +714,7 @@
         if (ev.t !== 'aspect') continue;
         if (!st.pairs.has(ev.p) || !st.aspects.has(ev.a)) continue;
         if (ev.d < todayStr) continue;
-        if (new Date(ev.d) > horizon) continue;
+        if (new Date(ev.d) >= horizon) continue;
         if (st.fwdFilter !== 'all') {
           const imp = impactFor(ev);
           const wantBull = st.fwdFilter === 'bull';
@@ -791,10 +793,15 @@
           const m = cell.dataset.month;
           const start = new Date(m + '-01');
           const end   = new Date(start.getFullYear(), start.getMonth() + 6, 0);
+          // Enable Future directly (NOT via refs.future.click() — its handler
+          // toggles st.future again and wipes the viewport we're about to set).
           if (!st.future) {
             st.future = true;
-            refs.future.click(); // toggles + redraws — return so we don't double-render
-            return;
+            refs.future.textContent = 'Future ON';
+            refs.future.style.background = 'rgba(96,165,250,0.18)';
+            refs.future.style.borderColor = '#60a5fa';
+            refs.future.style.color = '#60a5fa';
+            saveParams();
           }
           st.vp.startMs = +new Date(start.getTime() - 180 * 86400000);
           st.vp.endMs   = +end;
@@ -825,7 +832,8 @@
         return matches.reduce((b, r) => !b || r.p_raw < b.p_raw ? r : b, null);
       }
 
-      const rows = upcoming.slice(0, 30).map(ev => {
+      const MAX_ROWS = 30;
+      const rows = upcoming.slice(0, MAX_ROWS).map(ev => {
         const isAspect = ev.t === 'aspect';
         const color = isAspect ? PAIR_COLORS[ev.p] : PLANET_COLORS[ev.pl];
         const lbl   = isAspect ? `${ev.p} ${ev.a}` : `${ev.pl} ${ev.t === 'retrograde_start' ? 'Rx▼' : 'Rx▲'}`;
@@ -876,19 +884,22 @@
               <th style="padding:5px 8px;text-align:right">Hit %</th>
               <th style="padding:5px 8px;text-align:right">Horizon</th>
             </tr></thead>
-            <tbody>${rows || '<tr><td colspan="7" style="padding:10px;text-align:center;color:var(--fg-muted)">No events in next 6 months for current toggles.</td></tr>'}</tbody>
+            <tbody>${rows || '<tr><td colspan="7" style="padding:10px;text-align:center;color:var(--fg-muted)">No planetary events in the next 6 months.</td></tr>'}</tbody>
           </table>
         </div>
+        ${upcoming.length > MAX_ROWS ? `<div style="font-size:0.6rem;color:var(--fg-muted);margin-top:3px">showing first ${MAX_ROWS} of ${upcoming.length} events</div>` : ''}
       `;
     }
 
     /* ── Touch + mouse interactions on price chart ──────────── */
     bindChartInteractions(refs.chart, refs.tip, () => priceLayout, () => effectiveVP(), st, drawAll);
 
-    /* ResizeObserver to redraw when pane size changes */
+    /* ResizeObserver to redraw when pane size changes — disconnect any
+       observer from a previous render of this pane so they don't stack. */
     if (window.ResizeObserver) {
-      const ro = new ResizeObserver(() => drawAll());
-      ro.observe(body);
+      if (body.__cycRO) body.__cycRO.disconnect();
+      body.__cycRO = new ResizeObserver(() => drawAll());
+      body.__cycRO.observe(body);
     }
 
     drawAll();

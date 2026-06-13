@@ -8,14 +8,15 @@
 
   /* ── Crypto dashboard ─────────────────────────────────────
      Global stats + derivatives cards, BTC price-and-volume chart,
-     on-chain (MVRV Z-score + Hash rate), funding rate, long/short ratio,
+     on-chain (MVRV ratio + Hash rate), funding rate, long/short ratio,
      top-10 table with 7d sparklines + 30d column, glossary. */
 
   /* Price + volume + trend combined chart.
      Price line with area on top; optional volume bars (close-up = green)
-     and optional trend strip (3-signal alignment: close>SMA50, close>SMA200,
-     SMA50>SMA200 → all 3 = bright green, 2 = soft green, 1 = soft red, 0
-     = bright red; missing SMA = gray).
+     and optional trend strip (3-signal alignment on day-equivalent SMAs:
+     close>SMA5d, close>SMA10d, SMA5d>SMA10d — 30/60 four-hour bars —
+     all 3 = bright green, 2 = soft green, 1 = soft red, 0 = bright red;
+     missing SMA (warm-up) = gray).
      opts: { showVolume: bool (default true), showTrend: bool (default true) } */
   function buildCryptoPriceVolumeChart(series, opts) {
     if (!series || series.length < 2) return '';
@@ -76,11 +77,11 @@
     if (showTrend) {
       svg += `<text x="${padL - 4}" y="${trendTop + trendH - 1}" fill="#8b949e" font-size="8" text-anchor="end" font-family="var(--font-mono)">trend</text>`;
       series.forEach((p, i) => {
-        let color = '#6B7280';  // neutral — missing SMA data
-        if (typeof p.sma_50 === 'number' && typeof p.sma_100 === 'number') {
-          const s1 = p.price > p.sma_50;
-          const s2 = p.price > p.sma_100;
-          const s3 = p.sma_50 > p.sma_100;
+        let color = '#6B7280';  // neutral — missing SMA data (warm-up)
+        if (typeof p.sma_30 === 'number' && typeof p.sma_60 === 'number') {
+          const s1 = p.price > p.sma_30;
+          const s2 = p.price > p.sma_60;
+          const s3 = p.sma_30 > p.sma_60;
           const passCount = (s1 ? 1 : 0) + (s2 ? 1 : 0) + (s3 ? 1 : 0);
           color = passCount === 3 ? '#4ADE80'
                 : passCount === 0 ? '#F87171'
@@ -120,7 +121,7 @@
     });
   }
 
-  /* MVRV Z-score chart with zone bands: <1 green (accumulation),
+  /* MVRV ratio chart with zone bands: <1 green (accumulation),
      1–2.5 neutral, 2.5–3.5 orange (elevated), >3.5 red (cycle top). */
   function buildMvrvChart(series) {
     if (!series || series.length < 2) return '';
@@ -243,11 +244,16 @@
       const onchain = d.onchain || {};
       const mvrv = onchain.mvrv || [];
       const hashrate = onchain.hashrate || [];
-      // Attach SMA50/SMA100 onto full btc_chart once, then slice last 60 for display.
-      // SMA200 unavailable: feed history is ~180d.
+      // btc_chart = 30 days of 4-HOUR bars (~181 points, 6/day) from
+      // compute_crypto.py. Show the full 30d window (matches crypto.html) and
+      // attach day-equivalent SMAs: 5d = 30 bars, 10d = 60 bars. True daily
+      // SMA50/200 are impossible on a 30d feed.
       const fullBtc = d.btc_chart || [];
-      if (fullBtc.length && fullBtc[0].sma_50 === undefined) attachSmas(fullBtc, [50, 100]);
-      const btcData = fullBtc.slice(-60);
+      if (fullBtc.length && fullBtc[0].sma_30 === undefined) attachSmas(fullBtc, [30, 60]);
+      const btcData = fullBtc;
+      const btcDays = btcData.length > 1
+        ? Math.max(1, Math.round((new Date(btcData[btcData.length - 1].date) - new Date(btcData[0].date)) / 864e5))
+        : 0;
       const fundingData = (d.funding_rate || []).slice(-90);
       const lsData = (d.long_short || []).slice(-100);
 
@@ -278,11 +284,12 @@
         `;
       }).join('');
 
+      // funding rates arrive from compute_crypto.py ALREADY in percent — no ×100
       const fundingChart = window.OC_CHART && fundingData.length ? window.OC_CHART.lineAbs([
         { name: 'funding rate', values: fundingData.map(p => p.rate), color: 'var(--pnl-up)' },
       ], {
         gridY: 3, xLabels: fundingData.map(p => p.date || ''),
-        yFmt: v => (v * 100).toFixed(3) + '%',
+        yFmt: v => v.toFixed(3) + '%',
       }) : '';
 
       const lsChart = window.OC_CHART && lsData.length ? window.OC_CHART.lineAbs([
@@ -324,7 +331,7 @@
               <div class="acct-meta"><span>ETH ${fmt.num(g.eth_dominance, 1)}%</span></div>
             </div>
             <div class="acct-card">
-              <div class="acct-name">MVRV Z-SCORE</div>
+              <div class="acct-name">MVRV RATIO</div>
               <div class="acct-val"><span class="mono ${mvrvZone}">${lastMvrv != null ? lastMvrv.toFixed(2) : '—'}</span></div>
               <div class="acct-meta"><span class="${mvrvZone}">${mvrvLabel}</span></div>
             </div>
@@ -335,15 +342,15 @@
             </div>
             <div class="acct-card">
               <div class="acct-name">CURRENT FUNDING</div>
-              <div class="acct-val"><span class="mono ${oi.current_funding > 0 ? 'num-up' : 'num-dn'}">${oi.current_funding != null ? (oi.current_funding * 100).toFixed(4) + '%' : '—'}</span></div>
-              <div class="acct-meta"><span>${oi.current_funding > 0 ? 'longs paying shorts' : 'shorts paying longs'}</span></div>
+              <div class="acct-val"><span class="mono ${oi.current_funding > 0 ? 'num-up' : oi.current_funding < 0 ? 'num-dn' : ''}">${oi.current_funding != null ? oi.current_funding.toFixed(4) + '%' : '—'}</span></div>
+              <div class="acct-meta"><span>${oi.current_funding == null ? '—' : oi.current_funding > 0 ? 'longs paying shorts' : oi.current_funding < 0 ? 'shorts paying longs' : 'flat'}</span></div>
             </div>
           </div>
 
           ${btcData.length ? `
             <div class="mod-panel">
               <div class="mod-panel-title">
-                BTC · ${btcData.length}-DAY PRICE${cryShowVol ? ' + VOLUME' : ''}${cryShowTrend ? ' + TREND' : ''}
+                BTC · ${btcDays}-DAY PRICE · 4H BARS${cryShowVol ? ' + VOLUME' : ''}${cryShowTrend ? ' + TREND' : ''}
                 <span class="fin-stmt-toggles" style="margin-left:8px">
                   <button class="fin-mode-btn cry-vol-btn${cryShowVol ? ' active' : ''}" data-vol="${cryShowVol ? 'off' : 'on'}" title="Toggle volume bars">VOL ${cryShowVol ? 'ON' : 'OFF'}</button>
                   <button class="fin-mode-btn cry-trend-btn${cryShowTrend ? ' active' : ''}" data-trend="${cryShowTrend ? 'off' : 'on'}" title="Toggle trend strip">TREND ${cryShowTrend ? 'ON' : 'OFF'}</button>
@@ -359,8 +366,8 @@
                 ${cryShowTrend ? `
                   <span><span class="lg-line" style="background:#4ADE80"></span>trend 3/3 aligned up</span>
                   <span><span class="lg-line" style="background:#F87171"></span>trend 0/3 (aligned down)</span>
-                  <span><span class="lg-line" style="background:#6B7280"></span>no SMA data</span>
-                  <span class="chart-note">3-signal: px&gt;SMA50 · px&gt;SMA100 · SMA50&gt;SMA100 (SMA200 unavailable — ~180d history)</span>
+                  <span><span class="lg-line" style="background:#6B7280"></span>no SMA data (warm-up)</span>
+                  <span class="chart-note">3-signal: px&gt;SMA5d · px&gt;SMA10d · SMA5d&gt;SMA10d — SMAs over 4h bars (30/60 bars); first ~10d gray while SMAs warm up</span>
                 ` : ''}
               </div>
             </div>
@@ -369,7 +376,7 @@
           <div class="mod-grid-2">
             ${mvrv.length ? `
               <div class="mod-panel">
-                <div class="mod-panel-title">MVRV Z-SCORE · on-chain valuation · ${mvrv.length} days</div>
+                <div class="mod-panel-title">MVRV RATIO · on-chain valuation · ${mvrv.length} days</div>
                 <div class="chart-wrap">${buildMvrvChart(mvrv)}</div>
                 <div class="chart-legend">
                   <span class="chart-note">&gt;3.5 cycle top · 2.5–3.5 elevated · 1–2.5 fair · &lt;1 accumulation</span>
@@ -410,7 +417,7 @@
               <thead><tr>
                 <th>#</th><th>SYM</th><th>NAME</th><th>PRICE</th>
                 <th>1H</th><th>24H</th><th>7D</th><th>30D</th>
-                <th>MCAP</th><th>VOL</th><th>7D CHART</th>
+                <th>MCAP</th><th data-glossary="cry-vol">VOL</th><th>7D CHART</th>
               </tr></thead>
               <tbody>${coins}</tbody>
             </table></div>
@@ -419,7 +426,7 @@
           <div class="mod-panel">
             <div class="mod-panel-title">HOW TO READ THIS DASHBOARD</div>
             <div class="cry-glossary">
-              <p><b>MVRV Z-Score</b> — Market Value ÷ Realized Value. Compares BTC market cap to the aggregate cost basis of all coins. <b>&gt;3.5</b> historically marks cycle tops (2013, 2017, 2021). <b>&lt;1</b> marks accumulation zones (2018, 2022). Source: CoinMetrics.</p>
+              <p><b>MVRV Ratio</b> — Market Value ÷ Realized Value. Compares BTC market cap to the aggregate cost basis of all coins. <b>&gt;3.5</b> historically marks cycle tops (2013, 2017, 2021). <b>&lt;1</b> marks accumulation zones (2018, 2022). (The plain ratio, not the Z-Score variant — Z-Score uses a different scale.) Source: CoinMetrics.</p>
               <p><b>Hash Rate</b> — Total computational power securing the Bitcoin network (EH/s). Rising = miner confidence + network security. Sustained drops &gt;10% signal miner capitulation — historically a late-stage bear market marker.</p>
               <p><b>Funding Rate</b> — Periodic fee between long/short perp futures traders. <b>Positive</b> = longs pay shorts (bullish positioning, potentially overleveraged). <b>Negative</b> = shorts pay longs (bearish, squeeze setup). Source: OKX.</p>
               <p><b>Long/Short Ratio</b> — Top-trader account ratio. &gt;1 = more accounts long. Extremes are contrarian — crowded long positioning often precedes squeezes.</p>
@@ -734,7 +741,10 @@
       const bbbHist = (d.credit?.BAMLC0A4CBBB?.history || []).filter(x => x.value != null);
       const hyChart = buildSeriesChart(hyHist, {
         color: '#DC2626', yFmt: v => v.toFixed(2) + '%',
-        thresholds: [{ value: 5, label: 'stress >5%', color: '#f87171' }],
+        thresholds: [
+          { value: 4.5, label: 'warning 4.5%', color: '#fbbf24' },
+          { value: 6,   label: 'crisis 6%',    color: '#f87171' },
+        ],
       });
       const bbbChart = buildSeriesChart(bbbHist, {
         color: '#FB923C', yFmt: v => v.toFixed(2) + '%',
@@ -893,7 +903,7 @@
             <div class="mod-panel">
               <div class="mod-panel-title">
                 CME FEDWATCH · market-implied rate path · ${fwNext ? 'next meeting ' + fwNext.meeting_date : ''}
-                ${fwNext ? `· expected <span class="mono num-up">${fwNext.expected_rate?.toFixed(2)}%</span> · most likely <span class="mono">${fwNext.most_probable} (${fwNext.most_probable_pct?.toFixed(0)}%)</span>` : ''}
+                ${fwNext ? `· expected <span class="mono">${fwNext.expected_rate?.toFixed(2)}%</span> · most likely <span class="mono">${fwNext.most_probable} (${fwNext.most_probable_pct?.toFixed(0)}%)</span>` : ''}
               </div>
               <div class="chart-wrap">${fwChart}</div>
               <div class="chart-legend">
@@ -977,7 +987,7 @@
                 <div class="mod-panel">
                   <div class="mod-panel-title">HY OAS · HIGH-YIELD CREDIT SPREAD</div>
                   <div class="chart-wrap">${hyChart}</div>
-                  <div class="chart-legend"><span class="chart-note">&lt;3% complacent · 3–5% normal · &gt;5% recession territory</span></div>
+                  <div class="chart-legend"><span class="chart-note">&lt;3% complacent · &gt;4.5% warning · &gt;6% crisis-level (recession territory)</span></div>
                 </div>
               ` : ''}
               ${bbbChart ? `
@@ -1077,7 +1087,7 @@
               <p><b>10Y − 2Y / 10Y − 3M Spreads</b> — two classic recession-leading indicators. The Fed's official recession-probability model uses 10Y − 3M; market commentary usually cites 10Y − 2Y.</p>
               <p><b>Breakeven Inflation</b> — (10Y nominal yield − 10Y TIPS yield). Market's implied inflation expectation over the next decade. Rising = inflation fear; the Fed's stated 2% goal translates to ~2.5% breakeven after term premium.</p>
               <p><b>10Y Real Yield</b> — the TIPS yield directly; the real cost of capital after inflation. Above 2% historically signals restrictive policy; below zero = financial repression.</p>
-              <p><b>HY OAS (High-Yield Option-Adjusted Spread)</b> — excess yield on junk bonds over Treasuries. &lt;3% complacent, 3–5% normal, &gt;5% recession territory (2001, 2008, 2020). Widens first in credit cycles.</p>
+              <p><b>HY OAS (High-Yield Option-Adjusted Spread)</b> — excess yield on junk bonds over Treasuries. &lt;3% complacent, 3–4.5% normal, &gt;4.5% stress building, &gt;6% crisis-level (2001, 2008, 2020). Widens first in credit cycles.</p>
               <p><b>BBB Spread</b> — lowest investment-grade cohort. Widens before HY does when the credit cycle turns because BBB sits at the "fallen angel" boundary.</p>
               <p><b>Mortgage Rates</b> — 30Y + 15Y Freddie Mac PMMS. Primary consumer borrowing cost and the most direct transmission channel from Fed policy to the real economy.</p>
               <p><b>COT Positioning</b> — CFTC Commitments of Traders. Speculators (HF, CTA, managed money) vs commercials (hedgers/producers). Extreme net-spec positioning is contrarian — crowded long often precedes short squeezes.</p>

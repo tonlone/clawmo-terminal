@@ -118,7 +118,7 @@
     'Rev growth':  { full: 'Revenue Growth YoY' },
     'Gross margin':{ full: 'Gross Margin',           def: '(Revenue − COGS) ÷ Revenue' },
     'Profit margin':{ full: 'Net Profit Margin',     def: 'Net income ÷ Revenue' },
-    'ROE':         { full: 'Return on Equity' },
+    'ROE':         { full: 'Return on Equity',       def: 'Net income ÷ shareholders\' equity; how efficiently equity capital is turned into profit. >20% strong, >10% required by the deep-value screen' },
     'ROA':         { full: 'Return on Assets' },
     'Debt/Eq':     { full: 'Debt-to-Equity Ratio' },
     'Curr ratio':  { full: 'Current Ratio',          def: 'Current assets ÷ current liabilities' },
@@ -257,6 +257,9 @@
     '1H':          { full: '1-Hour Change' },
     '24H':         { full: '24-Hour Change' },
     '7D':          { full: '7-Day Change' },
+    '30D':         { full: '30-Day Change' },
+    '7D CHART':    { full: '7-Day Sparkline',         def: 'Hourly price over the last 7 days; green = up vs 7 days ago, red = down' },
+    'cry-vol':     { full: '24-Hour Trading Volume',  def: 'Total USD value traded across exchanges in the last 24 hours' },
     'CUM':         { full: 'Cumulative',              def: 'Sum/compound across the full period' },
     'rebased 100': { full: 'Rebased to 100',          def: 'Series scaled so the starting value = 100, for clean cross-series comparison' },
 
@@ -308,7 +311,12 @@
     'VOL':         { full: 'Annualized Volatility',             def: 'Annualized standard deviation of daily returns; used for position sizing and risk budgeting' },
 
     /* ── Deep Value score composition ───────────────────────── */
-    'COMPOSITE':   { full: 'Composite Score',                   def: 'Weighted aggregate of VAL, ROE, GROWTH, and HEALTH sub-scores (0–100); ≥ 75 qualifies as a deep-value pick' },
+    'COMPOSITE':   { full: 'Composite Score',                   def: 'Weighted blend of sub-scores: Valuation 40% + ROE 25% + Growth 20% + Health 15% (0–100); ≥ 70 strong, 50–70 decent, < 50 marginal' },
+    'dv-score':    { full: 'Composite Value Score',             def: 'Weighted blend: Valuation 40% + ROE 25% + Growth 20% + Health 15% (0–100); ≥ 70 strong (green), 50–70 decent, < 50 marginal' },
+    'dv-rank':     { full: 'Rank',                              def: 'Position in this universe ordered by composite value score (1 = best)' },
+    'dv-med':      { full: 'Sector Median P/E',                 def: 'Median trailing P/E of all stocks in the same sector within this index — the peer benchmark for "fair value"' },
+    'dv-disc':     { full: 'P/E Discount vs Sector',            def: '(sector median P/E − stock P/E) ÷ median × 100; positive = trading below peers (cheap), negative = above (expensive)' },
+    'dv-shares':   { full: 'Allocated Shares',                  def: 'Share count the Equal-Risk-Contribution portfolio simulator allocates on the simulated capital' },
     'dv-val':      { full: 'Valuation Sub-score',               def: '0–100 score measuring cheapness vs sector peers on P/E, P/B, P/S; higher = trading at a bigger discount to peers' },
     'dv-growth':   { full: 'Growth Sub-score',                  def: '0–100 score measuring revenue and earnings growth quality; penalizes negative or sharply decelerating growth' },
     'HEALTH':      { full: 'Financial Health Sub-score',        def: '0–100 score based on balance sheet strength: current ratio, debt levels, and interest coverage' },

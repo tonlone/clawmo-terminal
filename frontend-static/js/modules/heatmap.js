@@ -17,6 +17,10 @@
 
   const TIMEFRAMES = ['1D', '1W', '1M', '3M', '6M', 'YTD', '1Y'];
 
+  /* Color saturation point per timeframe — a fixed ±5% scale washes out
+     longer views (every 1Y tile pinned at full green/red). */
+  const TF_SCALE = { '1D': 5, '1W': 7, '1M': 10, '3M': 15, '6M': 20, 'YTD': 25, '1Y': 40 };
+
   /* ── Squarify (Bruls-Huizing-van Wijk) ─────────────────────────
      Items are laid out against the shorter side of the current rect;
      greedy grouping minimises worst-case aspect ratio per row. */
@@ -69,12 +73,11 @@
     return results;
   }
 
-  /* HSL red→grey→green with ±5% saturation ramp, clamped at ±8%. */
-  function getColor(pct) {
-    const v = Math.max(-8, Math.min(8, pct));
-    if (Math.abs(v) < 0.05) return 'hsl(0, 0%, 22%)';
-    const t = Math.min(Math.abs(v) / 5, 1);
-    const h = v > 0 ? 140 : 0;
+  /* HSL red→grey→green, saturating at ±scale% for the active timeframe. */
+  function getColor(pct, scale) {
+    if (pct == null || isNaN(pct) || Math.abs(pct) < 0.05) return 'hsl(0, 0%, 22%)';
+    const t = Math.min(Math.abs(pct) / scale, 1);
+    const h = pct > 0 ? 140 : 0;
     const s = 50 + t * 30;
     const l = 18 + t * 14;
     return `hsl(${h}, ${s}%, ${l}%)`;
@@ -165,7 +168,7 @@
 
       for (const st of stockRects) {
         const pct = st.returns?.[tf];
-        const bg = getColor(pct);
+        const bg = getColor(pct, TF_SCALE[tf] || 5);
         const fg = textColor(bg);
 
         const tile = document.createElement('div');
@@ -241,7 +244,7 @@
           <div id="hmTfBtns" style="display:inline-flex;gap:4px">
             ${TIMEFRAMES.map(t => `<button class="hm-tf-btn" data-tf="${t}" type="button" style="background:transparent;border:1px solid var(--border);color:var(--fg);padding:3px 10px;border-radius:3px;cursor:pointer;font-size:11px;font-family:inherit">${t}</button>`).join('')}
           </div>
-          <span style="margin-left:auto;font-size:10px;color:var(--fg-dim)">tile size = market cap · color = % change · click to open EQ</span>
+          <span id="hmScaleHint" style="margin-left:auto;font-size:10px;color:var(--fg-dim)"></span>
         </div>
         <div id="hmMap" style="position:relative;width:100%;height:calc(100vh - 220px);min-height:400px;background:#0a0e14;border-radius:3px;overflow:hidden"></div>
       `;
@@ -250,8 +253,12 @@
       const mapEl = body.querySelector('#hmMap');
       const btns = body.querySelectorAll('.hm-tf-btn');
 
+      const scaleHint = body.querySelector('#hmScaleHint');
+
       function paint() {
         renderTreemap(mapEl, body._hmData, state.tf);
+        const sc = TF_SCALE[state.tf] || 5;
+        if (scaleHint) scaleHint.textContent = `tile size = market cap · color = % change, saturates ±${sc}% · click to open EQ`;
         btns.forEach(b => {
           const active = b.dataset.tf === state.tf;
           b.style.background = active ? 'var(--accent-bg, rgba(96,165,250,0.15))' : 'transparent';

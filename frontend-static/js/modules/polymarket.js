@@ -1,7 +1,9 @@
 /* POL — Polymarket prediction market terminal module
    Data: stocks.clawmo.tech/data/polymarket-snapshot.json + polymarket-signals.json
-   Tabs: Top Moves · Macro · Crypto · Watchlist
-   Cadence: fetcher runs every 15 min mkt hours (:10 :25 :40 :55), hourly off-hours.
+   Tabs: Top Moves · Macro · Crypto · Watchlist · Divergence
+   Cadence (per clawmo system cron, POL moved off OpenClaw agentTurn 2026-05-31):
+     snapshot+signals hourly at :30 (9-15 ET weekdays) + every 4h off-hours;
+     Kalshi divergence hourly (10-15 ET weekdays); pair discovery weekday 09:45 ET.
 */
 (function () {
   'use strict';
@@ -64,7 +66,7 @@
     const sig = signals[m.id] || {};
     const spark = (window.OC_CHART && sig.sparkline && sig.sparkline.length >= 2)
       ? window.OC_CHART.sparkline(sig.sparkline, { w: 90, h: 22 })
-      : '<span class="pol-spark-empty" title="Sparkline needs ≥ 2 of our snapshots — wait 15-30 min for fetcher">…</span>';
+      : '<span class="pol-spark-empty" title="Sparkline needs ≥ 2 of our snapshots — fills in over the next hourly snapshots (:30 mkt hours, every 4h off-hours)">…</span>';
     // prefer our intraday 4h over API's 1h for short-window motion
     const chg4h = sig.velocity && sig.velocity['4h'];
     const chg1d = m.change_1d_pp;
@@ -138,8 +140,11 @@
   }
 
   function renderBuckets(snapshot, signals, ids) {
-    const selected = (snapshot.buckets || []).filter(b => ids.includes(b.id));
-    if (!selected.length) return '<div class="pol-empty">no data</div>';
+    // Skip buckets with no markets — e.g. the "market" (Market Structure) bucket
+    // currently resolves to 0 markets, so without this it rendered a dead
+    // "MARKET STRUCTURE · 0 markets" panel on the Macro + Watchlist tabs.
+    const selected = (snapshot.buckets || []).filter(b => ids.includes(b.id) && b.markets.length);
+    if (!selected.length) return '<div class="pol-empty">no markets in these buckets right now</div>';
     return selected.map(b => bucketPanel(b, signals)).join('');
   }
 
@@ -160,11 +165,11 @@
   }
 
   /* Divergence table — each row is one Polymarket↔Kalshi pair. Spread = poly - kalshi.
-     Positive spread (yellow): Polymarket more bullish on Yes. Negative (red): Kalshi more bullish.
+     Positive spread (green, ↑): Polymarket more bullish on Yes. Negative (red, ↓): Kalshi more bullish.
      Rows above their alert threshold get a glowing left border. */
   function renderDivergence(div) {
     if (!div || !div.pairs || !div.pairs.length) {
-      return '<div class="pol-empty">no divergence pairs configured</div>';
+      return '<div class="pol-empty">no divergence pairs right now — discovery re-aims at the day\'s live BTC strikes each weekday 09:45 ET</div>';
     }
     const threshold = div.default_alert_threshold_pp || 5;
     const rowsHtml = div.pairs.map(r => {
@@ -197,7 +202,13 @@
 
     const computed = div.pairs.filter(r => r.spread_pp != null).length;
     const alerts = div.pairs.filter(r => r.spread_pp != null && Math.abs(r.spread_pp) >= (r.alert_threshold_pp || threshold)).length;
-    return `
+    // When every pair is a warning (e.g. all strikes settled and discovery hasn't
+    // re-aimed yet — happens over weekends since both discovery + divergence crons
+    // are weekday-only), say so loudly instead of showing a silent table of warnings.
+    const staleBanner = (computed === 0)
+      ? `<div class="mod-panel pol-div-stale">⚠️ All ${div.pairs.length} pair${div.pairs.length === 1 ? '' : 's'} expired or unpriced — no live spreads. Discovery re-aims at the day's live BTC strikes each <b>weekday 09:45 ET</b>; divergence then computes hourly 10-15 ET. (Both crons are weekday-only, so this is expected over weekends.)</div>`
+      : '';
+    return `${staleBanner}
       <div class="mod-panel pol-div-warn-banner">
         <div class="pol-div-warn-title">⚠️ THIS IS A SENTIMENT SIGNAL — NOT AN ARBITRAGE OPPORTUNITY</div>
         <div class="pol-div-warn-body">
@@ -222,7 +233,7 @@
 
       <div class="mod-panel pol-bucket">
         <div class="mod-panel-title">DIVERGENCE TABLE · POLYMARKET vs KALSHI · THRESHOLD ${threshold}PP · ${computed} pairs · ${alerts} alerting</div>
-        <div class="pol-bucket-desc">Spread = polymarket_yes − kalshi_yes. <span class="num-up">Positive (yellow)</span> = Polymarket more bullish. <span class="num-dn">Negative (blue)</span> = Kalshi more bullish. Rows ≥ threshold get a red glow + Telegram alert (dedupe ${div.re_alert_delta_pp}pp shift).</div>
+        <div class="pol-bucket-desc">Spread = polymarket_yes − kalshi_yes. <span class="num-up">Positive ↑ (green)</span> = Polymarket more bullish. <span class="num-dn">Negative ↓ (red)</span> = Kalshi more bullish. Rows ≥ threshold get a red glow + Telegram alert (dedupe ${div.re_alert_delta_pp}pp shift).</div>
         <div class="pol-div-table-wrap">
         <table class="pol-div-table">
           <thead>
@@ -289,10 +300,10 @@
             <div class="pol-howto-block">
               <div class="pol-howto-h">⏱️ Refresh cadence</div>
               <ul class="pol-howto-ul">
-                <li>Polymarket snapshot: <b>every 15 min</b> during US mkt hours, hourly off-hours.</li>
-                <li>Kalshi divergence: <b>every 30 min</b> during mkt hours. Telegram alert to InvestmentClawmo when |Δ| ≥ 5pp.</li>
-                <li>Pair discovery: <b>weekly Sunday 08:05 ET</b>. Adds new BTC daily strikes as dates roll.</li>
-                <li>Need it fresher? Snapshots stale &gt;30 min mean a cron failed — check <code>~/.openclaw/logs/polymarket.log</code>.</li>
+                <li>Polymarket snapshot: <b>hourly at :30</b> during US mkt hours (9-15 ET weekdays), <b>every 4h</b> off-hours.</li>
+                <li>Kalshi divergence: <b>hourly</b> during mkt hours (10-15 ET weekdays). Telegram alert to InvestmentClawmo when |Δ| ≥ 5pp.</li>
+                <li>Pair discovery: <b>every weekday 09:45 ET</b>, just before the divergence window. BTC daily strikes expire 17:00 ET, so discovery re-aims at the day's live strikes.</li>
+                <li>Need it fresher? Snapshots stale <b>&gt;4-5h</b> (or no :30 update on a weekday) mean a cron failed — check <code>~/.openclaw/logs/polymarket.log</code>.</li>
               </ul>
             </div>
           </div>
@@ -621,6 +632,14 @@
             font-size:10px;
           }
           [data-mod-panel="pol"] .pol-div-links a:hover { color:var(--accent); }
+          [data-mod-panel="pol"] .pol-div-stale {
+            background:rgba(229,185,76,0.08);
+            border:1px solid rgba(229,185,76,0.45);
+            border-left:4px solid #E6B84A;
+            padding:9px 13px; margin-bottom:10px;
+            font-size:11px; color:var(--fg); line-height:1.5;
+          }
+          [data-mod-panel="pol"] .pol-div-stale b { color:#E6B84A; }
           [data-mod-panel="pol"] .pol-div-warn-banner {
             background:rgba(248,113,113,0.06);
             border:1px solid rgba(248,113,113,0.4);

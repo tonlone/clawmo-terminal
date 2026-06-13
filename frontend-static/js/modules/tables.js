@@ -85,7 +85,11 @@
       case '>=': return sv >= thresh;
       case '<':  return sv <  thresh;
       case '<=': return sv <= thresh;
-      case '=':  return Math.abs(sv - thresh) < 1e-6;
+      case '=':  {
+        // ±0.05 in user-facing units (web parity); pct metrics stored as fractions
+        const tol = metric.fmt === 'pct' ? 0.0005 : 0.05;
+        return Math.abs(sv - thresh) <= tol;
+      }
       default:   return true;
     }
   }
@@ -225,7 +229,7 @@
                 <td class="mono">${fmt_.compact(s.market_cap)}</td>
                 <td class="mono">${s.price != null ? '$' + s.price.toFixed(2) : '—'}</td>
                 <td class="mono">${s.beta != null ? s.beta.toFixed(2) : '—'}</td>
-                <td class="mono">${s.dividend_yield ? (s.dividend_yield * 100).toFixed(2) + '%' : '—'}</td>
+                <td class="mono">${s.dividend_yield != null ? (s.dividend_yield * 100).toFixed(2) + '%' : '—'}</td>
                 <td class="scr-tags-cell">${renderTags(s.tags)}</td>
               </tr>
             `;
@@ -279,7 +283,7 @@
               <td class="mono">${fmt_.compact(s.market_cap)}</td>
               <td class="mono">${s.price != null ? '$' + s.price.toFixed(2) : '—'}</td>
               <td class="mono">${s.beta != null ? s.beta.toFixed(2) : '—'}</td>
-              <td class="mono">${s.dividend_yield ? (s.dividend_yield * 100).toFixed(2) + '%' : '—'}</td>
+              <td class="mono">${s.dividend_yield != null ? (s.dividend_yield * 100).toFixed(2) + '%' : '—'}</td>
               <td class="scr-tags-cell">${renderTags(s.tags)}</td>
             </tr>
           `;
@@ -541,10 +545,13 @@
             btn.disabled = true;
             try {
               allusData = await fetchJSON(`${BASE}/screener_universe.json`);
+            } catch (e) {
+              btn.textContent = 'ALL US · failed — retry';
+              return; // stay on core; allusData stays null so next click retries
             } finally {
               btn.disabled = false;
-              btn.textContent = `ALL US · ${allusData ? allusData.count : '~5K'}`;
             }
+            btn.textContent = `ALL US · ${allusData.count || '~5K'}`;
           }
           stocks = allusData.stocks || [];
         } else {
@@ -580,8 +587,11 @@
       updateModeUI();
       reRun();
       attachTickerClicks(body);
-      // Re-attach clicks on result rerender
+      // Re-attach clicks on result rerender — disconnect any observer left
+      // from a previous render of this pane so they don't stack.
+      if (body.__scrObs) body.__scrObs.disconnect();
       const obs = new MutationObserver(() => attachTickerClicks(body));
+      body.__scrObs = obs;
       const bodyEl = body.querySelector('#scr-results-body');
       if (bodyEl) obs.observe(bodyEl, { childList: true });
     } catch (e) { body.innerHTML = `<div class="mod-err">${e.message}</div>`; }
@@ -596,10 +606,14 @@
     { key: 'name',       label: 'NAME',    type: 'str', cls: '' },
     { key: 'price',      label: 'PRICE',   type: 'num', cls: 'num' },
     { key: 'chg_pct',    label: 'CHG',     type: 'num', cls: 'num' },
-    { key: 'sctr_raw',   label: 'TR SCORE', type: 'num', cls: 'num' },
-    { key: 'sctr_rank',  label: '%ILE',    type: 'num', cls: 'num' },
-    { key: 'rs_trend',   label: 'TREND',   type: 'str', cls: '' },
-    { key: 'rs',         label: 'RS',      type: null,  cls: '' },  // sparkline, not sortable
+    { key: 'sctr_raw',   label: 'TR SCORE', type: 'num', cls: 'num',
+      tip: 'Weighted composite technical score 0–100. Long-term 60% (% vs 200-EMA + 125d ROC) · Medium 30% (% vs 50-EMA + 20d ROC) · Short 10% (PPO slope + RSI). Each indicator percentile-ranked within the universe.' },
+    { key: 'sctr_rank',  label: '%ILE',    type: 'num', cls: 'num',
+      tip: 'Percentile rank of TR SCORE within this universe (0–100). 100 = technically strongest — the headline SCTR-style number.' },
+    { key: 'rs_trend',   label: 'TREND',   type: 'str', cls: '',
+      tip: 'Relative-strength ratio (stock ÷ benchmark) vs 50 trading days ago. rising = beating the index.' },
+    { key: 'rs',         label: 'RS',      type: null,  cls: '',
+      tip: 'RS ratio vs benchmark, last 60 sessions (sparkline, not sortable)' },
   ];
 
   async function renderSCTR(body) {
@@ -639,8 +653,8 @@
           <table class="tbl-dense">
             <thead><tr>
               ${SCTR_COLS.map(c => c.type
-                ? `<th class="sctr-th${c.cls ? ' '+c.cls : ''}" data-col="${c.key}">${c.label} <span class="sctr-sort-arrow" style="opacity:0.3">▾</span></th>`
-                : `<th class="${c.cls}">${c.label}</th>`).join('')}
+                ? `<th class="sctr-th${c.cls ? ' '+c.cls : ''}" data-col="${c.key}"${c.tip ? ` title="${c.tip}" style="cursor:help"` : ''}>${c.label} <span class="sctr-sort-arrow" style="opacity:0.3">▾</span></th>`
+                : `<th class="${c.cls}"${c.tip ? ` title="${c.tip}" style="cursor:help"` : ''}>${c.label}</th>`).join('')}
             </tr></thead>
             <tbody></tbody>
           </table>
@@ -842,7 +856,7 @@
     const klass = isPos ? 'gex-state-positive' : 'gex-state-negative';
     const label = isPos ? 'STABILITY BUFFER' : 'VOLATILITY ACCELERATOR';
 
-    const narrative = isPos
+    let narrative = isPos
       ? 'Dealers buy dips and sell rallies, dampening volatility. Expect mean-reverting price action and pins at major strikes. Driven by income strategies (covered calls, cash-secured puts). Lower expected realized volatility.'
       : 'Dealers sell dips and buy rallies, amplifying moves. Expect trend continuation, gap risk, and elevated realized volatility. Driven by speculation and fear (long puts, leverage). Trends accelerate until the gamma flip is reached.';
 
@@ -850,18 +864,38 @@
     const posPct = Math.round(((d.positive_count || 0) / total) * 100);
     const negPct = Math.round(((d.negative_count || 0) / total) * 100);
 
-    let spyLine = '';
-    if (spy) {
-      const gexBn = spy.net_gex_bn != null ? spy.net_gex_bn : (spy.net_gex || 0) / 1e9;
-      const gexSign = gexBn >= 0 ? '+' : '−';
+    // SPY + QQQ chips (mirrors stocks-app hero — Tony gauges the market with both)
+    const qqq = stocks.find(s => s.ticker === 'QQQ') || null;
+    const indexChips = (row) => {
+      if (!row) return '';
+      const gexBn = row.net_gex_bn != null ? row.net_gex_bn : (row.net_gex || 0) / 1e9;
       const gexCls = gexBn >= 0 ? 'num-up' : 'num-dn';
-      const chg = spy.chg_pct != null ? spy.chg_pct : 0;
-      const chgSign = chg >= 0 ? '+' : '';
+      const chg = row.chg_pct != null ? row.chg_pct : 0;
       const chgCls = chg >= 0 ? 'num-up' : 'num-dn';
-      spyLine = `
-        <span class="chip">SPY NET GEX <span class="mono ${gexCls}">${gexSign}$${Math.abs(gexBn).toFixed(2)}B</span></span>
-        <span class="chip">SPOT <span class="mono">$${(spy.spot || 0).toFixed(2)}</span> <span class="mono ${chgCls}">${chgSign}${chg.toFixed(2)}%</span></span>
-      `;
+      const dot = row.regime === 'positive' ? '🟢' : '🔴';
+      let chips = `<span class="chip">${dot} <b>${escapeGex(row.ticker)}</b> <span class="mono">$${(row.spot || 0).toFixed(2)}</span> <span class="mono ${chgCls}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span> · NET <span class="mono ${gexCls}">${gexBn >= 0 ? '+' : '−'}$${Math.abs(gexBn).toFixed(2)}B</span>`;
+      if (row.gamma_flip && row.spot) {
+        const fd = (row.gamma_flip - row.spot) / row.spot * 100;
+        chips += ` · FLIP <span class="mono">$${row.gamma_flip.toFixed(0)}</span> <span class="mono">(${fd >= 0 ? '+' : ''}${fd.toFixed(1)}%)</span>`;
+      }
+      if (row.put_wall != null && row.call_wall != null) {
+        chips += ` · <span class="mono num-dn">$${row.put_wall.toFixed(0)}</span>/<span class="mono num-up">$${row.call_wall.toFixed(0)}</span>`;
+      }
+      return chips + '</span>';
+    };
+    const spyLine = indexChips(spy) + indexChips(qqq);
+    const diverges = spy && qqq && spy.regime !== qqq.regime;
+    if (diverges) {
+      narrative += ` <b>Note — the two indexes are split:</b> SPY is in <b>${spy.regime} gamma</b> while QQQ is in <b>${qqq.regime} gamma</b>. The headline describes SPY (the broad market); ` +
+        (qqq.regime === 'negative'
+          ? 'expect tech/Nasdaq moves to run hotter and trendier than the S&P.'
+          : 'expect tech/Nasdaq to be more pinned and rangey than the S&P.');
+      // If both indexes sit within 1% of their gamma flip, the split is marginal — say so.
+      const spyFd = (spy.gamma_flip && spy.spot) ? Math.abs((spy.gamma_flip - spy.spot) / spy.spot * 100) : null;
+      const qqqFd = (qqq.gamma_flip && qqq.spot) ? Math.abs((qqq.gamma_flip - qqq.spot) / qqq.spot * 100) : null;
+      if (spyFd != null && qqqFd != null && spyFd <= 1 && qqqFd <= 1) {
+        narrative += ` Both indexes are hovering near their gamma flip (SPY ${spyFd.toFixed(1)}% away, QQQ ${qqqFd.toFixed(1)}%) — which is why they can sit on opposite sides. The divergence is <b>marginal, not a dramatic regime clash</b>, and either index can flip sides intraday.`;
+      }
     }
 
     // Short-gamma flashpoint: SPY dealers net short AND price pressing the call wall.
@@ -877,8 +911,8 @@
     return `
       <div class="gex-state-hero ${klass}">
         <div class="gex-state-headline">
-          <span class="gex-state-tag">GAMMA REGIME · ${isPos ? 'POSITIVE' : 'NEGATIVE'}</span>
-          <span class="gex-state-label">${label}</span>
+          <span class="gex-state-tag">GAMMA REGIME${spy ? ' (SPY)' : ''} · ${isPos ? 'POSITIVE' : 'NEGATIVE'}</span>
+          <span class="gex-state-label">${label}${diverges ? ' · ⚠️ QQQ DIVERGES: ' + qqq.regime.toUpperCase() + ' GAMMA' : ''}</span>
         </div>
         <div class="gex-state-stats">
           ${spyLine}
@@ -934,6 +968,16 @@
   function renderGexUniverseBody(d, stocks, totalPos, totalNeg, netMarket, posNegRatio, butterfly, bar) {
     return `
         ${renderGexMarketState(d)}
+        <details class="mod-panel" style="padding:6px 12px;border-left:3px solid #E6B84A">
+          <summary style="cursor:pointer;font-size:11px;font-weight:700;color:#E6B84A">🧭 START HERE — the 4 things to check (new to options? read this first)</summary>
+          <div style="font-size:11px;color:var(--fg-dim);line-height:1.7;padding:6px 0 2px">
+            <b>1 · Regime (banner above).</b> <span class="num-up">Positive gamma</span> = dealer hedging <i>dampens</i> moves → rangey days, dips get bought, pins at big strikes. <span class="num-dn">Negative gamma</span> = hedging <i>amplifies</i> moves → trends run further, bigger gaps.<br>
+            <b>2 · Price vs Gamma Flip.</b> The flip is the line between those two worlds. Below it = the volatile regime persists; reclaiming it is the "market calms down" signal.<br>
+            <b>3 · The walls.</b> <span class="num-up">Call wall</span> = likely ceiling; <span class="num-dn">put wall</span> = likely floor. In negative gamma a broken put wall tends to <i>accelerate</i> lower.<br>
+            <b>4 · IV Rank.</b> How expensive options insurance is vs the past year. High &amp; rising = paying up for protection (stress); falling while price holds support = stress easing.<br>
+            <span style="opacity:0.7">Everything else (Flow Tilt, P/C, Greeks) is secondary — click a ticker for its detail with a plain-English summary.</span>
+          </div>
+        </details>
         <div id="gex-vix-term"></div>
 
         <div class="acct-strip">
@@ -1203,6 +1247,35 @@
         </div>`;
     }
 
+    // ── Plain-English summary (beginner entry point; mirrors stocks-app gex.js) ──
+    let plainParts = [];
+    {
+      const pos = td.regime === 'positive';
+      plainParts.push(`<b>${escapeGex(td.ticker)} $${td.spot.toFixed(2)}</b> is in ` + (pos
+        ? `<b class="num-up">POSITIVE gamma</b> — dealer hedging dampens moves (rangey, dips tend to get bought).`
+        : `<b class="num-dn">NEGATIVE gamma</b> — dealer hedging amplifies moves (trends run further, swings are bigger).`));
+      const cw2 = kl.call_wall, pw2 = kl.put_wall;
+      if (st && st.structure_stale) {
+        plainParts.push('Price has gapped beyond the whole options profile — the walls are <b>not usable levels</b> right now.');
+      } else if (cw2 != null && pw2 != null && pw2 <= td.spot && td.spot <= cw2) {
+        const dpw = (td.spot - pw2) / td.spot * 100, dcw = (cw2 - td.spot) / td.spot * 100;
+        plainParts.push(`It trades between its <b class="num-dn">$${pw2.toFixed(0)} floor</b> (${dpw.toFixed(1)}% below) and <b class="num-up">$${cw2.toFixed(0)} ceiling</b> (${dcw.toFixed(1)}% above).`);
+      } else if (cw2 != null && td.spot > cw2) {
+        plainParts.push(`Price is <b>above its $${cw2.toFixed(0)} call wall</b> — no overhead gamma nearby to pin it, so moves can extend ("desert").`);
+      } else if (pw2 != null && td.spot < pw2) {
+        plainParts.push(`Price is <b>below its $${pw2.toFixed(0)} put wall</b> — it lost its gamma support, weakness can extend.`);
+      }
+      if (em) plainParts.push(`Options price a <b>±$${em.em1d.toFixed(2)}</b> (${em.em1dPct.toFixed(1)}%) move today, ±$${em.em1w.toFixed(2)} over the week.`);
+      if (kl.gamma_flip) {
+        const fd = (kl.gamma_flip - td.spot) / td.spot * 100;
+        plainParts.push(td.spot < kl.gamma_flip
+          ? `Below the <b>gamma flip at $${kl.gamma_flip.toFixed(2)}</b> (${fd.toFixed(1)}% above) — the volatile regime persists until price reclaims it.`
+          : `Above the <b>gamma flip at $${kl.gamma_flip.toFixed(2)}</b> — the calm regime holds unless price loses that level.`);
+      }
+    }
+    const plainHtml = `
+      <div class="mod-panel" style="border-left:4px solid #60a5fa;background:#60a5fa12;padding:7px 12px;font-size:11px;line-height:1.55;color:var(--fg-dim)">💬 ${plainParts.join(' ')}</div>`;
+
     return `
       <div class="mod-panel" style="padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:12px">
         <div>
@@ -1216,6 +1289,7 @@
         </div>
       </div>
 
+      ${plainHtml}
       ${flashHtml}
 
       <div class="acct-strip" style="grid-template-columns:repeat(4,1fr)">
@@ -1230,6 +1304,16 @@
         ${card('EXPIRATIONS',  String(td.expirations_used || 0),                        '',      (expFirst || '—') + ' — ' + (expLast || '—'))}
         ${card('NET DELTA',    fmtGexMag(gs.net_delta) + ' sh',                         gs.net_delta >= 0 ? 'num-up' : 'num-dn', gs.net_delta >= 0 ? 'Bullish bias' : 'Bearish bias')}
       </div>
+      ${td.flow_tilt != null ? `<div class="acct-strip" style="grid-template-columns:repeat(2,1fr);margin-top:6px">
+        ${card('FLOW TILT',
+          (td.flow_tilt > 0 ? '+' : '') + td.flow_tilt.toFixed(2),
+          Math.abs(td.flow_tilt) < 0.05 ? 'num-warn' : (td.flow_tilt > 0 ? 'num-up' : 'num-dn'),
+          (Math.abs(td.flow_tilt) < 0.05 ? 'Balanced' : (td.flow_tilt > 0 ? 'Call-leaning' : 'Put-leaning')) + ' · vol tilt, not order flow')}
+        ${card('VOL P/C',
+          td.vol_pcr != null ? td.vol_pcr.toFixed(2) : '—',
+          td.vol_pcr != null && td.vol_pcr > 1 ? 'num-dn' : 'num-up',
+          'Volume put/call (delayed snapshot)')}
+      </div>` : ''}
       <div class="acct-strip" style="grid-template-columns:repeat(2,1fr);margin-top:6px">
         ${card('IV RANK',
           td.iv_rank != null ? td.iv_rank.toFixed(0) + '%' : (td.iv_days > 0 ? 'Bldg (' + td.iv_days + 'd)' : '—'),
@@ -1601,7 +1685,7 @@
     if (!have.length) {
       inner.innerHTML = isMoo
         ? `<div class="mod-err">No opening-auction data — runs every 2 min from 9:32–9:46 ET weekdays.</div>`
-        : `<div class="mod-err">No closing-auction data — runs at 15:58 ET weekdays.</div>`;
+        : `<div class="mod-err">No closing-auction data — captured 16:02–16:16 ET weekdays.</div>`;
       return;
     }
     const generated = doc.generated_at || fj.fetched_at;
@@ -1709,8 +1793,8 @@
       <div class="mocterm-meta">
         Net = Buy − Sell ($M). Source: FinancialJuice (NYSE ${isMoo ? 'Opening' : 'Closing'} Auction Imbalance + Nasdaq NOII).
         ${isMoo
-          ? 'Captured Mon-Fri every 2 min from 9:32 to 9:46 ET — last write wins; if FJ is unavailable the previous snapshot is kept.'
-          : 'Captured Mon-Fri at 15:58 / 15:59 / 16:00 / 16:01 ET — last write wins; if FJ is unavailable the previous snapshot is kept (see updated timestamp).'}
+          ? 'Captured Mon-Fri every minute from 9:25 to 9:46 ET — last write wins; if FJ is unavailable the previous snapshot is kept.'
+          : 'Captured Mon-Fri every 2 min from 16:02 to 16:16 ET — last write wins; if FJ is unavailable the previous snapshot is kept (see updated timestamp).'}
         ${generated ? '· Updated ' + (window.fmt && window.fmt.ago ? window.fmt.ago(generated) : new Date(generated).toLocaleString()) : ''}
       </div>`;
   }
@@ -1776,47 +1860,50 @@
         const sd = rot.score_delta;
         const fd = rot.flow_delta;
         const sdCol = sd > 0 ? '#4ade80' : sd < 0 ? '#f87171' : 'rgba(156,163,175,.4)';
-        deltaHtml += `<span style="font-size:0.55rem;margin-left:5px;color:${sdCol}" title="Score Δ vs ${rot.prev_date}: ${sd>0?'rose +'+sd+' pts (buying increasing)':sd<0?'fell '+sd+' pts (buying cooling)':'unchanged'}">score${sd>0?'+':''}${sd}</span>`;
+        deltaHtml += `<span style="color:${sdCol}" title="Score Δ vs ${rot.prev_date}: ${sd>0?'rose +'+sd+' pts (buying increasing)':sd<0?'fell '+sd+' pts (buying cooling)':'unchanged'}">S${sd>0?'+':''}${sd}</span>`;
         if (fd !== null && fd !== undefined) {
           // INVERTED: rising flow_score = entering distribution = bad (red)
           const fdCol = fd > 0 ? '#f87171' : fd < 0 ? '#4ade80' : 'rgba(156,163,175,.4)';
-          deltaHtml += `<span style="font-size:0.55rem;margin-left:3px;color:${fdCol}" title="Flow warning Δ vs ${rot.prev_date}: ${fd>0?'rose +'+fd+' pts (RED = distribution warning rising — bad)':fd<0?'fell '+fd+' pts (warning easing — good)':'unchanged'}">flow${fd>0?'+':''}${fd}</span>`;
+          deltaHtml += `<span style="color:${fdCol}" title="Flow warning Δ vs ${rot.prev_date}: ${fd>0?'rose +'+fd+' pts (RED = distribution warning rising — bad)':fd<0?'fell '+fd+' pts (warning easing — good)':'unchanged'}">F${fd>0?'+':''}${fd}</span>`;
         }
       }
+      // deltas wrapped in ONE container — raw sibling spans overflowed the
+      // 4-track grid and pushed the ▲▼ counts onto a misaligned second row
       return `<div class="smy-sec-row" data-sector="${s.name.replace(/"/g,'&quot;')}"
         title="${s.name}: avg ${s.avg} · ▲${s.ac} accum · ▼${s.di} distrib / ${s.n}${rot ? ` · Δ S${rot.score_delta>0?'+':''}${rot.score_delta}${rot.flow_delta!=null?' F'+(rot.flow_delta>0?'+':'')+rot.flow_delta:''}` : ''}">
         <span class="smy-sec-name">${s.name}</span>
         <span class="smy-sec-bar"><span style="width:${s.avg}%;background:${col}"></span></span>
         <span class="mono" style="font-size:0.68rem;min-width:22px;text-align:right;${scol}">${s.avg}</span>
-        ${deltaHtml}
+        <span class="smy-sec-deltas">${deltaHtml}</span>
         <span style="font-size:0.62rem;opacity:0.55;min-width:52px">▲${s.ac}&thinsp;▼${s.di}/${s.n}</span>
       </div>`;
     }).join('');
 
     return `<div class="mod-panel" style="margin-bottom:6px">
       <div class="mod-panel-title" style="font-size:0.68rem">
-        SECTOR FLOW · avg score by sector · click row to filter
+        <span title="S±N = avg score Δ vs prior day (green = buying rising). F±N = distribution-warning Δ — INVERTED: red = warning rising = bad. Full legend in the ? column reference.">SECTOR FLOW · avg score by sector · click row to filter ⓘ</span>
         <span class="smy-sec-active-label" style="color:#60a5fa;margin-left:6px"></span>
         <span style="margin-left:auto;font-size:0.6rem;opacity:0.45">
           <span style="color:#4ade80">■</span> accum (≥56) &nbsp;
           <span style="color:#f87171">■</span> distrib (≤44) &nbsp;
-          <b>S±N</b> = score Δ vs yesterday &nbsp;·&nbsp;
-          <b>F±N</b> = distribution warning Δ (<span style="color:#f87171">red F rising = bad</span>) &nbsp;·&nbsp;
           ▲▼ = accum/distrib count
         </span>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:1px 12px;padding:4px 0">
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:1px 12px;padding:4px 0">
         ${bars}
       </div>
     </div>
     <style>
-      .smy-sec-row{display:grid;grid-template-columns:140px 1fr 26px 54px;align-items:center;gap:5px;padding:2px 4px;border-radius:3px;cursor:pointer;transition:background .1s}
+      /* 5 tracks — name · bar · avg · deltas · counts. Cell min 380px keeps the
+         1fr bar visibly wide (fixed tracks total ~318px incl. gaps). */
+      .smy-sec-row{display:grid;grid-template-columns:140px 1fr 26px 64px 54px;align-items:center;gap:5px;padding:2px 4px;border-radius:3px;cursor:pointer;transition:background .1s}
       .smy-sec-row:hover{background:rgba(96,165,250,.07)}
       .smy-sec-row.active{background:rgba(96,165,250,.12)}
       .smy-sec-name{font-size:0.69rem;opacity:.8;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
       .smy-sec-row.active .smy-sec-name{opacity:1;color:#60a5fa;font-weight:600}
       .smy-sec-bar{height:5px;background:#21262d;border-radius:3px;overflow:hidden;display:block}
       .smy-sec-bar span{display:block;height:100%;border-radius:3px;transition:width .4s ease}
+      .smy-sec-deltas{display:flex;gap:4px;font-size:0.58rem;font-family:var(--font-mono,monospace);white-space:nowrap;cursor:help}
     </style>`;
   }
 
@@ -1848,9 +1935,9 @@
             <tr><td style="opacity:.5;padding-right:8px">POC</td><td style="padding-right:8px;opacity:.8">% from 3-month volume modal price</td><td style="padding-right:8px;opacity:.7"><b style="color:#4ade80">Green badge</b> = within ±5% of POC (institutional cost basis). <b>Positive</b> = price above POC. <b>Negative</b> = buying below institutional avg.</td><td style="color:#4ade80">+10 in zone</td></tr>
             <tr><td style="opacity:.5;padding-right:8px">CLUSTER</td><td style="padding-right:8px;opacity:.8">Insider buy cluster</td><td style="padding-right:8px;opacity:.7"><b style="color:#60a5fa">✓ N</b> = N insiders filed Form 4 buys ≥$250K total in 7d. Multiple insiders agreeing is the signal, not a single buy.</td><td style="color:#60a5fa">+5 if present</td></tr>
             <tr><td style="opacity:.5;padding-right:8px">SCORE</td><td style="padding-right:8px;opacity:.8">Composite 0–100</td><td style="padding-right:8px;opacity:.7">Sum of all indicators. Additive boosts: +10 POC zone · +5 cluster</td><td style="opacity:.4">—</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">SIGNAL</td><td style="padding-right:8px;opacity:.8">Score bucket label</td><td style="padding-right:8px;opacity:.7"><span style="color:#4ade80;font-weight:700">≥80 STRONG ACCUM</span> · <span style="color:#86efac">≥65 ACCUM</span> · <span style="opacity:.5">35–65 NEUTRAL</span> · <span style="color:#fb923c">≤35 DISTRIB</span> · <span style="color:#f87171;font-weight:700">≤20 STRONG DISTRIB</span>. Hover cell for reason.</td><td style="opacity:.4">—</td></tr>
+            <tr><td style="opacity:.5;padding-right:8px">SIGNAL</td><td style="padding-right:8px;opacity:.8">Score bucket label</td><td style="padding-right:8px;opacity:.7"><span style="color:#4ade80;font-weight:700">≥80 STRONG ACCUM</span> · <span style="color:#86efac">65–79 ACCUM</span> · <span style="opacity:.5">50–64 NEUTRAL</span> · <span style="color:#fb923c">35–49 DISTRIB</span> · <span style="color:#f87171;font-weight:700">&lt;35 STRONG DISTRIB</span>. Hover cell for reason.</td><td style="opacity:.4">—</td></tr>
             <tr style="border-top:1px solid #21262d"><td colspan="4" style="padding:6px 0 2px;font-size:0.62rem;letter-spacing:.05em;opacity:.5;text-transform:uppercase">v3.1 — Wyckoff distribution layer</td></tr>
-            <tr><td style="opacity:.5;padding-right:8px">FLOW⚠</td><td style="padding-right:8px;opacity:.8">Distribution warning 0–100</td><td style="padding-right:8px;opacity:.7">Inverse of SCORE. <b style="color:#fbbf24">≥30 WATCH</b> · <b style="color:#fb923c">≥50 WARNING</b> · <b style="color:#ef4444">≥60+SCORE≥65 = ORDERLY DIST</b>. Heaton signal: rising price hides smart-money exit.</td><td style="opacity:.7">composite</td></tr>
+            <tr><td style="opacity:.5;padding-right:8px">FLOW⚠</td><td style="padding-right:8px;opacity:.8">Distribution warning 0–100</td><td style="padding-right:8px;opacity:.7">Independent warning layer — NOT the inverse of SCORE; both high at once is the point. <b style="color:#fbbf24">≥30 WATCH</b> · <b style="color:#fb923c">≥40 WARNING</b> · <b style="color:#ef4444">≥40 + SCORE≥65 = ORDERLY DIST</b>. Heaton signal: rising price hides smart-money exit.</td><td style="opacity:.7">composite</td></tr>
             <tr><td style="opacity:.5;padding-right:8px">VERDICT</td><td style="padding-right:8px;opacity:.8">Combined Score + Flow⚠ tier</td><td style="padding-right:8px;opacity:.7">CLEAR · WATCH · WARNING · <span style="color:#ef4444">⚠ ORDERLY</span> (Heaton). Filter button "⚠ Orderly Dist" isolates the highest-conviction distributing names.</td><td style="opacity:.4">—</td></tr>
             <tr><td style="opacity:.5;padding-right:8px">VOL DIV</td><td style="padding-right:8px;opacity:.8">18d vol-vs-price slope</td><td style="padding-right:8px;opacity:.7"><span style="color:#fb923c">⚠</span> = price slope &gt;0 AND volume slope &lt;−1%/day. Rally on shrinking participation = APs distributing into retail bid.</td><td style="color:#fb923c">+30 if ⚠</td></tr>
             <tr><td style="opacity:.5;padding-right:8px">STREAK</td><td style="padding-right:8px;opacity:.8">Consecutive up-day count</td><td style="padding-right:8px;opacity:.7"><b style="color:#fbbf24">≥10 stretched</b> · <b style="color:#ef4444">≥14 extreme (4σ)</b>. SOXX hit 18 days April 2026 — probability under fair odds is 1-in-262,000.</td><td style="color:#fbbf24">+10/+20</td></tr>
@@ -1878,7 +1965,7 @@
             <button class="fin-subtab-btn smy-tag-btn" data-smytag="MACRO" style="padding:2px 8px;font-size:0.7rem">Macro</button>
             <button class="fin-subtab-btn smy-tag-btn" data-smytag="signals" style="padding:2px 8px;font-size:0.7rem">Signals Only</button>
             <button class="fin-subtab-btn smy-tag-btn" data-smytag="pocAccum" style="padding:2px 8px;font-size:0.7rem;color:#fbbf24;border-color:rgba(251,191,36,0.4)" title="Price within ±5% of 3-month institutional cost basis AND active accumulation flow — highest-conviction combo">★ POC + Accum</button>
-            <button class="fin-subtab-btn smy-tag-btn" data-smytag="orderlyDist" style="padding:2px 8px;font-size:0.7rem;color:#ef4444;border-color:rgba(239,68,68,0.4)" title="Score ≥65 (looks like accumulation) AND Flow Warning ≥60 — Heaton signal: smart money exiting under cover of strong price action">⚠ Orderly Dist</button>
+            <button class="fin-subtab-btn smy-tag-btn" data-smytag="orderlyDist" style="padding:2px 8px;font-size:0.7rem;color:#ef4444;border-color:rgba(239,68,68,0.4)" title="Score ≥65 (looks like accumulation) AND Flow Warning ≥40 — Heaton signal: smart money exiting under cover of strong price action. Rare by design (~2/day across 570 tickers)">⚠ Orderly Dist</button>
             <input type="search" class="smy-sig-search stk-tick-input" placeholder="filter ticker…" style="min-width:120px">
             <button class="fin-subtab-btn smy-ref-toggle" style="padding:2px 8px;font-size:0.7rem;margin-left:4px" title="Toggle column reference">?</button>
           </span>
@@ -2052,7 +2139,7 @@
 
         // ── v3.1 Wyckoff + ETF flow cells ───────────────────────────────
         const fs = s.flow_score || 0;
-        const flowColor = fs >= 60 ? '#ef4444' : fs >= 30 ? '#fbbf24' : '';
+        const flowColor = fs >= 40 ? '#ef4444' : fs >= 30 ? '#fbbf24' : '';
         const flowCell = `<span class="mono" style="${flowColor ? 'color:' + flowColor + ';font-weight:700' : 'opacity:0.5'}" title="Distribution warning 0–100. Inputs: 18d vol-trend divergence (+30), churn bars (+10/+20), extension streak ≥10 (+10) / ≥14 (+20), ETF flow <-5% (+25), sector flow <-3% (+15). High Score + High Flow⚠ = ORDERLY DISTRIBUTION (Heaton signal).">${fs}</span>`;
         const verdictMap = {
           ORDERLY_DISTRIBUTION: { c: '#ef4444', bg: 'rgba(239,68,68,0.18)', t: '⚠ ORDERLY' },
@@ -2937,8 +3024,8 @@
           .replace(', ', ' ') + ' ET';
       } catch (e) { return (iso || '').slice(0, 16).replace('T', ' ') + 'Z'; }
     };
-    const c = (label, val, cls, sub) => `
-      <div class="acct-card"><div class="acct-name">${escapeGex(label)}</div>
+    const c = (label, val, cls, sub, tip) => `
+      <div class="acct-card"><div class="acct-name"${tip ? ` title="${escapeGex(tip)}" style="cursor:help"` : ''}>${escapeGex(label)}</div>
       <div class="acct-val"><span class="mono ${cls || ''}">${val}</span></div>
       ${sub ? `<div class="acct-meta"><span>${escapeGex(sub)}</span></div>` : ''}</div>`;
     const wcol = { high: '#f87171', med: '#E6B84A', change: '#60a5fa', info: 'var(--fg-dim)' };
@@ -2968,7 +3055,15 @@
       gex: { term: 'GEX — gamma exposure', tip: 'Total options-dealer gamma. Positive/long gamma = dealer hedging DAMPENS moves (calmer). Negative/short gamma = hedging AMPLIFIES moves (whippier, trendier).' },
       rrg: { term: 'RRG — Relative Rotation Graph', tip: 'A map of how each sector is performing vs the S&P 500 over time. Quadrants: Leading (strong & strengthening), Weakening (strong but fading), Lagging (weak), Improving (weak but recovering). Tracks sector rotation.' },
       squeeze: { term: 'Squeeze', tip: 'A fast, often forced price spike higher — short sellers or dealers are pushed to buy, which lifts price, forcing still more buying.' },
-      reversal: { term: 'Reversal', tip: 'Price sharply changes direction — e.g. after a squeeze runs out of fuel it can snap back down just as fast.' }
+      reversal: { term: 'Reversal', tip: 'Price sharply changes direction — e.g. after a squeeze runs out of fuel it can snap back down just as fast.' },
+      contango: { term: 'Contango (VIX term structure)', tip: 'Near-term VIX BELOW longer-dated VIX — the normal, calm state. A complacent / risk-on backdrop.' },
+      backwardation: { term: 'Backwardation (VIX term structure)', tip: 'Near-term VIX ABOVE longer-dated VIX — acute stress right now. Often shows up near sell-off bottoms.' },
+      killswitch: { term: 'Kill switch', tip: 'Automatic circuit-breaker: halts ALL new trade signals when recent trading deteriorates badly (deep drawdown, losing streak), until conditions normalize.' },
+      throttle: { term: 'Stop-out auto-throttle', tip: 'When many positions hit stop-losses the same day (stop-out cluster), the engine automatically limits NEW positions until stop-outs normalize. Defensive de-risking.' },
+      stopout: { term: 'Stop-out', tip: 'A position closed automatically because price hit its pre-set stop-loss — the planned maximum loss for that trade.' },
+      goldencross: { term: 'Golden cross', tip: 'The 50-day moving average rising above the 200-day — classic confirmation the longer-term trend has turned up. Opposite = "death cross".' },
+      sma: { term: 'SMA — simple moving average', tip: 'Average closing price over the last N days (SMA50 = 50 days). Price above a rising SMA = uptrend; SMA50/SMA200 are the most-watched trend lines.' },
+      bos: { term: 'BOS — break of structure', tip: 'Momentum pattern: price breaks above its recent swing high, suggesting the short-term trend flipped upward. One of the signal engine\'s setup patterns.' }
     };
     const GLOSS_ORDER = [
       ['long(?:\\s+setups?)?\\s+into\\s+earnings(?:\\s+at\\s+high\\s+iv)?', 'longearn'],
@@ -2981,6 +3076,16 @@
       ['short-?γ', 'flashpoint'],
       ['short-?\\s?gamma', 'flashpoint'],
       ['flashpoints?', 'flashpoint'],
+      ['stop-?out\\s+(?:auto-?)?throttle', 'throttle'],
+      ['auto-?throttle', 'throttle'],
+      ['stopped\\s+out', 'stopout'],
+      ['stop-?outs?\\b', 'stopout'],
+      ['golden\\s+cross', 'goldencross'],
+      ['kill\\s+switch', 'killswitch'],
+      ['\\bcontango\\b', 'contango'],
+      ['\\bbackwardation\\b', 'backwardation'],
+      ['\\bSMA\\s?-?\\d{1,3}\\b', 'sma'],
+      ['\\bBOS\\b', 'bos'],
       ['\\bsqueeze\\b', 'squeeze'],
       ['\\breversal\\b', 'reversal'],
       ['\\bcrush\\b', 'crush'],
@@ -3025,12 +3130,21 @@
         <span style="color:var(--fg-dim);margin-left:8px">${escapeGex(b.as_of)} close · ${escapeGex(etStamp(b.generated_at))}</span>
       </div>`;
 
-    if (b.summary) H += `<div class="mod-panel" style="border-left:3px solid #60a5fa;font-size:13px;line-height:1.55">${escapeGex(b.summary)}</div>`;
+    if (b.summary) {
+      const SECTOR_RE_S = new RegExp('\\b(' + Object.keys(SECTORS).sort((a, b2) => b2.length - a.length).join('|') + ')\\b', 'g');
+      const sectorizeS = (s) => String(s || '').replace(SECTOR_RE_S, m => `${SECTORS[m]} (${m})`);
+      const parts = String(b.summary).split(/\n+/).map(x => x.trim()).filter(Boolean);
+      H += `<div class="mod-panel" style="border-left:3px solid #60a5fa;font-size:13px;line-height:1.6">`;
+      parts.forEach(p => { const m = p.match(/^([A-Za-z][A-Za-z &/]{1,22}):\s+([\s\S]+)$/);
+        if (m) H += `<div style="margin-bottom:6px"><span style="font-weight:800;color:#60a5fa;text-transform:uppercase;font-size:10px;letter-spacing:0.04em;margin-right:5px">${escapeGex(m[1])}</span>${sectorizeS(glossify(m[2]))}</div>`;
+        else H += `<div style="margin-bottom:6px">${sectorizeS(glossify(p))}</div>`; });
+      H += `</div>`;
+    }
 
     // Watch
     H += `<div class="mod-panel"><div class="mod-panel-title">TOP THINGS TO WATCH</div><div style="display:flex;flex-direction:column;gap:5px;padding:4px 8px 8px">`;
     if (!b.watch || !b.watch.length) H += `<div style="color:var(--fg-dim);font-size:12px">Quiet day — no flags.</div>`;
-    else b.watch.forEach(x => { H += `<div style="border-left:3px solid ${wcol[x.level] || 'var(--fg-dim)'};padding:3px 9px;font-size:12px;line-height:1.45">${glossify(x.text)}</div>`; });
+    else b.watch.forEach(x => { H += `<div style="border-left:3px solid ${wcol[x.level] || 'var(--fg-dim)'};padding:3px 9px;font-size:12px;line-height:1.45">${glossify(String(x.text || '').replace(/`/g, ''))}</div>`; });
     H += `</div></div>`;
 
     // Stop-out auto-throttle card (aligned with signals SIG + daily-brief.html)
@@ -3039,18 +3153,24 @@
     const _tcls = (_th.tier === 'HIGH') ? 'num-dn' : ((_th.tier === 'ELEVATED' || _th.tier === 'WATCH') ? 'num-warn' : 'num-up');
     const _slr = _scl.total_closes ? Math.round((_scl.sl_rate || 0) * 100) : 0;
     const _thCard = _scl.window_date
-      ? c('AUTO-THROTTLE', _tlbl, _tcls, (_scl.sl_count || 0) + ' SL/' + (_scl.total_closes || 0) + ' · ' + _slr + '% SL' + (_th.active && _th.max_new_today != null ? ' · max ' + _th.max_new_today : ''))
+      ? c('AUTO-THROTTLE', _tlbl, _tcls, (_scl.sl_count || 0) + ' SL/' + (_scl.total_closes || 0) + ' · ' + _slr + '% SL' + (_th.active && _th.max_new_today != null ? ' · max ' + _th.max_new_today : ''),
+          'Stop-out auto-throttle: when many positions hit stop-losses the same day, new-position count is automatically cut until stop-outs normalize. SL = stop-loss exits among today\'s closes.')
       : '';
     const _cols = _scl.window_date ? 6 : 5;
 
     // Regime strip
     H += `<div class="acct-strip" style="grid-template-columns:repeat(${_cols},1fr)">
-      ${c('REGIME', (r.regime || '—') + (r.score != null ? ' ' + r.score + '/4' : ''), r.regime === 'BULL' ? 'num-up' : 'num-dn', 'RSI ' + n(r.rsi, 1))}
-      ${c('SPX', n(r.price), '', 'SMA50 ' + n(r.sma50, 0))}
-      ${c('KILL SWITCH', r.kill_switch_active ? 'ARMED' : 'off', r.kill_switch_active ? 'num-dn' : 'num-up', 'avg trade ' + n(r.avg_trade_20d, 2) + '%')}
+      ${c('REGIME', (r.regime || '—') + (r.score != null ? ' ' + r.score + '/4' : ''), r.regime === 'BULL' ? 'num-up' : 'num-dn', 'RSI ' + n(r.rsi, 1),
+        'Market health from 4 S&P 500 trend checks: price > SMA50, price > SMA200, golden cross (SMA50 > SMA200), RSI > 45. 3-4 = BULL, 2 = CAUTION, 0-1 = BEAR.')}
+      ${c('SPX', n(r.price), '', 'SMA50 ' + n(r.sma50, 0),
+        'S&P 500 level vs its 50-day and 200-day moving averages — above both = uptrend.')}
+      ${c('KILL SWITCH', r.kill_switch_active ? 'ARMED' : 'off', r.kill_switch_active ? 'num-dn' : 'num-up', 'avg trade ' + n(r.avg_trade_20d, 2) + '%',
+        'Automatic circuit-breaker: halts ALL new trade signals when recent trades deteriorate badly. off = trading normally.')}
       ${_thCard}
-      ${c('POSITIONS', r.positions != null ? r.positions : '—', '', (r.net_direction || '') + ' · corr ' + n(r.avg_correlation, 2))}
-      ${c('RECESSION', rec.composite != null ? rec.composite : '—', '', rec.regime || '')}
+      ${c('POSITIONS', r.positions != null ? r.positions : '—', '', (r.net_direction || '') + ' · corr ' + n(r.avg_correlation, 2),
+        'Open positions in the signal engine. long-heavy = mostly bullish bets. corr = avg correlation between positions (lower = more diversified).')}
+      ${c('RECESSION', rec.composite != null ? rec.composite : '—', '', rec.regime || '',
+        'Composite recession-risk score from macro indicators (yield curve, jobless claims, etc.). Higher = more risk.')}
     </div>`;
     // Auto-throttle "why" note when active
     if (_th.active) {
@@ -3154,8 +3274,10 @@
 
     // GEX
     H += `<div class="acct-strip" style="grid-template-columns:repeat(5,1fr)">
-      ${c('MARKET GAMMA', (g.positive || 0) + ' + / ' + (g.negative || 0) + ' −', '', 'of ' + (g.total || 0))}
-      ${c('VIX TERM', vt.state || '—', vt.state === 'BACKWARDATION' ? 'num-dn' : vt.state === 'CONTANGO' ? 'num-up' : 'num-warn', 'VIX/VIX3M ' + n(vt.ratio_vix_vix3m, 3))}
+      ${c('MARKET GAMMA', (g.positive || 0) + ' + / ' + (g.negative || 0) + ' −', '', 'of ' + (g.total || 0),
+        'Tracked names in positive (move-dampening) vs negative (move-amplifying) dealer-gamma territory. More negative = whippier, less stable tape.')}
+      ${c('VIX TERM', vt.state || '—', vt.state === 'BACKWARDATION' ? 'num-dn' : vt.state === 'CONTANGO' ? 'num-up' : 'num-warn', 'VIX/VIX3M ' + n(vt.ratio_vix_vix3m, 3),
+        'VIX term structure: CONTANGO = calm/normal, FLAT = transition, BACKWARDATION = acute stress (near-term fear above longer-dated).')}
       ${(g.odte || []).map(o => c('0DTE ' + o.ticker, o.status || '—', '', 'pin ' + n(o.pin, 0))).join('')}
     </div>`;
     if (g.flashpoints && g.flashpoints.length) {
@@ -3239,7 +3361,7 @@
 
     let H = `<div class="mod-panel" style="padding:8px 12px">
       <div class="mod-panel-title">🔭 PRE-MARKET BRIEF · ${escapeGex(b.as_of || '')} (${escapeGex(b.weekday || '')}) · before the 09:30 ET open</div>`;
-    if (b.summary) H += `<div style="font-size:12px;line-height:1.55;margin:4px 0">${escapeGex(b.summary)}</div>`;
+    if (b.summary) H += `<div style="font-size:12px;line-height:1.55;margin:4px 0;white-space:pre-line">${escapeGex(b.summary)}</div>`;
     H += `</div>`;
 
     // Watch
@@ -3400,6 +3522,72 @@
     body.innerHTML = ''; body.appendChild(bar); body.appendChild(sub); paint(); load();
   }
 
+  /* ── Sector Rotation RRG (inline SVG, no chart lib) — JdK RS-Ratio (x) vs
+     RS-Momentum (y), 4 quadrants, weekly 5-pt tails. Mirrors brief.html. ── */
+  function rrgSVG(br) {
+    const rr = (br && br.rotation) || [];
+    const pts = rr.filter(x => x.trail && x.trail.length);
+    if (!pts.length) return '';
+    // distinct color per sector (evenly-spaced hues) so each line is traceable;
+    // quadrant is still shown by position + the translucent zone backgrounds.
+    const ECOL_ORDER = ['XLK', 'XLV', 'XLF', 'XLY', 'XLC', 'XLI', 'XLP', 'XLE', 'XLU', 'XLB', 'XLRE'];
+    const ecol = etf => { let i = ECOL_ORDER.indexOf(etf); if (i < 0) i = 0; return `hsl(${Math.round(i * 360 / ECOL_ORDER.length)},70%,62%)`; };
+    const xs = [], ys = [];
+    pts.forEach(s => s.trail.forEach(p => { if (p.ratio != null) xs.push(p.ratio); if (p.mom != null) ys.push(p.mom); }));
+    const pad = 0.6;
+    const xMin = Math.min(Math.min(...xs) - pad, 99), xMax = Math.max(Math.max(...xs) + pad, 101);
+    const yMin = Math.min(Math.min(...ys) - pad, 99), yMax = Math.max(Math.max(...ys) + pad, 101);
+    const W = 700, H = 440, mL = 48, mR = 18, mT = 18, mB = 34, pL = mL, pR = W - mR, pT = mT, pB = H - mB, pW = pR - pL, pH = pB - pT;
+    const X = v => pL + (v - xMin) / (xMax - xMin) * pW;
+    const Y = v => pT + (yMax - v) / (yMax - yMin) * pH;
+    const x100 = X(100), y100 = Y(100);
+    let s = '';
+    s += `<rect x="${x100}" y="${pT}" width="${pR - x100}" height="${y100 - pT}" fill="rgba(74,222,128,0.07)"/>`;
+    s += `<rect x="${x100}" y="${y100}" width="${pR - x100}" height="${pB - y100}" fill="rgba(250,204,21,0.07)"/>`;
+    s += `<rect x="${pL}" y="${y100}" width="${x100 - pL}" height="${pB - y100}" fill="rgba(248,113,113,0.07)"/>`;
+    s += `<rect x="${pL}" y="${pT}" width="${x100 - pL}" height="${y100 - pT}" fill="rgba(96,165,250,0.07)"/>`;
+    s += `<line x1="${pL}" y1="${y100}" x2="${pR}" y2="${y100}" stroke="rgba(255,255,255,0.18)" stroke-width="1"/>`;
+    s += `<line x1="${x100}" y1="${pT}" x2="${x100}" y2="${pB}" stroke="rgba(255,255,255,0.18)" stroke-width="1"/>`;
+    s += `<rect x="${pL}" y="${pT}" width="${pW}" height="${pH}" fill="none" stroke="rgba(255,255,255,0.1)"/>`;
+    s += `<text x="${pR - 6}" y="${pT + 13}" text-anchor="end" font-size="10" font-weight="700" fill="rgba(74,222,128,0.6)">Leading</text>`;
+    s += `<text x="${pR - 6}" y="${pB - 6}" text-anchor="end" font-size="10" font-weight="700" fill="rgba(250,204,21,0.6)">Weakening</text>`;
+    s += `<text x="${pL + 6}" y="${pB - 6}" text-anchor="start" font-size="10" font-weight="700" fill="rgba(248,113,113,0.6)">Lagging</text>`;
+    s += `<text x="${pL + 6}" y="${pT + 13}" text-anchor="start" font-size="10" font-weight="700" fill="rgba(96,165,250,0.6)">Improving</text>`;
+    const anchors = [];
+    pts.forEach(sec => {
+      const c = ecol(sec.etf), tr = sec.trail, n = tr.length;
+      let d = '';
+      tr.forEach((p, i) => { d += `${i ? ' L' : 'M'}${X(p.ratio).toFixed(1)},${Y(p.mom).toFixed(1)}`; });
+      s += `<path d="${d}" fill="none" stroke="${c}" stroke-width="1.6" opacity="0.5"/>`;
+      tr.forEach((p, i) => { if (i === n - 1) return; const op = (0.3 + 0.5 * (i / (n - 1))).toFixed(2);
+        s += `<circle cx="${X(p.ratio).toFixed(1)}" cy="${Y(p.mom).toFixed(1)}" r="2.2" fill="${i === 0 ? 'none' : c}" stroke="${c}" stroke-width="${i === 0 ? 1.2 : 0}" opacity="${op}"/>`; });
+      const h = tr[n - 1];
+      s += `<circle cx="${X(h.ratio).toFixed(1)}" cy="${Y(h.mom).toFixed(1)}" r="5" fill="${c}" stroke="#0d1117" stroke-width="1.5"/>`;
+      anchors.push({ etf: sec.etf, color: c, ax: X(h.ratio), ay: Y(h.mom) });
+    });
+    anchors.sort((a, b) => a.ay - b.ay);
+    const placed = [];
+    anchors.forEach(a => {
+      const lw = a.etf.length * 6.5 + 4;
+      let lx = a.ax + 8;
+      if (lx + lw > pR) lx = a.ax - 8 - lw;
+      let ly = a.ay, it = 0;
+      while (it < 40 && placed.some(p => Math.abs(p.lx - lx) < 30 && Math.abs(p.ly - ly) < 13)) { ly += 13; it++; }
+      if (ly > pB - 2) ly = pB - 2;
+      placed.push({ etf: a.etf, color: a.color, ax: a.ax, ay: a.ay, lx, ly, lw, left: lx < a.ax });
+    });
+    placed.forEach(p => {
+      const tx = p.left ? (p.lx + p.lw) : p.lx;
+      s += `<line x1="${p.ax.toFixed(1)}" y1="${p.ay.toFixed(1)}" x2="${tx.toFixed(1)}" y2="${p.ly.toFixed(1)}" stroke="${p.color}" stroke-width="0.8" opacity="0.4"/>`;
+      s += `<text x="${p.lx.toFixed(1)}" y="${(p.ly + 3.5).toFixed(1)}" text-anchor="start" font-size="11" font-weight="700" fill="${p.color}" font-family="ui-monospace,monospace" style="paint-order:stroke" stroke="#0d1117" stroke-width="3" stroke-linejoin="round">${escapeGex(p.etf)}</text>`;
+    });
+    s += `<text x="${(pL + pR) / 2}" y="${H - 4}" text-anchor="middle" font-size="10" fill="#8b949e">JdK RS-Ratio (relative strength vs SPY) →</text>`;
+    s += `<text x="13" y="${(pT + pB) / 2}" text-anchor="middle" font-size="10" fill="#8b949e" transform="rotate(-90 13 ${(pT + pB) / 2})">JdK RS-Momentum →</text>`;
+    return `<div style="font-size:11px;font-weight:600;color:var(--fg-dim);letter-spacing:0.05em;margin:9px 0 2px">SECTOR ROTATION (RRG) · weekly · vs S&amp;P 500</div>`
+      + `<div style="display:flex;justify-content:center;overflow:visible"><svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px;display:block">${s}</svg></div>`
+      + `<div style="font-size:9px;color:var(--fg-dim);text-align:center;margin-top:2px">Tail = last ${pts[0].trail.length} weeks (hollow dot = oldest → solid head = current) · clockwise drift Improving→Leading→Weakening→Lagging</div>`;
+  }
+
   /* ── SPX sector-performance donut (inline SVG, no chart lib) — sized by S&P 500
      weight, colored by the period's % return. Mirrors stocks-app brief.html. ── */
   function sectorDonutSVG(br) {
@@ -3465,7 +3653,7 @@
       H += `<table class="mod-table" style="width:100%;font-size:11px"><thead><tr><th>Date</th><th>Regime</th><th style="text-align:right" title="S&P 500 RSI(14): ≥70 overbought, ≤30 oversold">RSI</th><th title="VIX term structure: CONTANGO calm / FLAT transition / BACKWARDATION stress">VIX</th><th style="text-align:right" title="Recession composite score (higher = more risk)">Rec</th><th style="text-align:right" title="Short-gamma flashpoint count — names where dealers amplify moves (squeeze then reversal). A market-fragility gauge, NOT directional: higher = whippier/less stable tape, lower = calmer.">Flash</th><th>Highlights</th></tr></thead><tbody>`;
       ds.forEach(x => { const rc2 = (x.rsi != null && x.rsi >= 70) ? 'num-dn' : (x.rsi != null && x.rsi <= 30 ? 'num-up' : '');
         const vixCell = x.vix ? `<span style="cursor:help;border-bottom:1px dotted var(--fg-dim)" title="${escapeGex(VIX_NOTE[x.vix] || 'VIX term structure state.')}">${escapeGex(x.vix)}</span>` : '—';
-        H += `<tr style="vertical-align:top"><td class="mono">${escapeGex(x.date)}</td><td>${escapeGex(x.regime || '—')}${x.score != null ? ` <span style="color:var(--fg-dim)">${escapeGex(x.score)}/5</span>` : ''}</td><td class="mono ${rc2}" style="text-align:right">${x.rsi != null ? n(x.rsi, 1) : '—'}</td><td>${vixCell}</td><td class="mono" style="text-align:right">${x.rec_composite != null ? escapeGex(x.rec_composite) : '—'}</td><td class="mono" style="text-align:right">${x.flash != null ? escapeGex(x.flash) : '—'}</td><td style="white-space:normal;line-height:1.4;min-width:240px">${sectorize(escapeGex(x.summary || ''))}</td></tr>`; });
+        H += `<tr style="vertical-align:top"><td class="mono">${escapeGex(x.date)}</td><td>${escapeGex(x.regime || '—')}${x.score != null ? ` <span style="color:var(--fg-dim)">${escapeGex(x.score)}/4</span>` : ''}</td><td class="mono ${rc2}" style="text-align:right">${x.rsi != null ? n(x.rsi, 1) : '—'}</td><td>${vixCell}</td><td class="mono" style="text-align:right">${x.rec_composite != null ? escapeGex(x.rec_composite) : '—'}</td><td class="mono" style="text-align:right">${x.flash != null ? escapeGex(x.flash) : '—'}</td><td style="white-space:normal;line-height:1.4;min-width:240px">${sectorize(escapeGex(x.summary || ''))}</td></tr>`; });
       H += `</tbody></table>`;
     } else H += `<div style="color:var(--fg-dim);font-size:12px;padding:4px 8px">No archived daily briefs in window yet.</div>`;
     H += `</div>`;
@@ -3521,8 +3709,8 @@
       bc += bcard('Sectors above 50%', `${br.sectors_above} / ${br.sectors_total}`, '', `${br.sectors_total - br.sectors_above} below 50%`);
       bc += bcard('Breadth regime', escapeGex(br.regime || '—'), '', 'score ' + (br.breadth_score_start != null ? br.breadth_score_start + '→' : '') + br.breadth_score);
       H += `<div class="mod-panel"><div class="mod-panel-title">🧭 BREADTH &amp; ROTATION <span style="color:var(--fg-dim);font-weight:400;font-size:10px">— from breadth.html</span></div><div class="acct-grid">${bc}</div>`;
-      if ((br.leaders || []).length) H += `<div style="font-size:11px;margin-top:5px"><b>Sector leaders (% &gt; 50-day MA):</b> ${br.leaders.map(l => `${escapeGex(l.sector)} <span style="color:var(--fg-dim)">${l.pct}%</span>`).join(' · ')}</div>`;
-      if ((br.laggards || []).length) H += `<div style="font-size:11px;margin-top:3px"><b>Laggards:</b> ${br.laggards.map(l => `${escapeGex(l.sector)} <span style="color:var(--fg-dim)">${l.pct}%</span>`).join(' · ')}</div>`;
+      if ((br.leaders || []).length) H += `<div style="font-size:11px;margin-top:5px"><b>Sector leaders (% &gt; 50-day MA):</b> ${br.leaders.map(l => `${l.etf ? secName(l.etf) : escapeGex(l.sector)} <span style="color:var(--fg-dim)">${l.pct}%</span>`).join(' · ')}</div>`;
+      if ((br.laggards || []).length) H += `<div style="font-size:11px;margin-top:3px"><b>Laggards:</b> ${br.laggards.map(l => `${l.etf ? secName(l.etf) : escapeGex(l.sector)} <span style="color:var(--fg-dim)">${l.pct}%</span>`).join(' · ')}</div>`;
       const rr = br.rotation || [];
       if (rr.length) {
         const leadrs = rr.filter(x => x.quadrant === 'Leading').map(x => secName(x.etf));
@@ -3530,6 +3718,7 @@
         H += `<div style="font-size:11px;margin-top:4px"><b>RRG weekly — Leading:</b> ${leadrs.join(', ') || '—'}</div>`;
         if (chg.length) H += `<div style="font-size:11px;margin-top:3px"><b>Quadrant changes:</b> ${chg.map(x => `${secName(x.etf)} → ${escapeGex(x.quadrant)}`).join(' · ')}</div>`;
       }
+      H += rrgSVG(br);
       H += sectorDonutSVG(br);
       H += `</div>`;
     }
@@ -3578,16 +3767,60 @@
       ord.sort((a, b) => { const ha = grp[a].some(x => ((x.priority || '') + '').toLowerCase() === 'high');
         const hb = grp[b].some(x => ((x.priority || '') + '').toLowerCase() === 'high');
         if (ha !== hb) return ha ? -1 : 1; return grp[b].length - grp[a].length; });
+      // per-headline sentiment badge (label + −1..+1 score), keyword lexicon from news.clawmo.tech
+      const sentBadge = (m) => {
+        const s = m.sentiment || 'NEUTRAL', sc = m.sentiment_score;
+        const cfg = s === 'POSITIVE' ? { c: '#22c55e', bg: 'rgba(34,197,94,0.13)', i: '▲', t: 'Bullish' }
+          : s === 'NEGATIVE' ? { c: '#ef4444', bg: 'rgba(239,68,68,0.13)', i: '▼', t: 'Bearish' }
+          : { c: 'var(--fg-dim)', bg: 'rgba(148,163,184,0.12)', i: '–', t: 'Neutral' };
+        const scoreTxt = (sc != null && sc !== 0) ? ` ${sc > 0 ? '+' : ''}${sc.toFixed(2)}` : '';
+        return `<span title="Keyword sentiment (news.clawmo.tech lexicon) · score −1 (bearish) to +1 (bullish)" style="display:inline-block;font-size:9px;font-weight:700;padding:0 4px;border-radius:3px;color:${cfg.c};background:${cfg.bg};margin-right:5px;white-space:nowrap;vertical-align:1px">${cfg.i} ${cfg.t}${scoreTxt}</span>`;
+      };
       H += `<div class="mod-panel"><div class="mod-panel-title">🌍 NEWS &amp; GEOPOLITICS</div>`;
       ord.forEach(t => {
         H += `<div style="margin:7px 0 2px;font-weight:800;color:#60a5fa;font-size:10px;text-transform:uppercase;letter-spacing:0.04em;border-bottom:1px solid var(--border-soft,#222);padding-bottom:2px">${escapeGex(t)} <span style="color:var(--fg-dim)">(${grp[t].length})</span></div>`;
-        grp[t].forEach(m => { H += `<div style="padding:3px 0;font-size:11px;line-height:1.4"><a href="${escapeGex(m.url)}" target="_blank" rel="noopener" style="color:var(--fg);text-decoration:none">${escapeGex(m.headline)}</a>${m.source ? ` <span style="color:var(--fg-dim);font-size:9px">(${escapeGex(m.source)})</span>` : ''}</div>`; });
+        grp[t].forEach(m => { H += `<div style="padding:3px 0;font-size:11px;line-height:1.4">${sentBadge(m)}<a href="${escapeGex(m.url)}" target="_blank" rel="noopener" style="color:var(--fg);text-decoration:none">${escapeGex(m.headline)}</a>${m.source ? ` <span style="color:var(--fg-dim);font-size:9px">(${escapeGex(m.source)})</span>` : ''}</div>`; });
       });
       H += `</div>`;
     }
 
     body.innerHTML = H;
     body.querySelectorAll('.eq-link').forEach(el => { el.addEventListener('click', () => { if (window.OC_OPEN_MODULE) window.OC_OPEN_MODULE('stock-analysis', { ticker: el.dataset.eq }); }); });
+
+    // weekly audio narration player (mode=weekly) — one ▶ per language (en, yue), EN + Cantonese
+    (function () {
+      const API = BASE.replace(/\/data\/?$/, '');
+      const LABELS = { en: { play: '▶ Listen', pause: '⏸ Pause' }, yue: { play: '▶ 廣東話', pause: '⏸ 暫停' } };
+      const ORDER = ['en', 'yue'];
+      fetch(API + '/api/voice-brief/status?mode=weekly&v=' + Date.now()).then(r => r.json()).then(s => {
+        if (!s || !s.langs) return;
+        const avail = ORDER.filter(l => s.langs[l]); if (!avail.length) return;
+        const bar = document.createElement('div');
+        bar.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px 0';
+        const el = document.createElement('audio'); el.preload = 'none';
+        const meta = document.createElement('span'); meta.style.cssText = 'font-size:10px;color:var(--fg-dim)';
+        const buttons = {};
+        const resetLabels = () => avail.forEach(l => { buttons[l].textContent = LABELS[l].play; });
+        avail.forEach(lang => {
+          const info = s.langs[lang], lab = LABELS[lang] || { play: '▶ ' + lang, pause: '⏸' };
+          const btn = document.createElement('button'); btn.type = 'button'; btn.textContent = lab.play;
+          btn.style.cssText = 'cursor:pointer;border:1px solid #E6B84A;background:#E6B84A;color:#1a1a1a;border-radius:16px;padding:5px 13px;font-size:12px;font-weight:600';
+          btn.addEventListener('click', () => {
+            const playingThis = el.src.indexOf(info.url) !== -1 && !el.paused;
+            if (playingThis) { el.pause(); btn.textContent = lab.play; return; }
+            resetLabels();
+            if (el.src.indexOf(info.url) === -1) el.src = API + info.url + '?v=' + (info.uploaded_at || Date.now());
+            el.play(); btn.textContent = lab.pause;
+            try { meta.textContent = 'audio ' + etStamp(info.uploaded_at); } catch (e) {}
+          });
+          bar.appendChild(btn); buttons[lang] = btn;
+        });
+        bar.appendChild(meta); bar.appendChild(el);
+        el.addEventListener('ended', resetLabels);
+        try { meta.textContent = 'audio ' + etStamp(s.langs[avail[0]].uploaded_at); } catch (e) {}
+        body.insertBefore(bar, body.firstChild);
+      }).catch(() => {});
+    })();
   }
 
   window.OC_MODULES = window.OC_MODULES || {};

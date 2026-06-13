@@ -31,7 +31,13 @@
     return '<span class="cal-impact">' + '●'.repeat(c) + '<span class="cal-impact-dim">' + '●'.repeat(3 - c) + '</span></span>';
   }
   function sentCls(s) {
-    return s == null ? '' : s > 0.2 ? 'num-up' : s > 0 ? 'num-up-soft' : s < -0.2 ? 'num-dn' : s < 0 ? 'num-dn-soft' : '';
+    // calendar.json sentiment is the string 'beat'/'miss'/'inline'
+    // (direction-aware: beat = good news). Numeric path kept as fallback.
+    if (s == null) return '';
+    if (s === 'beat') return 'num-up';
+    if (s === 'miss') return 'num-dn';
+    if (typeof s !== 'number') return '';
+    return s > 0.2 ? 'num-up' : s > 0 ? 'num-up-soft' : s < -0.2 ? 'num-dn' : s < 0 ? 'num-dn-soft' : '';
   }
 
   // Date-group helper: group [{date, ...}] by date, return ordered list [{date, items}]
@@ -300,7 +306,8 @@
       function buildMA() {
         if (!ma || !maAll.length) return '<div class="cal-empty">no M&amp;A data</div>';
         const sorted = [...maAll].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-        const grouped = groupByDate(sorted, 'date');
+        // groupByDate sorts date groups ascending — reverse for newest-first
+        const grouped = groupByDate(sorted, 'date').reverse();
         return grouped.map(g => {
           const isToday = g.date === today;
           const wk = weekdayLabel(g.date);
