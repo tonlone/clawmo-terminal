@@ -457,7 +457,7 @@
     checks.forEach((c) => { if (cats[c.category]) cats[c.category].push(c); });
 
     if (!paysDividend) {
-      cats.dividend = [{ id: 0, category: 'dividend', title: 'N/A — No dividends paid', status: 'pass', score: 4, detail: '', why: '', what: '', highlights: [] }];
+      cats.dividend = [{ id: 0, category: 'dividend', title: 'N/A — No dividends paid', status: 'pass', score: 4, detail: 'Not scored — no dividend program, so no penalty is applied.', why: '', what: '', highlights: [] }];
     }
 
     let totalScore = 0, maxScore = 0;

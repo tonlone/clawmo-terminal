@@ -1359,13 +1359,15 @@
      FMP data is fetched from /api/stock/{t}/fmp-dcf; user inputs drive a
      pure dcfCalc() that recomputes projections + fair value on any change. */
   function defaultDcfInputs(d) {
-    const cs = d.capital_structure || {};
     const gr = d.growth_rates || {};
     const revGrowth5y = gr.revenue?.['5y'];
+    const growthRate = revGrowth5y != null ? Math.max(-0.05, Math.min(0.25, revGrowth5y)) : 0.05;
     return {
       baseFcfMode: 'latest',       // 'latest' | 'avg3y' | 'fmpNextYear'
-      growthRate: revGrowth5y != null ? Math.max(-0.05, Math.min(0.25, revGrowth5y)) : 0.05,
-      fadeRate: 0.10,
+      growthRate,
+      // Fade Rate = the year-10 growth target; default to half the year-1 growth
+      // (a decelerating profile), matching stocks.clawmo.tech.
+      fadeRate: Math.max(0, growthRate * 0.5),
       terminalGrowth: 0.025,
       wacc: 0.09,
       years: 10,
@@ -1403,33 +1405,21 @@
     // FMP projections are assumed already in USD; historical FCF needs conversion
     const baseFcf = inputs.baseFcfMode === 'fmpNextYear' ? _rawFcf : _rawFcf * fxRate;
 
-    // Project years=N FCF growing at growthRate, fading each year toward terminalGrowth
-    // at fadeRate. Growth_i = growth_{i-1} * (1 - fade) + terminal * fade.
-    const rows = [];
-    let fcf = baseFcf;
-    let g = inputs.growthRate;
-    let evDcf = 0;
-    for (let i = 1; i <= inputs.years; i++) {
-      fcf = fcf * (1 + g);
-      const disc = Math.pow(1 + inputs.wacc, i);
-      const pv = fcf / disc;
-      evDcf += pv;
-      rows.push({ year: i, growth: g, fcf, discount: disc, pv });
-      // fade growth
-      g = g * (1 - inputs.fadeRate) + inputs.terminalGrowth * inputs.fadeRate;
-    }
-    // Terminal value: Gordon growth at the end of projection
-    const finalFcf = rows[rows.length - 1].fcf;
-    const tvFcf = finalFcf * (1 + inputs.terminalGrowth);
-    const tvRaw = tvFcf / (inputs.wacc - inputs.terminalGrowth);
-    const tvDiscount = Math.pow(1 + inputs.wacc, inputs.years);
-    const tvPv = inputs.wacc > inputs.terminalGrowth ? tvRaw / tvDiscount : null;
-    const ev = evDcf + (tvPv || 0);
-    const equity = ev - debt + cash;
-    const fairValue = shares > 0 ? equity / shares : null;
-    const compositionPct = ev > 0 ? (tvPv || 0) / ev * 100 : null;
+    // Delegate the projection + terminal value to the canonical shared model
+    // (js/dcf-core.js — identical to stocks.clawmo.tech): years 1-5 grow at
+    // growthRate, years 6-10 fade linearly to the Fade Rate (year-10 growth),
+    // Gordon terminal at terminalGrowth, fixed 10-year horizon.
+    const r = _dcfCalc({
+      baseFCF: baseFcf, growth: inputs.growthRate, fade: inputs.fadeRate,
+      terminal: inputs.terminalGrowth, wacc: inputs.wacc, debt, cash, shares,
+    });
+    // Map canonical projections to this module's row shape (discount = 1/df).
+    const rows = r.projections.map((p) => ({ year: p.year, growth: p.growth, fcf: p.fcf, discount: 1 / p.df, pv: p.pv }));
 
-    return { baseFcf, rows, tvPv, ev, equity, fairValue, compositionPct, shares, debt, cash };
+    return {
+      baseFcf, rows, tvPv: r.pvTV, ev: r.ev, equity: r.equity,
+      fairValue: r.fairValue, compositionPct: r.tvPct, shares, debt, cash,
+    };
   }
 
   function renderDCF(d) {
@@ -1547,12 +1537,12 @@
             <div class="fin-dcf-input-ref">hist. ${refGrowth}</div>
           </div>
           <div class="fin-dcf-input-row" data-glossary="FADE">
-            <div class="fin-dcf-input-lbl">FADE RATE · per year</div>
+            <div class="fin-dcf-input-lbl">FADE RATE · year 10</div>
             <div class="fin-dcf-input-ctrl">
-              <input type="range" class="fin-dcf-slider" data-slider="fadeRate" min="0" max="0.30" step="0.01" value="${inputs.fadeRate}">
-              <span class="fin-dcf-input-val mono">${(inputs.fadeRate * 100).toFixed(0)}%</span>
+              <input type="range" class="fin-dcf-slider" data-slider="fadeRate" min="0" max="0.30" step="0.005" value="${inputs.fadeRate}">
+              <span class="fin-dcf-input-val mono">${(inputs.fadeRate * 100).toFixed(1)}%</span>
             </div>
-            <div class="fin-dcf-input-ref">how fast growth converges to terminal</div>
+            <div class="fin-dcf-input-ref">growth rate in year 10 · growth fades to this over years 6-10</div>
           </div>
           <div class="fin-dcf-input-row" data-glossary="TGROWTH">
             <div class="fin-dcf-input-lbl">TERMINAL GROWTH</div>
@@ -1644,7 +1634,7 @@
         <div class="fin-dcf-about">
           <p>A DCF projects future cash flows and discounts them back to today using WACC. The core tension is between the <b>explicit projection</b> (years 1-N, where growth is visible) and the <b>terminal value</b> (everything after year N, captured as a Gordon-growth perpetuity). When terminal value is more than ~70% of EV, small WACC or terminal-growth tweaks move the answer a lot — treat the fair value as a range, not a point.</p>
           <p>Use the sensitivity matrix to see how ± 2% WACC and ± 5pp growth swing the result. If the whole matrix stays above the current price, the stock is probably undervalued across reasonable assumptions. If the matrix straddles current price, you have no edge from DCF alone — look elsewhere.</p>
-          <p>FMP's Wall Street DCF uses its own CAPM (cost of equity + tax-adjusted cost of debt) and 5-year analyst-style projections. Your Model uses a smoother fading-growth curve, which tends to be more conservative than Wall Street for growth companies and more aggressive for mature ones.</p>
+          <p>FMP's Wall Street DCF uses its own CAPM (cost of equity + tax-adjusted cost of debt) and 5-year analyst-style projections. Your Model holds the growth rate flat for years 1-5, then fades it linearly to the Fade Rate (your year-10 growth) over years 6-10, before the Gordon terminal value — the same model as the stocks.clawmo.tech DCF, so the two surfaces agree.</p>
         </div>
       </div>
     `;
@@ -1666,9 +1656,10 @@
         const scn = btn.dataset.scn;
         const base = defaultDcfInputs(d);
         if (scn === 'bull') {
-          window._finDcfInputs = { ...base, growthRate: base.growthRate + 0.05, fadeRate: 0.08, wacc: Math.max(0.07, base.wacc - 0.01) };
+          // Fade Rate = year-10 growth: bull sustains higher growth, low discount.
+          window._finDcfInputs = { ...base, growthRate: base.growthRate + 0.05, fadeRate: 0.15, terminalGrowth: 0.03, wacc: Math.max(0.07, base.wacc - 0.01) };
         } else if (scn === 'bear') {
-          window._finDcfInputs = { ...base, growthRate: Math.max(-0.10, base.growthRate - 0.05), fadeRate: 0.15, wacc: base.wacc + 0.01 };
+          window._finDcfInputs = { ...base, growthRate: Math.max(-0.10, base.growthRate - 0.05), fadeRate: 0.03, terminalGrowth: 0.02, wacc: base.wacc + 0.01 };
         } else {
           window._finDcfInputs = base;  // 'base' or 'reset'
         }

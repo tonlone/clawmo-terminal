@@ -799,7 +799,7 @@
           if (col === 'pattern') return dir === 'asc' ? prettyPat(a.signal_type).localeCompare(prettyPat(b.signal_type)) : prettyPat(b.signal_type).localeCompare(prettyPat(a.signal_type));
           if (col === 'grade')   return dir === 'asc' ? (a.grade||'').localeCompare(b.grade||'') : (b.grade||'').localeCompare(a.grade||'');
           if (col === 'status') {
-            const s = x => x.mothballed ? 'M' : x.quarantined ? 'Q' : x.passes_gate === false ? 'B' : 'A';
+            const s = x => x.quarantined ? 'Q' : x.passes_gate === false ? 'B' : 'A';
             return dir === 'asc' ? s(a).localeCompare(s(b)) : s(b).localeCompare(s(a));
           }
           if (col === 'bull')    { av = a.by_regime?.BULL?.profit_factor;    bv = b.by_regime?.BULL?.profit_factor; }
@@ -834,15 +834,14 @@
               <div style="font-size:9px;color:var(--fg-dim);font-weight:400">n=${r.count.toLocaleString()}</div>
             </td>`;
           };
-          const status = p.mothballed ? '<span class="sig-blocked" title="Mothballed — retired from live trading">MOTHBALLED</span>'
-                       : p.quarantined ? `<span class="sig-quarantine">Q-${p.quarantine_tier || ''}</span>`
+          const status = p.quarantined ? `<span class="sig-quarantine">Q-${p.quarantine_tier || ''}</span>`
                        : p.passes_gate === false ? '<span class="sig-blocked">BLOCKED</span>'
                        : '<span class="sig-active">active</span>';
           return `<tr>
             <td class="pat">${prettyPat(p.signal_type)}</td>
             <td class="${'gd-' + (p.grade || '').toLowerCase()}">${p.grade || '—'}</td>
             <td class="mono ${overall >= 1.1 ? 'num-up' : 'num-dn'}">${overall != null ? overall.toFixed(2) : '—'}</td>
-            <td class="mono" title="Win Rate = % of historical trades closed PROFITABLE (return > 0)${p.tp_hit_rate != null ? ' · TP-hit ' + p.tp_hit_rate.toFixed(0) + '% reached the full take-profit target' : ''}">${overallWr != null ? overallWr.toFixed(0) + '%' : '—'}</td>
+            <td class="mono">${overallWr != null ? overallWr.toFixed(0) + '%' : '—'}</td>
             <td class="mono">${p.occurrences ?? '—'}</td>
             ${cell('BULL')}${cell('CAUTION')}${cell('BEAR')}
             <td>${status}</td>
@@ -882,8 +881,8 @@
                   <span><b>n</b> — sample size · PF 1.5 on n=10 is weak evidence; PF 1.2 on n=100 is solid</span>
                 </span>
                 <span style="display:block;margin-top:0.4rem;padding-top:0.35rem;border-top:1px dashed var(--border);color:var(--fg-dim);font-size:9.5px;line-height:1.45">
-                  <b>Now backtested (Task #10 cross-sectional harness, 2026-06-19 step=1):</b> <code>mom_top_decile</code> (PF 1.43, OOS 1.81 — grade A), <code>ibs_oversold_pullback</code> (PF 1.76, OOS 1.65 stable — grade A), <code>low_vol_top_decile</code> (PF 0.62 — grade D, retired: no long-only edge). <b>Also now backtested (2026-06-20):</b> <code>pead_drift</code> from FMP earnings history (point-in-time SUE, no lookahead) — PF 1.68, OOS-stable 1.56→1.80, p_block 0.0001 over 1,484 trades → <b>published, grade A</b> (lifted the live-only B cap); <code>value_top_decile</code> backtested PF 1.48 but <b>regime-specific</b> (recovery-only) → held, not published. <b>Still not shown</b>: <code>analyst_upgrade_drift</code>, <code>target_upside_top_decile</code> (C1), and <code>earnings_run_up</code> (validated separately by the historical-earnings backtest, PF 1.262).
-                  These rank tickers against each other on a given day (or need external/forward data), not per-ticker time series, so the per-ticker backtest harness can't score them. Tracked live on the Grades tab. The cross-sectional harness (Task #10) is <b>done</b> for the 3 price-only patterns above; <code>value_top_decile</code> stays live-only/held (regime-specific) pending the 07-07 grandfather-vs-lock decision. A separate <b>long-short</b> backtest (F8, 2026-06-19) found the momentum/low-vol decile spread has no market-neutral alpha — momentum's edge is long-only, so these remain long-only events (research only, nothing published).
+                  <b>Now backtested (Task #10 cross-sectional harness, 2026-06-19):</b> <code>mom_top_decile</code> (PF 1.13, OOS 1.32 — grade B), <code>ibs_oversold_pullback</code> (PF 1.37 full / OOS-capped — marginal B), <code>low_vol_top_decile</code> (PF 0.57 — grade D, retired: no long-only edge). <b>Still not shown</b> (no point-in-time historical data → not backtestable without lookahead): <code>pead_drift</code>, <code>value_top_decile</code> (need fundamentals/earnings-surprise history), <code>analyst_upgrade_drift</code>, <code>target_upside_top_decile</code> (C1), and <code>earnings_run_up</code> (validated separately by the historical-earnings backtest, PF 1.262).
+                  These rank tickers against each other on a given day (or need external/forward data), not per-ticker time series, so the per-ticker backtest harness can't score them. Tracked live on the Grades tab; harness extension is Task #10 (deferred post 2026-07-07 full review).
                 </span>
                 Click any column header to sort.
               </span>
@@ -992,7 +991,7 @@
                 <th class="num" title="Backtest trade count">BT N</th>
                 <th class="num" title="Closed live trade count">LIVE N</th>
                 <th class="num" title="Profit Factor = gross profit / gross loss. ≥1.1 passes gate">PF</th>
-                <th class="num" title="Backtest win rate = % of trades closed profitable (return > 0); NOT the take-profit-hit rate">WR</th>
+                <th class="num" title="Backtest win rate">WR</th>
                 <th class="num" title="Expectancy = (WR × avg win) − (loss% × avg loss)">EXPECT</th>
                 <th class="num" title="Average winning trade return (live)">AVG WIN</th>
                 <th class="num" title="Average losing trade return (live)">AVG LOSS</th>
@@ -1016,7 +1015,7 @@
                 <span><b>BT N</b> — backtest trade count (5-year historical)</span>
                 <span><b>LIVE N</b> — closed live trades since tracking began</span>
                 <span><b>PF</b> — profit factor (gross profit ÷ gross loss). ≥1.1 passes gate</span>
-                <span><b>WR</b> — win rate % (closed trades profitable; not the TP-hit rate)</span>
+                <span><b>WR</b> — win rate %</span>
                 <span><b>EXPECT</b> — expectancy = (WR × avg win) − (loss% × avg loss). Edge per trade</span>
                 <span><b>AVG WIN / AVG LOSS</b> — live-only (— until ledger fills)</span>
                 <span><b>p(MCPT)</b> — Monte Carlo permutation p-value (assumes i.i.d. trades). Green &lt;0.05, yellow &lt;0.10</span>
@@ -1603,7 +1602,7 @@
               <thead><tr>
                 <th>TICKER</th><th>PATTERN</th><th>DIR</th><th>EXIT</th>
                 <th class="num">HOLD</th><th class="num">ENTRY</th><th class="num">EXIT $</th>
-                <th class="num">RET %</th><th class="num">P&amp;L $</th><th title="How the trade closed. tp_hit = take-profit reached · sl_hit = original stop-loss hit (Chandelier stage 0) · trail_stop = trail-stop fired after stop moved up (stages 1-3: +0.5R lock, +1R, peak−3ATR — stage-1 tightened from breakeven to +0.5R lock 2026-06-20 per the staged-stop A/B; see Trailing Stop 2026-05-06) · early_exit = early-exit model triggered (primary for VCP / Cup &amp; Handle since Patch D 2026-05-20: 60%+ of target hit in <40% of time) · expired = full holding window elapsed without TP/SL · regime_exit = confirmed market regime contradicted trade direction (long closed on locked BEAR, short closed on locked BULL) · exhaustion_exit = parabolic-exhaustion overlay (Luk #3, longs only, since 2026-05-26: price >2.5σ above SMA21 + 5 consecutive higher closes with daily range >1.5×ATR + RSI>80).">OUTCOME</th>
+                <th class="num">RET %</th><th class="num">P&amp;L $</th><th title="How the trade closed. tp_hit = take-profit reached · sl_hit = original stop-loss hit (Chandelier stage 0) · trail_stop = trail-stop fired after stop moved up (stages 1-3: breakeven, +1R, peak−3ATR — see Trailing Stop 2026-05-06) · early_exit = early-exit model triggered (primary for VCP / Cup &amp; Handle since Patch D 2026-05-20: 60%+ of target hit in <40% of time) · expired = full holding window elapsed without TP/SL · regime_exit = confirmed market regime contradicted trade direction (long closed on locked BEAR, short closed on locked BULL) · exhaustion_exit = parabolic-exhaustion overlay (Luk #3, longs only, since 2026-05-26: price >2.5σ above SMA21 + 5 consecutive higher closes with daily range >1.5×ATR + RSI>80).">OUTCOME</th>
               </tr></thead>
               <tbody>${closedRows || '<tr><td colspan="10" class="empty">no closed trades yet</td></tr>'}</tbody>
             </table>
@@ -1629,33 +1628,9 @@
       }).join('');
       const howContent = `
         <div class="mod-panel">
-          <div class="mod-panel-title">RECENT CHANGES · 2026-06-20 Win Rate label fixed (% profitable, not TP-hit) · staged-stop tightened to +0.5R lock (LIVE) · PEAD published → grade A (LIVE) · cointegration probe (no edge) · F6+F7 risk-overlay shadow · Phase 2 Piece C · F8 long-short + grade-priority</div>
+          <div class="mod-panel-title">RECENT CHANGES · 2026-06-19 validation re-run · 2026-05-31 earnings_run_up · 2026-05-26 deploy (Luk Wave A+B)</div>
           <div class="sig-how-meth">
             <div class="sig-how-meth-row" style="border-left:2px solid var(--accent);padding-left:8px">
-              <b>2026-06-20 — "Win Rate" now means % PROFITABLE (was mistakenly the TP-hit rate)</b> — the WR column was showing the <b>take-profit-hit rate</b> (% of trades that reached the FULL profit target) and labeling it "win rate". For wide-target patterns that badly understated reality, and it once misled a review. WR now correctly shows <b>% of trades closed profitable</b> (return &gt; 0); the old TP-hit number is preserved as a separate <code>tp_hit_rate</code> (hover the WR cell). So the displayed numbers jump up — e.g. <code>bos</code> 2% → <b>49%</b>, <code>high_tight_flag</code> 7% → <b>86%</b>, <code>pead_drift</code> 4% → <b>60%</b> — same trades, honest label. Fixed at source (<code>backtest.py</code>) + glossary; grading was always on the correct stat, so no grades change.
-            </div>
-            <div class="sig-how-meth-row">
-              <b>2026-06-20 — staged stop tightened: stage-1 breakeven → +0.5R lock (LIVE)</b> — at the +1R peak the trailing stop now locks <b>+0.5R of profit</b> instead of moving to breakeven (stages 2/3 unchanged). Resolved by a full-universe A/B (n=430,622 setups): the +0.5R lock beat breakeven <b>monotonically</b> (PF 1.172 → 1.199), held out-of-sample across 3 regime splits (incl. the 2022 bear), left the loss tail unchanged (worst-trade loss &amp; CVaR5% identical — the initial stop, not the BE lever, owns the tail), and improved <b>all 15 patterns</b>. Live trade management (<code>update-trade-status.py</code>) and the backtest replica both use +0.5R from today; the full pattern set's backtest was <b>re-run on this basis the same day</b> (manual run of the weekly chain) — every pattern's backtest PF nudged up <b>+0.00 to +0.12</b> (PF-grade bins unchanged). The displayed <b>adaptive</b> grades refresh at the next weekday compute-signals run, where the +0.5R basis nudges a couple of <b>regime-derived</b> grades (e.g. <code>range_breakout</code> B→A as PF crosses 1.20; <code>adam_eve_dbottom</code> A→B as its BULL-slice edge compresses) — small and expected, separate from normal live-performance drift.
-            </div>
-            <div class="sig-how-meth-row">
-              <b>2026-06-20 — PEAD drift backtested + PUBLISHED → grade A (LIVE)</b> — the post-earnings-drift pattern was data-blocked (no historical earnings-surprise data). Built a strict no-lookahead backtest from FMP earnings history (point-in-time SUE on actual EPS announced before each trade) → <b>PF 1.68, OOS stable 1.56→1.80, p_block 0.0001</b> over 1,484 trades (graded on the +0.5R live-exit basis). pead was <b>live-only, capped at B</b> (a thin live record can't earn A without a backtest); publishing the backtest lifts that cap → blended PF 1.75 = <b>grade A, live now</b> (a <b>backtest-graded</b> A — the live record is still thin, n=6, so the grade rests on the 1,484-trade backtest, not live outperformance). Pulled forward from Mon 06-22 (Tony OK'd).
-            </div>
-            <div class="sig-how-meth-row">
-              <b>2026-06-20 — cointegration pairs layer probed → no edge (research, nothing shipped)</b> — tested a market-neutral statistical-arb pairs strategy with strict no-lookahead (form cointegrated within-sector pairs on a 2021–24 train window, trade out-of-sample 2024–26 on frozen params, net of cost+borrow). <b>No robust edge</b> — selected pairs scored PF 0.75 OOS, and a <b>random-pair benchmark scored identically</b> (PF 0.75), so cointegration selection added zero value — the pairs strategy itself has no edge here. Not built. Closes the Tier C institutional-upgrade research list (F8 long-short, F6/F7 risk overlays, pairs); focus stays on PEAD / pre-earnings run-up.
-            </div>
-            <div class="sig-how-meth-row">
-              <b>2026-06-19 — F7 factor concentration (shadow logging)</b> — measures the factor clustering the GICS <b>sector</b> cap can't see (observational, flip pending calibration): risk-unit-weighted <b>beta buckets</b> + <b>momentum buckets</b>, plus a statistical <b>common-factor</b> read from the book's return-correlation matrix — PC1 variance share and the <b>effective number of bets</b> ENB=(Σλ)²/Σλ². Striking baseline: the book is <b>202 names but only ~13.7 effective bets</b> (PC1 = 23% of variance) — far less diversified than the count suggests. Beta/momentum buckets well-spread (none over the 50% cap) → no trim today; ENB is the actionable number.
-            </div>
-            <div class="sig-how-meth-row">
-              <b>2026-06-19 — F6 risk overlay (shadow logging)</b> — two new portfolio-risk measures now log each run (observational, change nothing yet — ~2wk calibration before any live flip, same shadow→flip arc as Piece C): a <b>20d SPY realized-vol target</b> that would de-gross the risk-unit ceiling when realized vol runs above the 15% target (a direct, leading vol signal vs the existing stop-cluster de-gross), and a <b>portfolio beta cap</b> = the risk-unit-weighted signed net beta of the open book vs SPY, with a highest-beta trim sim. Baseline: SPY 20d vol 16.2% → ceiling 350→324; book beta 0.90 (100% long, BULL) — under the 1.0 cap, no trim.
-            </div>
-            <div class="sig-how-meth-row">
-              <b>2026-06-19 — Phase 2 Piece C: heat cap → risk units</b> — the portfolio heat ceiling flipped from a raw <b>position count (350)</b> to a grade-weighted <b>risk-unit ceiling (MAX_RISK_UNITS = 350)</b>: each open/new position consumes A=1.25 / B=1.0 / C=0.75 / D=0.5 units, grade from backtest PF (same source as the priority dedup below). Tony picked N=350 (conservative) after ~2 weeks of shadow logging. <b>No-op at current load</b> (book peaks ~200 positions / ~222 RU vs 350) — its value is a grade-aware ceiling for the day a strong BULL run fills the book (grade-A costs more, D less). Falls back to the count gate when no grade context exists. Live next weekday compute-signals run.
-            </div>
-            <div class="sig-how-meth-row">
-              <b>2026-06-19 — F8 long-short + grade-aware priority</b> — <b>F8 (research, nothing published):</b> tested the momentum &amp; low-vol decile factors as a market-neutral <b>long(top-decile) − short(bottom-decile)</b> book (net of cost, survivorship-free). <b>No market-neutral alpha</b> — momentum spread PF 0.95 / IR −0.05, and its edge is <b>entirely in the long leg</b> (long beats SPY +0.58%/mo; the bottom-decile short mean-reverts up &amp; injects −0.61 beta), so <code>mom_top_decile</code> stays a <b>long-only</b> grade-A event. Low-vol long-short is a −2.04× beta trap (PF 0.52) → confirms retirement. No live long-short product; the measured spread betas feed the upcoming beta-cap work. <b>Grade-aware concentration priority:</b> the per-ticker / capacity dedup (Concentration Cap stage) now picks the higher-<b>grade</b> setup first, confidence only breaking ties within a grade — a validated grade-A pattern no longer loses its slot to a higher-confidence but lower-grade chart pattern. Backward-compatible (confidence-only fallback when no backtest grade exists). Live next weekday compute-signals run.
-            </div>
-            <div class="sig-how-meth-row">
               <b>2026-06-19 validation re-run (current basis)</b> — all PFs/grades are now from a survivorship-free, net-of-cost, live-exit backtest (~690 tickers, 394k signals). <b>The pattern cards below show current grades/PF</b> — the changelog rows that follow are historical context, not current numbers. Notable shifts on the new basis: trend_pullback validated to <b>PF 1.66 / grade A</b> (its old Patch G PF-override removed as redundant); range_breakout cleared the gate (now <b>B</b>, was blocked); cup_handle → A, asc_triangle → C via an out-of-sample haircut (full-window 1.30 but 1.03 OOS — curve-fit). high_tight_flag &amp; momentum_rest_entry fire via the Patch G count override (n=14 / n=5) and are <b>no longer shown as BLOCKED</b> (a playbook-gate bug that ignored the override was fixed).
             </div>
             <div class="sig-how-meth-row">

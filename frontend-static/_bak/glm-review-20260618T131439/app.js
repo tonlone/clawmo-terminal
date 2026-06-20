@@ -4,10 +4,6 @@
 (function () {
   'use strict';
 
-  // Single source of truth for the build version shown in the status bar.
-  // Bump this one constant on release (the HTML carries only a placeholder).
-  const TERMINAL_VERSION = 'v0.2.1';
-
   /* ── Module registry ──────────────────────────────────────── */
   const MODULES = [
     { id: 'premarket',      code: 'PRE', fkey: null, label: 'Pre-Market',   labelCN: '盤前簡報', group: 'Core',     src: 'stocks.clawmo.tech/premarket.html', pdfExportable: false },
@@ -988,10 +984,6 @@
 
   /* ── Bootstrap ───────────────────────────────────────────── */
   function init() {
-    // version (single-sourced from TERMINAL_VERSION)
-    const verEl = document.querySelector('.sb-ver');
-    if (verEl) verEl.textContent = TERMINAL_VERSION;
-
     // theme
     applyTheme(state.theme || 'ember');
 
@@ -1062,38 +1054,27 @@
 
   async function updateGlobalRegime() {
     if (!window.OC_DATA) return;
-    const sbR = document.getElementById('sbRegime');
-    const sbSpy = document.getElementById('sbSpy');
-    const sbU = document.getElementById('sbUpdate');
-    const pill = document.getElementById('regimePill');
-    const now = () => new Date().toLocaleTimeString();
     try {
       const s = await window.OC_DATA.fetchJSON('https://stocks.clawmo.tech/data/signals-summary.json');
       const r = s && s.regime && s.regime.regime;
       const spy = s && s.regime && s.regime.price;
-      if (!r) throw new Error('regime missing in signals-summary.json');
-      const key = r.toLowerCase();
-      if (pill) {
-        pill.dataset.regime = key;
-        pill.removeAttribute('title');
-        const lbl = pill.querySelector('.regime-label');
-        if (lbl) lbl.textContent = r.toUpperCase();
+      if (r) {
+        const key = r.toLowerCase();
+        const pill = document.getElementById('regimePill');
+        if (pill) {
+          pill.dataset.regime = key;
+          const lbl = pill.querySelector('.regime-label');
+          if (lbl) lbl.textContent = r.toUpperCase();
+        }
+        const sbR = document.getElementById('sbRegime');
+        if (sbR) sbR.textContent = 'regime: ' + r.toUpperCase();
       }
-      if (sbR) { sbR.textContent = 'regime: ' + r.toUpperCase(); sbR.removeAttribute('title'); }
-      if (spy != null && sbSpy) { sbSpy.textContent = 'SPY ' + Number(spy).toFixed(2); sbSpy.removeAttribute('title'); }
-      if (sbU) { sbU.textContent = 'update: ' + now(); sbU.removeAttribute('title'); }
+      if (spy != null) {
+        const el = document.getElementById('sbSpy');
+        if (el) el.textContent = 'SPY ' + Number(spy).toFixed(2);
+      }
     } catch (e) {
-      // Surface the failure instead of sitting on a placeholder forever:
-      // keep any last-good values, but flag the stale feed via tooltip + console.
-      console.warn('[terminal] regime/SPY update failed:', e);
-      const note = 'feed unavailable — last try ' + now();
-      const stale = (el) => { if (el) el.title = note; };
-      stale(sbR); stale(sbSpy); stale(pill);
-      if (sbU) { sbU.textContent = 'update: stale'; sbU.title = note; }
-      if (pill && pill.dataset.regime === 'unknown') {
-        const lbl = pill.querySelector('.regime-label');
-        if (lbl && (!lbl.textContent.trim() || lbl.textContent.indexOf('—') === 0)) lbl.textContent = 'N/A';
-      }
+      // silent — status bar keeps placeholder
     }
   }
 

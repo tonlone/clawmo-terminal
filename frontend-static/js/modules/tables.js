@@ -1351,6 +1351,23 @@
         </div>
       </div>
 
+      <details class="mod-panel" style="margin-top:8px;">
+        <summary style="cursor:pointer;font-weight:600;font-size:11px;letter-spacing:0.04em;">🧊 GREEKS — THE 30-SECOND VERSION (for buyers AND sellers)</summary>
+        <div style="font-size:10px;color:var(--fg-dim);line-height:1.5;margin:6px 0 4px;">The table below shows <b>dealer-aggregate</b> greeks (Σ across open interest). For <b>your own option</b>, here's what each Greek means long vs short:</div>
+        <div class="tbl-wrap"><table style="width:100%;border-collapse:collapse;font-size:10px;line-height:1.5;">
+          <thead><tr style="text-align:left;color:var(--fg-dim);border-bottom:1px solid var(--border,#30363d);">
+            <td style="padding:2px 6px;">GREEK</td><td style="padding:2px 6px;">IF YOU'RE LONG (buyer)</td><td style="padding:2px 6px;">IF YOU'RE SHORT (seller)</td>
+          </tr></thead>
+          <tbody>
+            <tr><td style="padding:3px 6px;">🌡️ <b>Delta</b></td><td style="padding:3px 6px;">Direction: call wants price <span style="color:#4ade80">up</span>, put <span style="color:#f87171">down</span>. |Δ| ≈ % chance you finish in-the-money.</td><td style="padding:3px 6px;">|Δ| ≈ % chance you get <b>assigned</b> (a −0.20Δ short put = ~20% chance you buy the stock).</td></tr>
+            <tr><td style="padding:3px 6px;">🏎️ <b>Gamma</b></td><td style="padding:3px 6px;"><span style="color:#4ade80">Good</span> — convex; your Delta keeps turning your way.</td><td style="padding:3px 6px;"><span style="color:#f87171">Danger</span> — negative gamma; losses <b>accelerate</b> (peaks ATM &amp; near expiry).</td></tr>
+            <tr><td style="padding:3px 6px;">🧊 <b>Theta</b></td><td style="padding:3px 6px;">You <b>bleed</b> value every day — time is your enemy.</td><td style="padding:3px 6px;">You <b>collect</b> the decay — time is your friend.</td></tr>
+            <tr><td style="padding:3px 6px;">🌫️ <b>Vega</b></td><td style="padding:3px 6px;">You want a <b>storm</b>: rising IV inflates your premium.</td><td style="padding:3px 6px;">You want <b>calm</b>: IV crush is your payday.</td></tr>
+          </tbody>
+        </table></div>
+        <div style="font-size:10px;color:var(--fg-dim);margin-top:5px;">Premium = intrinsic + time value · breakeven = strike ± premium · long max-loss = premium paid, short max-gain = premium received. Try the interactive <b>Simulator</b> on the stocks GEX page.</div>
+      </details>
+
       ${greeksTable}
     `;
   }
@@ -1505,13 +1522,13 @@
           <table class="tbl-dense">
             <thead><tr>
               <th>STRIKE</th>
-              <th class="num" title="Calls: dealer buy/sell per $1 up move">CALL Δ</th>
-              <th class="num" title="Puts: dealer buy/sell per $1 up move">PUT Δ</th>
-              <th class="num" title="Combined directional exposure">NET Δ</th>
-              <th class="num" title="P&L change per 1% IV increase">VEGA $</th>
-              <th class="num" title="Daily time decay on calls">CALL Θ</th>
-              <th class="num" title="Daily time decay on puts">PUT Θ</th>
-              <th class="num" title="Total daily time decay at this strike">NET Θ</th>
+              <th class="num" data-glossary="DELTA">CALL Δ</th>
+              <th class="num" data-glossary="DELTA">PUT Δ</th>
+              <th class="num" data-glossary="DELTA">NET Δ</th>
+              <th class="num" data-glossary="VEGA">VEGA $</th>
+              <th class="num" data-glossary="THETA">CALL Θ</th>
+              <th class="num" data-glossary="THETA">PUT Θ</th>
+              <th class="num" data-glossary="THETA">NET Θ</th>
             </tr></thead>
             <tbody>${rows}</tbody>
           </table>
@@ -3377,7 +3394,7 @@
       rows.forEach(r => { h += `<div style="display:flex;justify-content:space-between;gap:8px;font-size:11px"><span style="color:var(--fg-dim)">${escapeGex(r.label)}</span><span class="mono"><b>${escapeGex(r.value)}</b> <span class="${cls(r.change)}">${arr(r.change)} ${sg(r.change_pct)}%</span></span></div>`; });
       return h + `</div>`;
     };
-    const boards = board('Equities / futures', 'equities') + board('Rates', 'rates') + board('FX', 'fx') + board('Commodities', 'commodities') + board('Crypto', 'crypto');
+    const boards = board('Equities / futures', 'equities') + board('International (EU / Asia)', 'intl_equities') + board('Rates', 'rates') + board('FX', 'fx') + board('Commodities', 'commodities') + board('Crypto', 'crypto');
     if (boards) H += `<div class="mod-panel"><div class="mod-panel-title">🌍 OVERNIGHT BOARD</div><div class="acct-grid">${boards}</div></div>`;
 
     // Bond radar
@@ -3427,12 +3444,19 @@
     }
 
     // Economic calendar
-    H += `<div class="mod-panel"><div class="mod-panel-title">📅 ECONOMIC CALENDAR — today (${escapeGex(cal.weekday || '')})</div>`;
-    if (!cal.events || !cal.events.length) H += `<div style="color:var(--fg-dim);font-size:11px">No high-impact events.</div>`;
-    else {
-      H += `<table class="mod-table" style="width:100%;font-size:11px"><thead><tr><th>Time (ET)</th><th>Event</th><th style="text-align:right">Est.</th><th style="text-align:right">Prev.</th></tr></thead><tbody>`;
-      cal.events.forEach(e => { const star = (e.impact || 0) >= 3 ? '🔴' : '🟡'; H += `<tr><td class="mono">${escapeGex(e.time)}</td><td>${star} ${escapeGex(e.event)}</td><td class="mono" style="text-align:right">${e.estimate != null ? escapeGex(e.estimate) : '—'}</td><td class="mono" style="text-align:right;color:var(--fg-dim)">${e.previous != null ? escapeGex(e.previous) : '—'}</td></tr>`; });
-      H += `</tbody></table>`;
+    let calTitle = `📅 ECONOMIC CALENDAR — today (${escapeGex(cal.weekday || '')})`;
+    if (cal.tomorrow_weekday) calTitle += ` &amp; tomorrow (${escapeGex(cal.tomorrow_weekday)})`;
+    const calTbl = (evs) => {
+      if (!evs || !evs.length) return `<div style="color:var(--fg-dim);font-size:11px">No high-impact events.</div>`;
+      let t = `<table class="mod-table" style="width:100%;font-size:11px"><thead><tr><th>Time (ET)</th><th>Event</th><th style="text-align:right">Est.</th><th style="text-align:right">Prev.</th></tr></thead><tbody>`;
+      evs.forEach(e => { const star = (e.impact || 0) >= 3 ? '🔴' : '🟡'; t += `<tr><td class="mono">${escapeGex(e.time)}</td><td>${star} ${escapeGex(e.event)}</td><td class="mono" style="text-align:right">${e.estimate != null ? escapeGex(e.estimate) : '—'}</td><td class="mono" style="text-align:right;color:var(--fg-dim)">${e.previous != null ? escapeGex(e.previous) : '—'}</td></tr>`; });
+      return t + `</tbody></table>`;
+    };
+    H += `<div class="mod-panel"><div class="mod-panel-title">${calTitle}</div>`;
+    H += calTbl(cal.events);
+    if (cal.tomorrow_weekday) {
+      H += `<div class="acct-name" style="margin-top:8px">Tomorrow — ${escapeGex(cal.tomorrow_weekday)}${cal.tomorrow_date ? ' (' + escapeGex(cal.tomorrow_date) + ')' : ''}</div>`;
+      H += calTbl(cal.events_ahead);
     }
     H += `</div>`;
 
@@ -3494,7 +3518,7 @@
      (period-report-weekly.json). Monthly/Yearly = coming-soon until enabled. */
   async function renderDailyBrief(body, ctx) {
     const TABS = [['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly'], ['yearly', 'Yearly']];
-    const ENABLED = { daily: true, weekly: true, monthly: false, yearly: false };
+    const ENABLED = { daily: true, weekly: true, monthly: true, yearly: false };
     let cur = (ctx && ctx.params && ctx.params.period) || 'daily';
     if (!ENABLED.hasOwnProperty(cur)) cur = 'daily';
     const bar = document.createElement('div');
@@ -3508,7 +3532,7 @@
     });
     const load = () => {
       if (cur === 'daily') return renderDailyBriefContent(sub, ctx);
-      if (ENABLED[cur]) return renderPeriodWeekly(sub, ctx);
+      if (ENABLED[cur]) return renderPeriodWeekly(sub, ctx, cur);
       sub.innerHTML = `<div class="mod-panel" style="text-align:center;color:var(--fg-dim);padding:26px 14px">`
         + `<b style="color:var(--fg)">${cur.charAt(0).toUpperCase() + cur.slice(1)} review — coming soon.</b><br>`
         + `<span style="font-size:11px">The engine already supports it; it just needs to be switched on.</span></div>`;
@@ -3611,12 +3635,16 @@
       + `<div style="font-size:9px;color:var(--fg-dim);text-align:center;margin-top:2px">Slice size = S&amp;P 500 sector weight · Color = weekly % return · ETF proxy: XLK XLV XLF XLY XLC XLI XLP XLE XLRE XLB XLU</div>`;
   }
 
-  /* ── Weekly (period) review — reads period-report-weekly.json ──── */
-  async function renderPeriodWeekly(body, ctx) {
-    body.innerHTML = `<div class="mod-loading">Loading weekly review…</div>`;
+  /* ── Period review — reads period-report-<period>.json (weekly | monthly) ──
+     Parameterized by `period` so the Monthly tab renders monthly data, not weekly
+     (the switcher calls this for every enabled non-daily period). ── */
+  async function renderPeriodWeekly(body, ctx, period) {
+    period = period || 'weekly';
+    const PLBL = period.charAt(0).toUpperCase() + period.slice(1);
+    body.innerHTML = `<div class="mod-loading">Loading ${period} review…</div>`;
     let d;
-    try { d = await fetchJSON(`${BASE}/period-report-weekly.json`); }
-    catch (e) { body.innerHTML = `<div class="mod-panel" style="text-align:center;color:var(--fg-dim);padding:26px 14px"><b style="color:var(--fg)">Weekly review — coming soon.</b><br><span style="font-size:11px">Not generated yet.</span></div>`; return; }
+    try { d = await fetchJSON(`${BASE}/period-report-${period}.json`); }
+    catch (e) { body.innerHTML = `<div class="mod-panel" style="text-align:center;color:var(--fg-dim);padding:26px 14px"><b style="color:var(--fg)">${PLBL} review — coming soon.</b><br><span style="font-size:11px">Not generated yet.</span></div>`; return; }
     const n = (x, dp) => x == null ? '—' : Number(x).toFixed(dp == null ? 2 : dp);
     const sg = (x, dp) => (x >= 0 ? '+' : '') + n(x, dp);
     const cl = (x) => (x >= 0 ? 'num-up' : 'num-dn');
@@ -3646,9 +3674,31 @@
       + `<span style="color:var(--fg-dim);margin-left:8px">${escapeGex(w.start)} → ${escapeGex(w.end)} · ${escapeGex(w.label)}</span></div>`;
     if (d.summary) H += sblocks(d.summary);
 
-    // The week in daily briefs — table: scannable metrics + prose Highlights
+    // Model B (monthly only): the month's weekly arcs are the narrative spine.
+    // Embedded inline (past weekly reviews aren't loadable on the Weekly tab).
+    const wrk = d.weekly_rollup || [];
+    if (wrk.length) {
+      H += `<div class="mod-panel"><div class="mod-panel-title">📆 WEEKS OF THE MONTH — each week's review</div>`;
+      wrk.forEach(wk => {
+        const win = wk.window || {}, pnl = wk.total_pnl, wr = wk.win_rate;
+        const arc = (wk.regime_arc || []).map(x => x + '/4').join(' ');
+        H += `<div style="border:1px solid var(--border,#333);border-radius:6px;padding:7px 10px;margin:0 8px 8px">`
+          + `<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;margin-bottom:4px;font-size:12px">`
+          + `<b class="mono">${escapeGex(wk.label || '')}</b><span style="color:var(--fg-dim)">${escapeGex(win.start)} → ${escapeGex(win.end)}</span>`
+          + `<span>Win <b>${wr != null ? wr + '%' : '—'}</b></span>`
+          + `<span>P&amp;L <b class="${cl(pnl || 0)}">${pnl != null ? sg(pnl) + '%' : '—'}</b></span>`
+          + `<span>Closed <b>${wk.closed_count != null ? wk.closed_count : '—'}</b></span>`
+          + (arc ? `<span style="color:var(--fg-dim)" title="Weekly regime strength (N of 4 component checks bullish)">Regime arc ${escapeGex(arc)}</span>` : '')
+          + `</div>`
+          + (wk.summary ? `<div style="white-space:normal;line-height:1.45;font-size:11.5px">${sectorize(escapeGex(wk.summary))}</div>` : `<div style="color:var(--fg-dim);font-size:11px">No narrative archived for this week.</div>`)
+          + `</div>`;
+      });
+      H += `</div>`;
+    }
+
+    // The daily briefs in the window — table: scannable metrics + prose Highlights
     const ds = d.daily_summaries || [];
-    H += `<div class="mod-panel"><div class="mod-panel-title">🗞️ THE WEEK IN DAILY BRIEFS</div>`;
+    H += `<div class="mod-panel"><div class="mod-panel-title">🗞️ THE ${period === 'monthly' ? 'MONTH' : (period === 'yearly' ? 'YEAR' : 'WEEK')} IN DAILY BRIEFS</div>`;
     if (ds.length) {
       H += `<table class="mod-table" style="width:100%;font-size:11px"><thead><tr><th>Date</th><th>Regime</th><th style="text-align:right" title="S&P 500 RSI(14): ≥70 overbought, ≤30 oversold">RSI</th><th title="VIX term structure: CONTANGO calm / FLAT transition / BACKWARDATION stress">VIX</th><th style="text-align:right" title="Recession composite score (higher = more risk)">Rec</th><th style="text-align:right" title="Short-gamma flashpoint count — names where dealers amplify moves (squeeze then reversal). A market-fragility gauge, NOT directional: higher = whippier/less stable tape, lower = calmer.">Flash</th><th>Highlights</th></tr></thead><tbody>`;
       ds.forEach(x => { const rc2 = (x.rsi != null && x.rsi >= 70) ? 'num-dn' : (x.rsi != null && x.rsi <= 30 ? 'num-up' : '');
@@ -3787,12 +3837,12 @@
     body.innerHTML = H;
     body.querySelectorAll('.eq-link').forEach(el => { el.addEventListener('click', () => { if (window.OC_OPEN_MODULE) window.OC_OPEN_MODULE('stock-analysis', { ticker: el.dataset.eq }); }); });
 
-    // weekly audio narration player (mode=weekly) — one ▶ per language (en, yue), EN + Cantonese
+    // period audio narration player (mode=weekly|monthly) — one ▶ per language (en, yue), EN + Cantonese
     (function () {
       const API = BASE.replace(/\/data\/?$/, '');
       const LABELS = { en: { play: '▶ Listen', pause: '⏸ Pause' }, yue: { play: '▶ 廣東話', pause: '⏸ 暫停' } };
       const ORDER = ['en', 'yue'];
-      fetch(API + '/api/voice-brief/status?mode=weekly&v=' + Date.now()).then(r => r.json()).then(s => {
+      fetch(API + '/api/voice-brief/status?mode=' + period + '&v=' + Date.now()).then(r => r.json()).then(s => {
         if (!s || !s.langs) return;
         const avail = ORDER.filter(l => s.langs[l]); if (!avail.length) return;
         const bar = document.createElement('div');
