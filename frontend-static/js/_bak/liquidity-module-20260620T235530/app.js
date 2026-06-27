@@ -26,7 +26,6 @@
     { id: 'calendar',       code: 'CAL', fkey: null, label: 'Calendar',     labelCN: '財經日曆', group: 'Market',   src: 'stocks.clawmo.tech/calendar.html' },
     { id: 'sentiment',      code: 'SEN', fkey: null, label: 'Sentiment',      labelCN: '市場情緒', group: 'Macro',    src: 'stocks.clawmo.tech/sentiment.html', pdfExportable: true, pdfNeedsTicker: false },
     { id: 'recession',      code: 'REC', fkey: null, label: 'Recession',      labelCN: '衰退監測', group: 'Macro',    src: 'stocks.clawmo.tech/recession.html', pdfExportable: true, pdfNeedsTicker: false },
-    { id: 'liquidity',      code: 'LIQ', fkey: null, label: 'Liquidity',      labelCN: '流動性',   group: 'Macro',    src: 'stocks.clawmo.tech/liquidity.html', pdfExportable: false, pdfNeedsTicker: false },
     { id: 'valuation-map',  code: 'VAL', fkey: null, label: 'Valuation Map',  labelCN: '估值地圖', group: 'Macro',    src: 'stocks.clawmo.tech/valuation-map.html', pdfExportable: true, pdfNeedsTicker: false },
     { id: 'geo',            code: 'GEO', fkey: null, label: 'Geo Risk',       labelCN: '地緣風險', group: 'Macro',    src: 'stocks.clawmo.tech/data/hormuz.json' },
     { id: 'crypto',         code: 'CRY', fkey: null, label: 'Crypto',        labelCN: '加密貨幣', group: 'Assets',   src: 'stocks.clawmo.tech/crypto.html', pdfExportable: true, pdfNeedsTicker: false },

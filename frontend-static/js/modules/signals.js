@@ -1629,7 +1629,7 @@
       }).join('');
       const howContent = `
         <div class="mod-panel">
-          <div class="mod-panel-title">RECENT CHANGES · 2026-06-20 Win Rate label fixed (% profitable, not TP-hit) · staged-stop tightened to +0.5R lock (LIVE) · PEAD published → grade A (LIVE) · cointegration probe (no edge) · F6+F7 risk-overlay shadow · Phase 2 Piece C · F8 long-short + grade-priority</div>
+          <div class="mod-panel-title">RECENT CHANGES · 2026-06-25 Liquidity Sweep regraded on live daily-exit model → B→A, now active all regimes (was CAUTION/BEAR-only) · 2026-06-20 Win Rate label fixed (% profitable, not TP-hit) · staged-stop tightened to +0.5R lock (LIVE) · PEAD published → grade A (LIVE) · cointegration probe (no edge) · F6+F7 risk-overlay shadow · Phase 2 Piece C · F8 long-short + grade-priority</div>
           <div class="sig-how-meth">
             <div class="sig-how-meth-row" style="border-left:2px solid var(--accent);padding-left:8px">
               <b>2026-06-20 — "Win Rate" now means % PROFITABLE (was mistakenly the TP-hit rate)</b> — the WR column was showing the <b>take-profit-hit rate</b> (% of trades that reached the FULL profit target) and labeling it "win rate". For wide-target patterns that badly understated reality, and it once misled a review. WR now correctly shows <b>% of trades closed profitable</b> (return &gt; 0); the old TP-hit number is preserved as a separate <code>tp_hit_rate</code> (hover the WR cell). So the displayed numbers jump up — e.g. <code>bos</code> 2% → <b>49%</b>, <code>high_tight_flag</code> 7% → <b>86%</b>, <code>pead_drift</code> 4% → <b>60%</b> — same trades, honest label. Fixed at source (<code>backtest.py</code>) + glossary; grading was always on the correct stat, so no grades change.

@@ -1453,8 +1453,135 @@
     return svg;
   }
 
+  /* ───────────────────────── LIQ · Liquidity / Net Liquidity ─────────────────────────
+     Native terminal port of stocks.clawmo.tech/liquidity.html. Reads fred-liquidity.json
+     (+ liquidity-overlay.json for SPX/BTC). Net Liquidity = WALCL − TGA − RRP. */
+  // TWIN: stocks-app liquidity.html (buildMap/ffillOnto/toIndex + yoySeries) — keep in sync
+  //       (cf. dcf-core twin-logic lesson). If this math changes, change both surfaces.
+  function _liqMap(hist, key) { const m = {}; (hist || []).forEach(h => { m[h.date] = h[key]; }); return m; }
+  function _liqFfill(spine, map) {
+    const ks = Object.keys(map).sort(); let i = 0, last = null; const out = [];
+    for (const dt of spine) { while (i < ks.length && ks[i] <= dt) { last = map[ks[i]]; i++; } out.push(last); }
+    return out;
+  }
+  function _liqWindow(dates, months) {
+    if (!months || !dates.length) return dates;
+    const d = new Date(dates[dates.length - 1]); d.setMonth(d.getMonth() - months);
+    const cut = d.toISOString().slice(0, 10);
+    return dates.filter(x => x >= cut);
+  }
+  function _liqXLabels(dates) { return dates.map(d => String(d).slice(2, 7)); }      // YY-MM
+  function _liqYoY(hist) {
+    const out = [];
+    for (let i = 12; i < (hist || []).length; i++) {
+      const prev = hist[i - 12].value;
+      if (prev) out.push({ date: hist[i].date, value: +((hist[i].value - prev) / prev * 100).toFixed(2) });
+    }
+    return out;
+  }
+  function _liqDelta(dlt, pct, unitT) {
+    if (!dlt) return '<span class="small">—</span>';
+    const v = pct ? dlt.pct : dlt.abs; if (v == null) return '<span class="small">—</span>';
+    const cls = v > 0 ? 'num-up' : v < 0 ? 'num-dn' : '';
+    const sign = v > 0 ? '+' : '';
+    const txt = pct ? `${sign}${v.toFixed(1)}%` : (unitT ? `${sign}${(v / 1000).toFixed(2)}T` : `${sign}${v.toFixed(0)}B`);
+    return `<span class="mono ${cls}">${dlt.label} ${txt}</span>`;
+  }
+
+  async function renderLiquidity(body) {
+    body.innerHTML = `<div class="mod-loading">Loading liquidity…</div>`;
+    try {
+      const d = await fetchJSON(`${BASE}/fred-liquidity.json`);
+      let ov = null; try { ov = await fetchJSON(`${BASE}/liquidity-overlay.json`); } catch (e) { /* optional */ }
+      const nl = d.net_liquidity, s = d.series || {}, r = d.regime || {};
+      const stanceCls = r.stance === 'bullish' ? 'num-up' : r.stance === 'bearish' ? 'num-dn' : 'num-warn';
+
+      /* Regime banner */
+      const regime = `
+        <div class="mod-panel" style="padding:7px 12px">
+          <div class="mono" style="font-size:0.8rem"><span class="${stanceCls}" style="font-weight:700">${(r.label || 'Liquidity').toUpperCase()}</span>
+            <span class="small" style="margin-left:8px;text-transform:uppercase">${r.stance || ''}</span></div>
+          <div class="small" style="margin-top:4px;line-height:1.5">${(r.drivers || []).map(x => '• ' + x).join('<br>')}</div>
+        </div>`;
+
+      /* KPI strip — Net Liquidity + 5 components */
+      const tT = v => v == null ? '—' : '$' + (v / 1000).toFixed(2) + 'T';
+      const tB = v => v == null ? '—' : '$' + v.toFixed(v < 10 ? 1 : 0) + 'B';
+      const card = (name, val, deltas, meta) => `
+        <div class="acct-card">
+          <div class="acct-name">${name}</div>
+          <div class="acct-val"><span class="mono">${val}</span></div>
+          <div class="acct-meta"><span>${deltas}</span></div>
+          ${meta ? `<div class="acct-meta"><span class="small">${meta}</span></div>` : ''}
+        </div>`;
+      const kpis = `
+        <div class="acct-strip" style="grid-template-columns:repeat(3,1fr)">
+          ${nl ? card('NET LIQUIDITY · WALCL−TGA−RRP', tT(nl.value_b),
+              `${_liqDelta(nl.deltas && nl.deltas.wow, false, true)} · ${_liqDelta(nl.deltas && nl.deltas.w13, false, true)}`,
+              `as of ${nl.as_of} · ↑ tailwind / ↓ headwind for risk`) : ''}
+          ${s.WALCL ? card('FED BALANCE SHEET', tT(s.WALCL.value_b), `${_liqDelta(s.WALCL.deltas.wow, false, true)} · ${_liqDelta(s.WALCL.deltas.w13, false, true)}`, `as of ${s.WALCL.as_of} · ↑QE ↓QT`) : ''}
+          ${s.RRP ? card('REVERSE REPO (ON RRP)', tB(s.RRP.value_b), `${_liqDelta(s.RRP.deltas.dod, false, false)} · ${_liqDelta(s.RRP.deltas.wow, false, false)}`, `as of ${s.RRP.as_of} · ~$0 = drained`) : ''}
+          ${s.M2 ? card('M2 MONEY SUPPLY', tT(s.M2.value_b), `${_liqDelta(s.M2.deltas.mom, false, true)} · ${_liqDelta(s.M2.deltas.yoy, true)}`, `as of ${s.M2.as_of} · YoY ~5% healthy`) : ''}
+          ${s.TGA ? card('TREASURY ACCT (TGA)', tT(s.TGA.value_b), `${_liqDelta(s.TGA.deltas.wow, false, true)} · ${_liqDelta(s.TGA.deltas.w13, false, true)}`, `as of ${s.TGA.as_of} · ↑ drains reserves`) : ''}
+          ${s.RESERVES ? card('BANK RESERVES', tT(s.RESERVES.value_b), `${_liqDelta(s.RESERVES.deltas.wow, false, true)} · ${_liqDelta(s.RESERVES.deltas.w13, false, true)}`, `as of ${s.RESERVES.as_of} · watch ~$2.5T floor`) : ''}
+        </div>`;
+
+      /* Overlay — Net Liquidity vs SPX/BTC, normalized, last 24mo */
+      let overlay = '';
+      if (nl && window.OC_CHART) {
+        const spineSrc = (ov && ov.series && ov.series.SPY) ? ov.series.SPY.history.map(h => h.date) : nl.history.map(h => h.date);
+        const spine = _liqWindow(spineSrc, 24);
+        const series = [{ name: 'Net Liq', values: _liqFfill(spine, _liqMap(nl.history, 'value')), color: '#60A5FA' }];
+        if (ov && ov.series) {
+          if (ov.series.SPY) series.push({ name: 'S&P 500', values: _liqFfill(spine, _liqMap(ov.series.SPY.history, 'close')), color: 'var(--pnl-up)' });
+          if (ov.series.BTC) series.push({ name: 'BTC', values: _liqFfill(spine, _liqMap(ov.series.BTC.history, 'close')), color: '#E6B84A' });
+        }
+        const legend = series.map(x => `<span class="mono" style="color:${x.color};margin-right:10px">— ${x.name}</span>`).join('');
+        overlay = `
+          <div class="mod-panel">
+            <div class="mod-panel-title">NET LIQUIDITY vs RISK ASSETS · normalized · last 24mo</div>
+            <div class="small" style="margin:2px 0 4px">Shape, not level — watch net liquidity <b>lead</b> risk assets; the 2024–26 decoupling (RRP drained) = tailwind over. ${legend}</div>
+            ${window.OC_CHART.overlayNorm(series, { w: 900, h: 200 })}
+          </div>`;
+      }
+
+      /* Component charts (lineAbs) */
+      const chart = (title, sub, svg) => `<div class="mod-panel"><div class="mod-panel-title">${title}</div><div class="small" style="margin:2px 0 4px">${sub}</div>${svg}</div>`;
+      const C = window.OC_CHART;
+      const comps = [];
+      if (C && s.WALCL) { const h = s.WALCL.history; comps.push(chart('FED BALANCE SHEET (WALCL) · $T', '↑ QE easing · ↓ QT tightening · peak ~$9T (2022)', C.lineAbs([{ name: 'WALCL', values: h.map(p => p.value / 1000), color: '#60A5FA' }], { w: 440, h: 170, xLabels: _liqXLabels(h.map(p => p.date)), yFmt: v => v.toFixed(1) + 'T' }))); }
+      if (C && s.RRP) { const h = s.RRP.history; comps.push(chart('REVERSE REPO (ON RRP) · $B', '↓ = cash returning to markets · ~$0 now = cushion exhausted', C.lineAbs([{ name: 'RRP', values: h.map(p => p.value), color: '#E6B84A' }], { w: 440, h: 170, min: 0, xLabels: _liqXLabels(h.map(p => p.date)), yFmt: v => v.toFixed(0) + 'B' }))); }
+      if (C && s.M2) { const y = _liqYoY(s.M2.history); comps.push(chart('M2 MONEY SUPPLY · YoY %', 'healthy ~4-7% · <0 contraction (rare) · >15% overheating (2021)', C.lineAbs([{ name: 'M2 YoY', values: y.map(p => p.value), color: '#A78BFA' }], { w: 440, h: 170, xLabels: _liqXLabels(y.map(p => p.date)), yFmt: v => v.toFixed(0) + '%' }))); }
+      if (C && s.TGA) { const h = s.TGA.history; comps.push(chart('TREASURY GENERAL ACCOUNT (TGA) · $B', '↑ drains reserves · ↓ injects · ~$700-850B operating range', C.lineAbs([{ name: 'TGA', values: h.map(p => p.value), color: '#4FD1C5' }], { w: 440, h: 170, min: 0, xLabels: _liqXLabels(h.map(p => p.date)), yFmt: v => v.toFixed(0) + 'B' }))); }
+      if (C && s.RESERVES) { const h = s.RESERVES.history; comps.push(chart('BANK RESERVE BALANCES · $T', 'ample >$3T · watch toward ~$2.5T (LCLoR) = funding stress', C.lineAbs([{ name: 'Reserves', values: h.map(p => p.value / 1000), color: 'var(--pnl-up)' }], { w: 440, h: 170, xLabels: _liqXLabels(h.map(p => p.date)), yFmt: v => v.toFixed(1) + 'T' }))); }
+      if (C && nl) { const h = nl.history; comps.push(chart('NET LIQUIDITY (WALCL − TGA − RRP) · $T', 'trend & inflection matter more than the level', C.lineAbs([{ name: 'Net Liq', values: h.map(p => p.value / 1000), color: '#60A5FA' }], { w: 440, h: 170, xLabels: _liqXLabels(h.map(p => p.date)), yFmt: v => v.toFixed(1) + 'T' }))); }
+      const compGrid = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">${comps.join('')}</div>`;
+
+      /* How to read */
+      const howto = `
+        <div class="mod-panel">
+          <div class="mod-panel-title">HOW TO READ</div>
+          <div class="small" style="line-height:1.6">
+            <b>Net Liquidity</b> = usable $ in markets (Fed assets − Treasury cash − reverse repo); strongest correlate of SPX/BTC since 2020, often leads by weeks — <b>trend &gt; level</b>.
+            <b>WALCL</b> ↑=QE ↓=QT. <b>RRP</b> cash parked off-field; near $0 = the QT cushion is gone, so tightening now hits reserves directly.
+            <b>M2</b> watch YoY growth (~5% healthy, &lt;0 tight, &gt;15% overheating). <b>TGA</b> rising drains reserves. <b>Reserves</b> stay "ample" &gt;~$3T; near ~$2.5T = funding-stress risk (cf. Sep-2019).
+          </div>
+        </div>`;
+
+      body.innerHTML = `
+        <div class="mod-head">
+          <div class="mod-title">Liquidity · Net Liquidity</div>
+          <div class="mod-meta">${d.generated_at_et || ''} · FRED + prices.db</div>
+        </div>
+        ${regime}${kpis}${overlay}${compGrid}${howto}`;
+    } catch (e) {
+      body.innerHTML = `<div class="mod-err">Liquidity load failed: ${(e && e.message) || e}</div>`;
+    }
+  }
+
   window.OC_MODULES = window.OC_MODULES || {};
   window.OC_MODULES['sentiment']     = { render: renderSentiment };
   window.OC_MODULES['recession']     = { render: renderRecession };
   window.OC_MODULES['valuation-map'] = { render: renderValuationMap };
+  window.OC_MODULES['liquidity']     = { render: renderLiquidity };
 })();

@@ -15,46 +15,6 @@
     }
   }
 
-  // ── 9d — EN⇄粵 recap language toggle (terminal; reads summary_yue from 9c) ──
-  // A distinct segmented state-switch (NOT the ▶ audio button). localStorage key
-  // 'oc_brief_lang' is shared across the 3 brief render fns (and matches the stocks
-  // pages' key, though they are different origins so each persists its own).
-  function getBriefLang() { try { return localStorage.getItem('oc_brief_lang') || 'en'; } catch (e) { return 'en'; } }
-  function setBriefLang(l) { try { localStorage.setItem('oc_brief_lang', l); } catch (e) {} }
-  // Toggle bar HTML. hasYue=false → greyed, disabled 粵 + tooltip (NOT hidden, so a
-  // returning 粵-user isn't stranded). `label` = optional scope tag (e.g. "Recap").
-  function recapToggleHTML(show, hasYue, label, scopeTip) {
-    const tip = hasYue ? '' : ' title="粵語版本今日未有 · Cantonese unavailable today"';
-    const on = (l) => show === l ? 'background:#60a5fa;color:#0b0e14' : 'background:transparent;color:var(--fg-dim)';
-    return `<div class="recap-bar" style="display:flex;align-items:center;gap:8px;margin:0 0 5px">`
-      + (label ? `<span style="font-size:10px;font-weight:700;letter-spacing:0.04em;color:var(--fg-dim);text-transform:uppercase"${scopeTip ? ` title="${escapeGex(scopeTip)}"` : ''}>${escapeGex(label)}</span>` : '')
-      + `<span class="recap-toggle" role="group" aria-label="Recap language"${tip} style="display:inline-flex;border:1px solid var(--fg-dim);border-radius:4px;overflow:hidden;font-size:10px;line-height:1${hasYue ? '' : ';opacity:0.5'}">`
-      + `<button type="button" class="lt-btn" data-lang="en" style="border:none;${on('en')};padding:2px 9px;cursor:pointer;font-weight:700;font-family:inherit">EN</button>`
-      + `<button type="button" class="lt-btn" data-lang="yue"${hasYue ? '' : ' disabled'} style="border:none;border-left:1px solid var(--fg-dim);${on('yue')};padding:2px 9px;cursor:${hasYue ? 'pointer' : 'not-allowed'};font-weight:700;font-family:inherit">粵</button>`
-      + `</span></div>`;
-  }
-  // Wire the toggle IN-FUNCTION (Phase-8 dead-link lesson) — scoped to `body`, so
-  // multiple BRF panes each drive their own recap. renderBody(lang) returns the inner
-  // HTML for the chosen language; clicking re-renders only .recap-content.
-  function wireRecapToggle(body, hasYue, renderBody) {
-    const content = body.querySelector('.recap-content');
-    const btns = body.querySelectorAll('.recap-toggle .lt-btn');
-    if (!content || !btns.length) return;
-    btns.forEach(btn => {
-      btn.addEventListener('click', () => {
-        const lang = btn.getAttribute('data-lang');
-        if (btn.disabled || (lang === 'yue' && !hasYue)) return;
-        setBriefLang(lang);
-        content.innerHTML = renderBody(lang);
-        btns.forEach(b2 => {
-          const isOn = b2.getAttribute('data-lang') === lang;
-          b2.style.background = isOn ? '#60a5fa' : 'transparent';
-          b2.style.color = isOn ? '#0b0e14' : 'var(--fg-dim)';
-        });
-      });
-    });
-  }
-
   /* ── F5 Screener — fundamentals-rich screener with presets + custom filters
      Mirrors stocks.clawmo.tech screener.html (VALUE / GROWTH / DIVIDEND /
      QUALITY presets + custom filter rows + sector/industry dropdowns).
@@ -3068,7 +3028,7 @@
   /* ── Daily Brief — post-close digest (reads daily-brief.json) ──── */
   async function renderDailyBriefContent(body, ctx) {
     body.innerHTML = `<div class="mod-loading">Loading daily brief…</div>`;
-    let b, recapBody = null, recapHasYue = false; // 9d: recap toggle (set if b.summary)
+    let b;
     try { b = await fetchJSON(`${BASE}/daily-brief.json`); }
     catch (e) { body.innerHTML = `<div class="mod-err">No brief available — ${escapeGex(e.message)}</div>`; return; }
 
@@ -3190,23 +3150,12 @@
     if (b.summary) {
       const SECTOR_RE_S = new RegExp('\\b(' + Object.keys(SECTORS).sort((a, b2) => b2.length - a.length).join('|') + ')\\b', 'g');
       const sectorizeS = (s) => String(s || '').replace(SECTOR_RE_S, m => `${SECTORS[m]} (${m})`);
-      // EN: ticker/sector linkify + glossary; 粵: plain escape + CJK-label match (skip EN-only helpers)
-      recapBody = (lang) => {
-        const yue = lang === 'yue';
-        const txt = yue ? (b.summary_yue || '') : b.summary;
-        const deco = yue ? (t => escapeGex(t)) : (t => sectorizeS(glossify(t)));
-        const reLabel = yue ? /^([一-鿿]{2,10})[：:]\s*([\s\S]+)$/ : /^([A-Za-z][A-Za-z &/]{1,22}):\s+([\s\S]+)$/;
-        return String(txt).split(/\n+/).map(x => x.trim()).filter(Boolean).map(p => {
-          const m = p.match(reLabel);
-          return m
-            ? `<div style="margin-bottom:6px"><span style="font-weight:800;color:#60a5fa;text-transform:uppercase;font-size:10px;letter-spacing:0.04em;margin-right:5px">${escapeGex(m[1])}</span>${deco(m[2])}</div>`
-            : `<div style="margin-bottom:6px">${deco(p)}</div>`;
-        }).join('');
-      };
-      recapHasYue = !!b.summary_yue;
-      const show = (getBriefLang() === 'yue' && recapHasYue) ? 'yue' : 'en';
-      H += recapToggleHTML(show, recapHasYue, 'Recap');
-      H += `<div class="recap-content mod-panel" style="border-left:3px solid #60a5fa;font-size:13px;line-height:1.6">${recapBody(show)}</div>`;
+      const parts = String(b.summary).split(/\n+/).map(x => x.trim()).filter(Boolean);
+      H += `<div class="mod-panel" style="border-left:3px solid #60a5fa;font-size:13px;line-height:1.6">`;
+      parts.forEach(p => { const m = p.match(/^([A-Za-z][A-Za-z &/]{1,22}):\s+([\s\S]+)$/);
+        if (m) H += `<div style="margin-bottom:6px"><span style="font-weight:800;color:#60a5fa;text-transform:uppercase;font-size:10px;letter-spacing:0.04em;margin-right:5px">${escapeGex(m[1])}</span>${sectorizeS(glossify(m[2]))}</div>`;
+        else H += `<div style="margin-bottom:6px">${sectorizeS(glossify(p))}</div>`; });
+      H += `</div>`;
     }
 
     // Watch
@@ -3382,7 +3331,6 @@
     H += buildGlossary();
 
     body.innerHTML = H;
-    if (recapBody) wireRecapToggle(body, recapHasYue, recapBody); // 9d EN⇄粵 recap toggle
     // wire ticker → EQ (Stock Analysis) deep-links
     body.querySelectorAll('.eq-link').forEach((el) => {
       el.addEventListener('click', () => {
@@ -3431,7 +3379,7 @@
   /* ── Pre-Market Brief — pre-open digest (reads premarket-brief.json) ──── */
   async function renderPremarket(body, ctx) {
     body.innerHTML = `<div class="mod-loading">Loading pre-market brief…</div>`;
-    let b, recapBody = null, recapHasYue = false; // 9d: recap toggle
+    let b;
     try { b = await fetchJSON(`${BASE}/premarket-brief.json`); }
     catch (e) { body.innerHTML = `<div class="mod-err">No pre-market brief yet — runs ~07:05 ET on trading days.</div>`; return; }
     let rateAlert = null;
@@ -3450,13 +3398,7 @@
 
     let H = `<div class="mod-panel" style="padding:8px 12px">
       <div class="mod-panel-title">🔭 PRE-MARKET BRIEF · ${escapeGex(b.as_of || '')} (${escapeGex(b.weekday || '')}) · before the 09:30 ET open</div>`;
-    if (b.summary) {
-      recapBody = (lang) => escapeGex(lang === 'yue' ? (b.summary_yue || '') : b.summary); // 粵 = label-less prose, plain swap
-      recapHasYue = !!b.summary_yue;
-      const show = (getBriefLang() === 'yue' && recapHasYue) ? 'yue' : 'en';
-      H += recapToggleHTML(show, recapHasYue, 'Recap');
-      H += `<div class="recap-content" style="font-size:12px;line-height:1.55;margin:4px 0;white-space:pre-line">${recapBody(show)}</div>`;
-    }
+    if (b.summary) H += `<div style="font-size:12px;line-height:1.55;margin:4px 0;white-space:pre-line">${escapeGex(b.summary)}</div>`;
     H += `</div>`;
 
     // Watch
@@ -3571,9 +3513,7 @@
     }
 
     body.innerHTML = H;
-    if (recapBody) wireRecapToggle(body, recapHasYue, recapBody); // 9d EN⇄粵 recap toggle
     body.querySelectorAll('.eq-link').forEach((el) => { el.addEventListener('click', () => { if (window.OC_OPEN_MODULE) window.OC_OPEN_MODULE('stock-analysis', { ticker: el.dataset.eq }); }); });
-    body.querySelectorAll('.liq-mod-link').forEach((el) => { el.addEventListener('click', () => { if (window.OC_OPEN_MODULE) window.OC_OPEN_MODULE('liquidity'); }); });
     // pre-market audio narration player (mode=premarket) — one ▶ per language (en, yue)
     (function () {
       const API = BASE.replace(/\/data\/?$/, '');
@@ -3612,7 +3552,7 @@
 
   /* ── BRF wrapper: Daily | Weekly | Monthly | Yearly period switcher ──
      Daily = the post-close digest above. Weekly = period_report.py rollup
-     (period-report-weekly.json). Monthly = enabled (period-report-monthly.json); Yearly = coming-soon. */
+     (period-report-weekly.json). Monthly/Yearly = coming-soon until enabled. */
   async function renderDailyBrief(body, ctx) {
     const TABS = [['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly'], ['yearly', 'Yearly']];
     const ENABLED = { daily: true, weekly: true, monthly: true, yearly: false };
@@ -3739,7 +3679,7 @@
     period = period || 'weekly';
     const PLBL = period.charAt(0).toUpperCase() + period.slice(1);
     body.innerHTML = `<div class="mod-loading">Loading ${period} review…</div>`;
-    let d, recapBody = null, recapHasYue = false; // 9d: recap toggle
+    let d;
     try { d = await fetchJSON(`${BASE}/period-report-${period}.json`); }
     catch (e) { body.innerHTML = `<div class="mod-panel" style="text-align:center;color:var(--fg-dim);padding:26px 14px"><b style="color:var(--fg)">${PLBL} review — coming soon.</b><br><span style="font-size:11px">Not generated yet.</span></div>`; return; }
     const n = (x, dp) => x == null ? '—' : Number(x).toFixed(dp == null ? 2 : dp);
@@ -3755,45 +3695,21 @@
       BACKWARDATION: 'Near-term VIX is ABOVE longer-dated VIX — acute stress/fear right now; the market is pricing imminent risk. Often shows up near sell-off bottoms.',
       FLAT: 'Near-term and longer-dated VIX are roughly EQUAL — a transition between calm and stress; indecision.'
     };
-    // Recap → labeled, readable blocks (inner HTML only; the .recap-content panel
-    // wraps it). EN linkifies sector ETFs; 粵 = plain escape + CJK-label match.
-    const sblocks = (s, lang) => {
+    // Weekly narrative → labeled, readable blocks (splits on newlines; bolds "Label:")
+    const sblocks = (s) => {
       s = String(s || ''); if (!s) return '';
-      const yue = lang === 'yue';
-      const deco = yue ? (t => escapeGex(t)) : (t => sectorize(escapeGex(t)));
-      const reLabel = yue ? /^([一-鿿]{2,10})[：:]\s*([\s\S]+)$/ : /^([A-Za-z][A-Za-z &/]{1,22}):\s+([\s\S]+)$/;
       const parts = s.split(/\n+/).map(x => x.trim()).filter(Boolean);
-      if (parts.length <= 1) return deco(s);
-      return parts.map(p => { const m = p.match(reLabel);
-        return m ? `<div style="margin-bottom:6px"><span style="font-weight:800;color:#60a5fa;text-transform:uppercase;font-size:10px;letter-spacing:0.04em;margin-right:5px">${escapeGex(m[1])}</span>${deco(m[2])}</div>`
-                 : `<div style="margin-bottom:6px">${deco(p)}</div>`; }).join('');
+      if (parts.length <= 1) return `<div class="mod-panel" style="border-left:3px solid #60a5fa;font-size:13px;line-height:1.55">${sectorize(escapeGex(s))}</div>`;
+      let h = '<div class="mod-panel" style="border-left:3px solid #60a5fa;font-size:13px;line-height:1.6">';
+      parts.forEach(p => { const m = p.match(/^([A-Za-z][A-Za-z &/]{1,22}):\s+([\s\S]+)$/);
+        if (m) h += `<div style="margin-bottom:6px"><span style="font-weight:800;color:#60a5fa;text-transform:uppercase;font-size:10px;letter-spacing:0.04em;margin-right:5px">${escapeGex(m[1])}</span>${sectorize(escapeGex(m[2]))}</div>`;
+        else h += `<div style="margin-bottom:6px">${sectorize(escapeGex(p))}</div>`; });
+      return h + '</div>';
     };
     const w = d.window || {};
     let H = `<div class="mod-panel" style="padding:8px 12px"><span class="mono" style="font-size:15px;font-weight:700">📊 ${escapeGex((d.label || 'WEEKLY').toUpperCase())} REVIEW</span>`
       + `<span style="color:var(--fg-dim);margin-left:8px">${escapeGex(w.start)} → ${escapeGex(w.end)} · ${escapeGex(w.label)}</span></div>`;
-    if (d.summary) {
-      recapBody = (lang) => sblocks(lang === 'yue' ? d.summary_yue : d.summary, lang);
-      recapHasYue = !!d.summary_yue;
-      const show = (getBriefLang() === 'yue' && recapHasYue) ? 'yue' : 'en';
-      H += recapToggleHTML(show, recapHasYue, 'Recap', 'Main recap only — the weekly/daily summaries below stay English');
-      H += `<div class="recap-content mod-panel" style="border-left:3px solid #60a5fa;font-size:13px;line-height:1.6">${recapBody(show)}</div>`;
-    }
-
-    // Liquidity — Fed net liquidity CHANGE over the period (leads with Δ; stance class matches LIQ module)
-    const liq = d.liquidity || {};
-    if (liq.regime_label && liq.change_pct != null) {
-      const stanceCls = liq.stance === 'bullish' ? 'num-up' : liq.stance === 'bearish' ? 'num-dn' : 'num-warn';
-      const lcol = liq.stance === 'bullish' ? '#4ade80' : liq.stance === 'bearish' ? '#f87171' : '#E6B84A';
-      const pread = liq.period_read === 'tailwind' ? '↑ tailwind for risk' : liq.period_read === 'headwind' ? '↓ headwind for risk' : 'roughly flat for risk';
-      const rrpLine = liq.rrp_drained ? ` <span class="mono" style="color:var(--fg-dim)">· RRP cushion drained</span>` : '';
-      const pnoun = period === 'monthly' ? 'month' : period === 'yearly' ? 'year' : 'week';
-      H += `<div class="mod-panel" style="border-left:2px solid ${lcol}"><div class="mod-panel-title">💧 LIQUIDITY · ${pnoun} change</div>
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:11px;margin-bottom:4px">
-        <span style="color:var(--fg-dim)">regime now</span> <span class="${stanceCls}" style="font-weight:800">${escapeGex(liq.regime_label)}</span>
-        <span class="mono">Δ this ${pnoun} <b class="${cl(liq.change_pct)}">${sg(liq.change_pct, 1)}% (${sg(liq.change_abs, 0)}B)</b></span>
-        <span class="mono" style="color:var(--fg-dim)">end $${n(liq.net_liq_end_t)}T (from $${n(liq.net_liq_start_t)}T)</span>${rrpLine}</div>
-        <div style="font-size:11px;line-height:1.5">Net liquidity was ${pread} this ${pnoun} · <span class="liq-mod-link" style="cursor:pointer;text-decoration:underline">full LIQ →</span></div></div>`;
-    }
+    if (d.summary) H += sblocks(d.summary);
 
     // Model B (monthly only): the month's weekly arcs are the narrative spine.
     // Embedded inline (past weekly reviews aren't loadable on the Weekly tab).
@@ -3956,7 +3872,6 @@
     }
 
     body.innerHTML = H;
-    if (recapBody) wireRecapToggle(body, recapHasYue, recapBody); // 9d EN⇄粵 recap toggle
     body.querySelectorAll('.eq-link').forEach(el => { el.addEventListener('click', () => { if (window.OC_OPEN_MODULE) window.OC_OPEN_MODULE('stock-analysis', { ticker: el.dataset.eq }); }); });
     body.querySelectorAll('.liq-mod-link').forEach(el => { el.addEventListener('click', () => { if (window.OC_OPEN_MODULE) window.OC_OPEN_MODULE('liquidity'); }); });
 

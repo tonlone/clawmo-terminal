@@ -20,9 +20,8 @@
   // Tier icons (severity)
   const TIER_ICON = { INFO: 'ℹ', WATCH: '⚡', WARN: '⚠', ALERT: '🚨' };
 
-  // INFO is a passive, low-weight "rates are nudging" chip. It still takes its
-  // HUE from direction (rising → red, falling → green) via the matrix below;
-  // this blue style is only the fallback for a direction-less INFO alert.
+  // INFO is a passive, low-weight "rates are nudging" chip: always blue,
+  // regardless of rising/falling/mixed direction. Sits below WATCH.
   // (Blue, not grey — grey blended into the dark page background.)
   const INFO_STYLE = {
     color: '#60a5fa', bg: 'rgba(96, 165, 250, 0.18)', border: 'rgba(96, 165, 250, 0.55)',
@@ -62,18 +61,13 @@
 
   function styleFor(alert) {
     const tier = alert.level || 'WATCH';
+    if (tier === 'INFO') {
+      return { ...INFO_STYLE, icon: TIER_ICON.INFO };
+    }
     const dir = alert.direction;
-    // Direction drives hue (rising → red, falling → green, mixed → purple) for ALL
-    // tiers including INFO — a rising-rate INFO chip should read risk-off red, not
-    // blue. INFO has no own row in the matrix, so it borrows the direction's WATCH
-    // (lowest) intensity, keeping it visually subtle.
     if (dir && DIRECTION_TIER_STYLE[dir]) {
       const s = DIRECTION_TIER_STYLE[dir][tier] || DIRECTION_TIER_STYLE[dir].WATCH;
       return { ...s, icon: TIER_ICON[tier] || '⚡' };
-    }
-    // No direction → INFO stays passive blue; other tiers use the legacy scale.
-    if (tier === 'INFO') {
-      return { ...INFO_STYLE, icon: TIER_ICON.INFO };
     }
     const s = TIER_STYLE[tier] || TIER_STYLE.WATCH;
     return { ...s, icon: TIER_ICON[tier] || '⚡' };
