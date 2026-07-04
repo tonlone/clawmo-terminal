@@ -341,208 +341,6 @@
     return escSig(String(s).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
   }
 
-  // ── AI-Pathways cross-ref (§7.A) — Validation Funnel + IS/OOS scatter ─────────
-  // Mirrors signals.html renderValidationFunnel / renderValidationScatter
-  // (GLM-approved 2026-06-29; terminal port GLM-approved 2026-06-30). PURE
-  // PRESENTATION over already-fetched backtest-results.json + signals-summary.json
-  // — zero cron / data / grade / basis / live-trade change. The terminal has NO
-  // Chart.js, so the scatter is hand-rolled SVG (buildEquityCurveChart idiom).
-  const VG_GRADE_HEX = { A: '#4ade80', B: '#60a5fa', C: '#fbbf24', D: '#f87171', F: '#f87171' };
-  const VG_AXIS_CAP = 3.0;  // clamp display; outliers shown as ▲ with true value in tooltip
-  // KEPT IN SYNC with signals.html PATTERN_GRADES (static seed map, `|| 'C'` fallback)
-  // so the Overfit-Graveyard colors match the web panel EXACTLY across surfaces.
-  // NB: this is the same fixed seed the web scatter uses — live grades come from
-  // adaptive_grades elsewhere; do NOT swap this for the live grade or the two
-  // surfaces' identical-looking panels will color patterns differently.
-  const VG_PATTERN_GRADES = {
-    rsi_ma_divergence: 'A', golden_cross: 'A', cup_handle: 'A', vcp: 'C',
-    trend_pullback: 'A', asc_triangle: 'C', range_breakout: 'B', death_cross: 'D',
-    bos: 'B', liquidity_sweep: 'A', adam_eve_dbottom: 'A', adam_eve_dtop: 'D',
-    ibs_oversold_pullback: 'C', mom_top_decile: 'C', pead_drift: 'C',
-    value_top_decile: 'C', low_vol_top_decile: 'C', earnings_run_up: 'C',
-    episodic_pivot: 'B', high_tight_flag: 'A', momentum_rest_entry: 'A',
-  };
-  function vgGradeOf(sig) { return VG_PATTERN_GRADES[sig] || 'C'; }
-
-  // T1 — Strategy Validation Funnel (PATTERN-level validation attrition). Logic
-  // ported verbatim from the web. Returns an HTML string of CSS bars.
-  function buildValidationFunnel(stats, passed, adaptiveGrades) {
-    if (!stats || !stats.length || !passed) {
-      return '<div class="chart-note" style="padding:8px 10px;color:var(--fg-dim)">Funnel unavailable (backtest or gates data missing).</div>';
-    }
-    // INVARIANT: one stats row per signal_type (by_regime is nested, not top-level rows).
-    const s1 = stats;
-    const s2 = s1.filter(s => (s.occurrence_count || 0) >= 30);
-    const s3 = s2.filter(s => (s.profit_factor || 0) > 1.0);
-    const s4 = s3.filter(s => s.oos_stable === true);
-    // LOAD-BEARING `!= null`: JS `null < 0.05` coerces null→0→true, so underpowered
-    // patterns (null block-FDR) would falsely count as significant. Do NOT simplify.
-    const s5 = s4.filter(s => s.p_block_fdr != null && s.p_block_fdr < 0.05);
-    const base = s1.length || 1;
-    const removedNames = (prev, cur) => {
-      const keep = {}; cur.forEach(s => { keep[s.signal_type] = 1; });
-      return prev.filter(s => !keep[s.signal_type]).map(s => s.signal_type);
-    };
-    const stages = [
-      { label: 'Backtested patterns',            set: s1, color: '#60a5fa', prev: null, desc: '5-yr per-ticker + cross-sectional backtest universe' },
-      { label: 'Min sample (≥30 trades)',        set: s2, color: '#22d3ee', prev: s1,   desc: 'enough fires to be statistically meaningful' },
-      { label: 'Positive edge (PF > 1.0)',       set: s3, color: '#22d3ee', prev: s2,   desc: 'profitable gross of selection' },
-      { label: 'OOS holds (walk-forward stable)',set: s4, color: '#4ade80', prev: s3,   desc: 'both in-sample & out-of-sample halves clear the overfit PF bar' },
-      { label: 'Significant (block-FDR < 0.05)', set: s5, color: '#4ade80', prev: s4,   desc: 'i.i.d.-robust moving-block bootstrap, Benjamini-Hochberg corrected' },
-    ];
-    let html = '';
-    stages.forEach(st => {
-      const n = st.set.length;
-      const pct = Math.round(n / base * 100);
-      const rem = st.prev ? removedNames(st.prev, st.set) : [];
-      const remTitle = rem.length ? ('Removed here: ' + rem.join(', ')) : 'No patterns removed at this bar';
-      html +=
-        '<div style="margin-bottom:7px" title="' + escSig(st.desc + (rem.length ? ' — ' + remTitle : '')) + '">' +
-          '<div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:2px">' +
-            '<span style="color:var(--fg-dim)">' + st.label + '</span>' +
-            '<span><b style="color:' + st.color + '">' + n + '</b>' +
-              (rem.length ? ' <span style="color:#f87171;font-size:10px" title="' + escSig(remTitle) + '">−' + rem.length + '</span>' : '') +
-            '</span>' +
-          '</div>' +
-          '<div style="background:rgba(255,255,255,0.04);border-radius:3px;height:13px;overflow:hidden">' +
-            '<div style="height:100%;width:' + Math.max(pct, 2) + '%;background:' + st.color + ';opacity:0.55;border-radius:3px"></div>' +
-          '</div>' +
-        '</div>';
-    });
-    // Authoritative Published endpoint — separate from the gauntlet (regime-aware selection)
-    const pubN = passed.length;
-    const pubPct = Math.round(pubN / base * 100);
-    html +=
-      '<div style="margin-top:11px;padding-top:9px;border-top:1px dashed var(--border)">' +
-        '<div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:2px">' +
-          '<span style="color:var(--fg);font-weight:600">Published / Active</span>' +
-          '<span><b style="color:#4ade80">' + pubN + '</b></span>' +
-        '</div>' +
-        '<div style="background:rgba(255,255,255,0.04);border-radius:3px;height:15px;overflow:hidden">' +
-          '<div style="height:100%;width:' + Math.max(pubPct, 2) + '%;background:#4ade80;border-radius:3px"></div>' +
-        '</div>' +
-        '<div style="font-size:10px;color:var(--fg-dim);margin-top:5px;line-height:1.55">' +
-          '<b>Authoritative</b> — read directly from the engine\'s <code>quality_gates.passed</code> list, <b>not</b> the strict tip of the gauntlet above. Live selection is <b>regime-aware</b>: a pattern can be published on its allowed-regime PF even if its <i>overall</i> walk-forward isn\'t stable (e.g. BOS, Golden Cross), which is why Published (' + pubN + ') can exceed the OOS-stable survivors (' + s4.length + ').' +
-        '</div>' +
-      '</div>';
-    // Live-only sidebar — patterns graded on live results with no backtest row
-    const btNames = {}; stats.forEach(s => { btNames[s.signal_type] = 1; });
-    const liveOnly = Object.keys(adaptiveGrades || {}).filter(k => !btNames[k]);
-    if (liveOnly.length) {
-      html +=
-        '<div style="font-size:10px;color:var(--fg-dim);margin-top:7px;line-height:1.55">' +
-          '<b>' + liveOnly.length + ' live-only pattern' + (liveOnly.length > 1 ? 's' : '') + '</b> (no backtest row — graded on live results, excluded from this funnel): ' +
-          escSig(liveOnly.join(', ')) + '.' +
-        '</div>';
-    }
-    return html;
-  }
-
-  // T2 — IS-vs-OOS scatter ("Overfit Graveyard"), hand-rolled SVG. Same honesty
-  // rules as the web Chart.js version: exclude null-IS/OOS, axis-cap 3.0 with ▲
-  // for off-scale, color=grade / fill=oos_stable, 3 ref lines, tie-correct
-  // Spearman labeled directional, pfFmt ∞-sentinel guard. Returns {svg, caption}.
-  function buildValidationScatter(stats, gradeOf) {
-    if (!stats || !stats.length) {
-      return { svg: '<div class="chart-note" style="padding:8px 10px;color:var(--fg-dim)">Scatter unavailable (no backtest data).</div>', caption: '' };
-    }
-    const pts = [], excluded = [];
-    stats.forEach(s => {
-      const xi = s.pf_in_sample, yo = s.pf_out_sample;
-      if (xi == null || yo == null) { excluded.push(s.signal_type); return; }  // exclude null IS or OOS — never plot at 0
-      const g = (gradeOf ? gradeOf(s.signal_type) : '') || '';
-      let dx = Math.min(xi, VG_AXIS_CAP), dy = Math.min(yo, VG_AXIS_CAP);
-      // When BOTH axes overflow, the point lands on the y=x corner and misreads as
-      // "on the diagonal". Nudge off the corner toward the true side. (Single-axis
-      // overflow just clamps that axis; the other keeps its real coordinate.)
-      if (xi > VG_AXIS_CAP && yo > VG_AXIS_CAP) {
-        if (yo > xi) dx = VG_AXIS_CAP - 0.18;
-        else if (xi > yo) dy = VG_AXIS_CAP - 0.18;
-      }
-      pts.push({ dx, dy, name: s.signal_type, rawx: xi, rawy: yo,
-                 grade: g, stable: s.oos_stable === true, capped: (xi > VG_AXIS_CAP || yo > VG_AXIS_CAP) });
-    });
-    // 99.0 = engine "no losing trades in this half" sentinel (lib/significance.py) ≈ ∞ PF.
-    const pfFmt = (v) => v === 99 ? '∞ (no losers)' : v;
-    // Spearman rank-corr — TIE-CORRECT (averaged ranks + Pearson on ranks). The
-    // simplified 1−6Σd²/n(n²−1) form is exact only WITHOUT ties; our data has ties.
-    const ranks = (v) => {
-      const idx = v.map((_, i) => i).sort((a, b) => v[a] - v[b]);
-      const r = []; let i = 0;
-      while (i < idx.length) {
-        let j = i; while (j + 1 < idx.length && v[idx[j + 1]] === v[idx[i]]) j++;
-        const avg = (i + j) / 2 + 1;
-        for (let k = i; k <= j; k++) r[idx[k]] = avg;
-        i = j + 1;
-      }
-      return r;
-    };
-    const pearson = (a, b) => {
-      const m = a.length; let ma = 0, mb = 0;
-      for (let i = 0; i < m; i++) { ma += a[i]; mb += b[i]; }
-      ma /= m; mb /= m;
-      let num = 0, da = 0, db = 0;
-      for (let i = 0; i < m; i++) { const ca = a[i] - ma, cb = b[i] - mb; num += ca * cb; da += ca * ca; db += cb * cb; }
-      return (da && db) ? num / Math.sqrt(da * db) : null;
-    };
-    const xs = pts.map(p => p.rawx), ys = pts.map(p => p.rawy);
-    const n = pts.length, rho = (n >= 3) ? pearson(ranks(xs), ranks(ys)) : null;
-    const trueOverfit = pts.filter(p => p.rawx > 1 && p.rawy < 1).map(p => p.name);
-    const capped = pts.filter(p => p.capped);
-
-    // ── SVG geometry (buildEquityCurveChart idiom) ──
-    const W = 640, H = 360, padL = 44, padR = 16, padT = 16, padB = 34;
-    const innerW = W - padL - padR, innerH = H - padT - padB;
-    const lo = 0, hi = VG_AXIS_CAP;  // PF ≥ 0 always → floor 0 = no silent clip below-axis
-    const sx = (v) => padL + (v - lo) / (hi - lo) * innerW;
-    const sy = (v) => padT + (1 - (v - lo) / (hi - lo)) * innerH;
-    let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" style="width:100%;height:auto;display:block">';
-    // Grid + integer ticks 0..3
-    for (let t = 0; t <= 3; t++) {
-      const gx = sx(t), gy = sy(t);
-      svg += '<line x1="' + gx + '" y1="' + padT + '" x2="' + gx + '" y2="' + (H - padB) + '" stroke="rgba(255,255,255,0.05)" stroke-width="0.4"/>';
-      svg += '<line x1="' + padL + '" y1="' + gy + '" x2="' + (W - padR) + '" y2="' + gy + '" stroke="rgba(255,255,255,0.05)" stroke-width="0.4"/>';
-      svg += '<text x="' + gx + '" y="' + (H - padB + 12) + '" fill="#8b949e" font-size="9" text-anchor="middle" font-family="var(--font-mono)">' + t + '</text>';
-      svg += '<text x="' + (padL - 5) + '" y="' + (gy + 3) + '" fill="#8b949e" font-size="9" text-anchor="end" font-family="var(--font-mono)">' + t + '</text>';
-    }
-    // Reference lines: y=x diagonal (overfit), PF=1.0 OOS breakeven (red), PF=1.2 grade-A survival (green dashed)
-    svg += '<line x1="' + sx(lo) + '" y1="' + sy(lo) + '" x2="' + sx(hi) + '" y2="' + sy(hi) + '" stroke="rgba(139,148,158,0.5)" stroke-width="1"/>';
-    svg += '<line x1="' + padL + '" y1="' + sy(1.0) + '" x2="' + (W - padR) + '" y2="' + sy(1.0) + '" stroke="rgba(248,113,113,0.55)" stroke-width="1"/>';
-    svg += '<line x1="' + padL + '" y1="' + sy(1.2) + '" x2="' + (W - padR) + '" y2="' + sy(1.2) + '" stroke="rgba(74,222,128,0.5)" stroke-width="1" stroke-dasharray="5 4"/>';
-    // Axis titles
-    svg += '<text x="' + (padL + innerW / 2) + '" y="' + (H - 2) + '" fill="#8b949e" font-size="9" text-anchor="middle">In-sample PF →</text>';
-    svg += '<text x="11" y="' + (padT + innerH / 2) + '" fill="#8b949e" font-size="9" text-anchor="middle" transform="rotate(-90 11 ' + (padT + innerH / 2) + ')">Out-of-sample PF →</text>';
-    // Points: circle (filled=oos_stable / hollow=not), triangle when off-scale
-    pts.forEach(p => {
-      const cx = sx(p.dx), cy = sy(p.dy);
-      const col = VG_GRADE_HEX[p.grade] || '#6e7681';  // gray = defensive only; vgGradeOf always returns A–D so it's unreachable on current data
-      const fill = p.stable ? col : 'none';
-      const title = escSig(p.name + ' [' + (p.grade || '–') + ']  IS ' + pfFmt(p.rawx) + ' → OOS ' + pfFmt(p.rawy) +
-                    (p.capped ? '  (off-scale ▲)' : '') + (p.stable ? '  · OOS-stable' : '  · not OOS-stable'));
-      if (p.capped) {
-        const r = 6;
-        const tri = cx + ',' + (cy - r) + ' ' + (cx - r) + ',' + (cy + r * 0.7) + ' ' + (cx + r) + ',' + (cy + r * 0.7);
-        svg += '<polygon points="' + tri + '" fill="' + fill + '" stroke="' + col + '" stroke-width="2"><title>' + title + '</title></polygon>';
-      } else {
-        svg += '<circle cx="' + cx + '" cy="' + cy + '" r="5" fill="' + fill + '" stroke="' + col + '" stroke-width="2"><title>' + title + '</title></circle>';
-      }
-    });
-    svg += '</svg>';
-
-    const caption =
-      'Each point = one backtested pattern. <b>X</b> = in-sample PF, <b>Y</b> = out-of-sample PF (walk-forward split). ' +
-      '<b>Below the grey diagonal</b> = edge decays out-of-sample (overfit risk); <b>above</b> = holds or improves. ' +
-      'Red line = OOS breakeven (PF 1.0); green dashed = grade-A survival (PF 1.2). ' +
-      '<b>Color</b> = grade (<span style="color:#4ade80">A</span>/<span style="color:#60a5fa">B</span>/<span style="color:#fbbf24">C</span>/<span style="color:#f87171">D</span>); ' +
-      '<b>filled</b> = OOS-stable, <b>hollow</b> = not; <b>▲</b> = off-scale (clamped to ' + VG_AXIS_CAP + ', true value in tooltip). ' +
-      'Colors are the <b>static seed grade</b> (synced with the web), not the current adaptive grade in the table below.' +
-      '<br>IS↔OOS rank-correlation (Spearman) = <b>' + (rho != null ? rho.toFixed(2) : 'n/a') + '</b> (N=' + n + ', directional — not a precise estimate at this N). ' +
-      'Patterns that looked good in-sample (PF&gt;1) but lost money out-of-sample: <b>' + (trueOverfit.length ? escSig(trueOverfit.join(', ')) : 'none') + '</b>.' +
-      (capped.length ? ' Off-scale: ' + escSig(capped.map(p => p.name + ' (IS ' + pfFmt(p.rawx) + '/OOS ' + pfFmt(p.rawy) + ')').join(', ')) + '.' : '') +
-      (excluded.length ? '<br><span style="color:var(--fg-dim)">' + excluded.length + ' excluded (insufficient sample for an IS/OOS split): ' + escSig(excluded.join(', ')) + '.</span>' : '');
-    return { svg, caption };
-  }
-
   // Outcome label/color — mirrors signals.html outcomeMap. 7 canonical outcomes from update-trade-status.py.
   const OUTCOME_MAP = {
     'tp_hit':          { label: 'Take Profit',     color: 'var(--up, #4ade80)'   },
@@ -690,12 +488,10 @@
       // Need detailed pattern stats (avg_win, avg_loss) for half_kelly mode.
       // Pull from backtest-results.json which has per-pattern win/loss bucket data.
       let backtestStats = {};
-      let backtestStatsArr = [];  // raw stats array — needed by the Validation Funnel + IS/OOS scatter
       let sigMeta = null;
       try {
         const br = await fetchJSON('https://stocks.clawmo.tech/data/backtest-results.json').catch(() => null);
         if (br && Array.isArray(br.stats)) {
-          backtestStatsArr = br.stats;
           br.stats.forEach(s => { if (s.signal_type) backtestStats[s.signal_type] = s; });
           sigMeta = br.significance_meta || null;
           if (sigMeta) sigMeta._n_psr_eligible = br.stats.length;  // PSR denominator ≠ n_tests
@@ -1185,27 +981,7 @@
           <span style="color:var(--fg-dim)">${escSig(sigMeta.method || '')}</span>
         </div>
       ` : '';
-      // AI-Pathways cross-ref (§7.A) panels — built over the same fetched JSON, no compute.
-      const _vgFunnel  = buildValidationFunnel(backtestStatsArr, qualityGates.passed, adaptiveGrades);
-      const _vgScatter = buildValidationScatter(backtestStatsArr, vgGradeOf);
-      const validationPanels = `
-        <div class="mod-panel">
-          <div class="mod-panel-title">STRATEGY VALIDATION FUNNEL <span class="mod-panel-sub">illustrative decomposition across our statistical bars</span></div>
-          <div style="padding:10px 12px">
-            <div style="font-size:11px;color:var(--fg-dim);margin-bottom:9px;line-height:1.6">How our backtested patterns distribute across each statistical quality bar. The bars below are a <b>post-hoc decomposition of the backtested set</b> &mdash; <b>not</b> a literal AND-pipeline to the published list (live selection is regime-aware; see the Published note). Notably, our significance bar is <b>FDR-corrected</b> (multiple-testing controlled), a check a naive funnel skips.</div>
-            ${_vgFunnel}
-          </div>
-        </div>
-        <div class="mod-panel">
-          <div class="mod-panel-title">IN-SAMPLE vs OUT-OF-SAMPLE · Overfit Graveyard <span class="mod-panel-sub">profit factor, per backtested pattern</span></div>
-          <div style="padding:10px 12px">
-            ${_vgScatter.svg}
-            <div style="font-size:10px;color:var(--fg-dim);margin-top:7px;line-height:1.6">${_vgScatter.caption}</div>
-          </div>
-        </div>
-      `;
       const backtestContent = `
-        ${validationPanels}
         <div class="mod-panel">
           <div class="mod-panel-title">BACKTEST STATISTICS · per-pattern · live + historical blend</div>
           ${sigStrip}
@@ -1860,7 +1636,7 @@
       }).join('');
       const howContent = `
         <div class="mod-panel">
-          <div class="mod-panel-title">RECENT CHANGES · 2026-06-30 Backtest tab gains Strategy Validation Funnel + In-Sample/Out-of-Sample "Overfit Graveyard" scatter (AI-Pathways cross-ref; mirrors stocks.clawmo.tech/signals) · 2026-06-25 Liquidity Sweep regraded on live daily-exit model → B→A, now active all regimes (was CAUTION/BEAR-only) · 2026-06-25 earnings_run_up set DORMANT (refreshed backtest PF decayed 1.262→1.185 through the 1.20 gate; weekly re-validation cron watches for recovery) · 2026-06-20 Win Rate label fixed (% profitable, not TP-hit) · staged-stop tightened to +0.5R lock (LIVE) · PEAD published → grade A (LIVE) · cointegration probe (no edge) · F6+F7 risk-overlay shadow · Phase 2 Piece C · F8 long-short + grade-priority</div>
+          <div class="mod-panel-title">RECENT CHANGES · 2026-06-25 Liquidity Sweep regraded on live daily-exit model → B→A, now active all regimes (was CAUTION/BEAR-only) · 2026-06-20 Win Rate label fixed (% profitable, not TP-hit) · staged-stop tightened to +0.5R lock (LIVE) · PEAD published → grade A (LIVE) · cointegration probe (no edge) · F6+F7 risk-overlay shadow · Phase 2 Piece C · F8 long-short + grade-priority</div>
           <div class="sig-how-meth">
             <div class="sig-how-meth-row" style="border-left:2px solid var(--accent);padding-left:8px">
               <b>2026-06-20 — "Win Rate" now means % PROFITABLE (was mistakenly the TP-hit rate)</b> — the WR column was showing the <b>take-profit-hit rate</b> (% of trades that reached the FULL profit target) and labeling it "win rate". For wide-target patterns that badly understated reality, and it once misled a review. WR now correctly shows <b>% of trades closed profitable</b> (return &gt; 0); the old TP-hit number is preserved as a separate <code>tp_hit_rate</code> (hover the WR cell). So the displayed numbers jump up — e.g. <code>bos</code> 2% → <b>49%</b>, <code>high_tight_flag</code> 7% → <b>86%</b>, <code>pead_drift</code> 4% → <b>60%</b> — same trades, honest label. Fixed at source (<code>backtest.py</code>) + glossary; grading was always on the correct stat, so no grades change.
@@ -1890,7 +1666,7 @@
               <b>2026-06-19 validation re-run (current basis)</b> — all PFs/grades are now from a survivorship-free, net-of-cost, live-exit backtest (~690 tickers, 394k signals). <b>The pattern cards below show current grades/PF</b> — the changelog rows that follow are historical context, not current numbers. Notable shifts on the new basis: trend_pullback validated to <b>PF 1.66 / grade A</b> (its old Patch G PF-override removed as redundant); range_breakout cleared the gate (now <b>B</b>, was blocked); cup_handle → A, asc_triangle → C via an out-of-sample haircut (full-window 1.30 but 1.03 OOS — curve-fit). high_tight_flag &amp; momentum_rest_entry fire via the Patch G count override (n=14 / n=5) and are <b>no longer shown as BLOCKED</b> (a playbook-gate bug that ignored the override was fixed).
             </div>
             <div class="sig-how-meth-row">
-              <b>earnings_run_up ACTIVATED (2026-05-31) → DORMANT (2026-06-25)</b> — the <b>PRE-earnings mirror of PEAD</b> (NBER earnings-announcement premium). Goes long 3–10 calendar days before a scheduled report when price is above EMA50 with a 5-day run-up <b>≥ 2%</b>, then <b>exits the day BEFORE the print</b> to capture the premium while sidestepping the binary event + IV crush. Stop entry−1.5×ATR, target +2R (most exits are the pre-earnings time-stop, not the target). Unblocked by a dedicated historical-earnings backtest (FMP report dates → <code>backtests/earnings_run_up_backtest.py</code>): per-event <b>PF 1.262</b> on n=4,681, and the drift-threshold sweep was monotonic & &gt;1.20 across 0.5–3% (real effect, not overfit). <b style="color:var(--accent)">Set DORMANT 2026-06-25:</b> the refreshed backtest decayed through the 1.20 gate (PF 1.262 → 1.185), so emission was disabled (one-line reversible, zero open trades at the time); a Saturday re-validation cron re-runs the backtest as a recovery watch. Reads <code>earnings-forward.json</code>, so it's not in the per-ticker Backtest tab (see Backtest tab note).
+              <b>earnings_run_up ACTIVATED (2026-05-31)</b> — the <b>PRE-earnings mirror of PEAD</b> (NBER earnings-announcement premium). Goes long 3–10 calendar days before a scheduled report when price is above EMA50 with a 5-day run-up <b>≥ 2%</b>, then <b>exits the day BEFORE the print</b> to capture the premium while sidestepping the binary event + IV crush. Stop entry−1.5×ATR, target +2R (most exits are the pre-earnings time-stop, not the target). Unblocked by a dedicated historical-earnings backtest (FMP report dates → <code>backtests/earnings_run_up_backtest.py</code>): per-event <b>PF 1.262</b> on n=4,681, and the drift-threshold sweep was monotonic & &gt;1.20 across 0.5–3% (real effect, not overfit). Seeded grade C; in a ~2-week isolated-cohort watch; <code>adaptive_grades</code> rescores after ~30 closed live trades. Reads <code>earnings-forward.json</code>, so it's not in the per-ticker Backtest tab (see Backtest tab note).
             </div>
             <div class="sig-how-meth-row">
               <b>Patch B (shipped 2026-05-26)</b> — quality-gate preservation: when a quarantined pattern auto-relocks, manual <code>gate_tightened_at</code> values (stricter <code>min_trades_required</code>, higher <code>reactivate_pf</code>) are preserved instead of being overwritten by tier defaults. Fixes the 05-15 → 05-19 silent overwrite that affected <b>rsi_ma_divergence</b> and <b>vcp</b>.

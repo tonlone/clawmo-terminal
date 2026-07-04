@@ -794,6 +794,172 @@
     });
   }
 
+  /* ── Render: Efficient Frontier (diagnostic) ─────────────────
+     Mirrors stocks portfolio.html sec-frontier; hand-rolled SVG.
+     Marker identity = same hues + shapes as web for parity:
+     Current #fb923c ringed circle · Tangency #4ade80 triangle ·
+     MVP #fbbf24 diamond · Risk Parity #a78bfa square.
+     Cloud = sequential blue ramp on Sharpe. */
+  let _frTab = null;
+
+  function frSharpeColor(s, lo, hi) {
+    const t = hi > lo ? Math.max(0, Math.min(1, (s - lo) / (hi - lo))) : 0.5;
+    const a = [0x27, 0x40, 0x60], b = [0x79, 0xc0, 0xff];
+    const c = a.map((v, i) => Math.round(v + (b[i] - v) * t));
+    return 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
+  }
+
+  function buildFrontierChart(a, rf) {
+    const W = 620, H = 300, padL = 44, padR = 12, padT = 12, padB = 30;
+    const innerW = W - padL - padR, innerH = H - padT - padB;
+
+    const xs = [], ys = [];
+    (a.cloud || []).forEach(p => { xs.push(p[0]); ys.push(p[1]); });
+    (a.frontier || []).forEach(p => { xs.push(p.risk); ys.push(p.ret); });
+    (a.band || []).forEach(p => { xs.push(p.risk_lo, p.risk_hi); ys.push(p.ret); });
+    [a.current, a.mvp, a.tangency, a.risk_parity].forEach(m => { if (m) { xs.push(m.risk); ys.push(m.ret); } });
+    if (!xs.length) return '<div class="empty">no frontier data</div>';
+    let xMin = Math.min(...xs), xMax = Math.max(...xs), yMin = Math.min(...ys), yMax = Math.max(...ys);
+    const xPadV = (xMax - xMin) * 0.06 || 0.01, yPadV = (yMax - yMin) * 0.06 || 0.01;
+    xMin -= xPadV; xMax += xPadV; yMin -= yPadV; yMax += yPadV;
+    const sx = v => padL + (v - xMin) / (xMax - xMin) * innerW;
+    const sy = v => padT + (1 - (v - yMin) / (yMax - yMin)) * innerH;
+
+    let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;aspect-ratio:' + W + '/' + H + ';display:block">';
+
+    /* grid + axis labels */
+    for (let i = 0; i <= 4; i++) {
+      const yv = yMin + (yMax - yMin) * i / 4, gy = sy(yv).toFixed(1);
+      svg += '<line x1="' + padL + '" y1="' + gy + '" x2="' + (W - padR) + '" y2="' + gy + '" stroke="rgba(255,255,255,0.05)" stroke-width="0.4"/>';
+      svg += '<text x="' + (padL - 4) + '" y="' + (parseFloat(gy) + 3).toFixed(1) + '" fill="var(--fg-faint)" font-size="9" text-anchor="end" font-family="var(--font-mono)">' + (yv * 100).toFixed(0) + '%</text>';
+    }
+    for (let i = 0; i <= 4; i++) {
+      const xv = xMin + (xMax - xMin) * i / 4, gx = sx(xv).toFixed(1);
+      svg += '<text x="' + gx + '" y="' + (H - 8) + '" fill="var(--fg-faint)" font-size="9" text-anchor="middle" font-family="var(--font-mono)">' + (xv * 100).toFixed(0) + '%</text>';
+    }
+    svg += '<text x="' + (padL + innerW / 2) + '" y="' + (H - 0.5) + '" fill="var(--fg-faint)" font-size="8" text-anchor="middle">RISK · ANN VOL →</text>';
+
+    /* bootstrap band polygon */
+    const band = a.band || [];
+    if (band.length > 1) {
+      let d = '';
+      band.forEach((p, i) => { d += (i === 0 ? 'M ' : 'L ') + sx(p.risk_lo).toFixed(1) + ' ' + sy(p.ret).toFixed(1) + ' '; });
+      for (let i = band.length - 1; i >= 0; i--) d += 'L ' + sx(band[i].risk_hi).toFixed(1) + ' ' + sy(band[i].ret).toFixed(1) + ' ';
+      svg += '<path d="' + d + 'Z" fill="rgba(230,237,243,0.07)"/>';
+    }
+
+    /* cloud */
+    const sharpes = (a.cloud || []).map(p => p[2]);
+    const sLo = Math.min(...sharpes), sHi = Math.max(...sharpes);
+    (a.cloud || []).forEach(p => {
+      svg += '<circle cx="' + sx(p[0]).toFixed(1) + '" cy="' + sy(p[1]).toFixed(1) + '" r="1.4" fill="' + frSharpeColor(p[2], sLo, sHi) + '" fill-opacity="0.55"/>';
+    });
+
+    /* frontier: dashed lower branch + solid efficient branch */
+    const eff = (a.frontier || []).filter(p => p.efficient);
+    const low = (a.frontier || []).filter(p => !p.efficient);
+    if (low.length && eff.length) low.push(eff[0]);
+    const path = pts => pts.map((p, i) => (i === 0 ? 'M ' : 'L ') + sx(p.risk).toFixed(1) + ' ' + sy(p.ret).toFixed(1)).join(' ');
+    if (low.length > 1) svg += '<path d="' + path(low) + '" fill="none" stroke="rgba(230,237,243,0.45)" stroke-width="1.2" stroke-dasharray="3 3"/>';
+    if (eff.length > 1) svg += '<path d="' + path(eff) + '" fill="none" stroke="#e6edf3" stroke-width="1.8"/>';
+
+    /* markers (shape + hue identity, native <title> tooltips) */
+    function tip(name, m) {
+      const ws = Object.entries(m.weights || {}).sort((x, y) => y[1] - x[1]).slice(0, 6)
+        .map(([t, w]) => t + ' ' + (w * 100).toFixed(1) + '%').join(', ');
+      return name + ' — risk ' + (m.risk * 100).toFixed(1) + '% · ret ' + (m.ret * 100).toFixed(1) + '% · Sharpe ' + m.sharpe.toFixed(2) + (ws ? ' · ' + ws : '');
+    }
+    function markerSvg(name, m, color, shape) {
+      if (!m) return '';
+      const cx = sx(m.risk), cy = sy(m.ret);
+      let s = '<g>' + '<title>' + escH(tip(name, m)) + '</title>';
+      if (shape === 'circle') {
+        s += '<circle cx="' + cx.toFixed(1) + '" cy="' + cy.toFixed(1) + '" r="5.5" fill="' + color + '" stroke="#e6edf3" stroke-width="1.6"/>';
+      } else if (shape === 'triangle') {
+        s += '<polygon points="' + cx.toFixed(1) + ',' + (cy - 5.5).toFixed(1) + ' ' + (cx - 5).toFixed(1) + ',' + (cy + 4.2).toFixed(1) + ' ' + (cx + 5).toFixed(1) + ',' + (cy + 4.2).toFixed(1) + '" fill="' + color + '"/>';
+      } else if (shape === 'diamond') {
+        s += '<polygon points="' + cx.toFixed(1) + ',' + (cy - 5.8).toFixed(1) + ' ' + (cx + 5.8).toFixed(1) + ',' + cy.toFixed(1) + ' ' + cx.toFixed(1) + ',' + (cy + 5.8).toFixed(1) + ' ' + (cx - 5.8).toFixed(1) + ',' + cy.toFixed(1) + '" fill="' + color + '"/>';
+      } else {
+        s += '<rect x="' + (cx - 4.4).toFixed(1) + '" y="' + (cy - 4.4).toFixed(1) + '" width="8.8" height="8.8" fill="' + color + '"/>';
+      }
+      return s + '</g>';
+    }
+    svg += markerSvg('RISK PARITY', a.risk_parity, '#a78bfa', 'square');
+    svg += markerSvg('MIN VARIANCE', a.mvp, '#fbbf24', 'diamond');
+    svg += markerSvg('TANGENCY (MAX SHARPE, rf ' + (rf * 100).toFixed(2) + '%)', a.tangency, '#4ade80', 'triangle');
+    svg += markerSvg('CURRENT', a.current, '#fb923c', 'circle');
+    svg += '</svg>';
+
+    /* legend */
+    const leg = [
+      ['#fb923c', '● CURRENT'], ['#4ade80', '▲ TANGENCY'], ['#fbbf24', '◆ MIN VAR'], ['#a78bfa', '■ RISK PARITY'],
+      ['rgba(230,237,243,0.9)', '— FRONTIER'], ['#5b8fc4', '· RANDOM PORTFOLIOS (brighter = higher Sharpe)'],
+    ].map(l => '<span style="color:' + l[0] + ';margin-right:0.7em;white-space:nowrap">' + l[1] + '</span>').join('');
+    return '<div class="ptf-var-wrap">' + svg + '</div><div style="font-size:0.62rem;padding:0.15rem 0.3rem">' + leg + '</div>';
+  }
+
+  function renderFrontier() {
+    const panel = _body.querySelector('#ptfFrontierPanel');
+    if (!panel) return;
+    const fr = DATA?.frontier;
+    const accts = fr?.results || [];
+    if (!accts.length) { panel.innerHTML = '<div class="empty">no frontier data</div>'; return; }
+
+    if (!_frTab || !accts.find(x => x.account_name === _frTab)) _frTab = accts[0].account_name;
+    const a = accts.find(x => x.account_name === _frTab) || accts[0];
+    const cur = a.current || {};
+
+    const tabs = accts.map(x =>
+      '<button class="ptf-tab' + (x.account_name === _frTab ? ' active' : '') + '" data-name="' + escH(x.account_name) + '">' +
+        escH(x.account_name.split('(')[0].trim()) + '</button>'
+    ).join('');
+
+    const ex = cur.excess_risk;
+    const exCls = ex == null ? '' : ex > 0.05 ? 'num-dn' : ex <= 0.02 ? 'num-up' : '';
+    const chips =
+      '<div style="display:flex;gap:0.6rem;flex-wrap:wrap;font-size:0.68rem;padding:0.25rem 0.3rem">' +
+        '<span class="chip">RET ' + (cur.ret * 100).toFixed(1) + '%</span>' +
+        '<span class="chip">RISK ' + (cur.risk * 100).toFixed(1) + '%</span>' +
+        '<span class="chip">SHARPE ' + (cur.sharpe != null ? cur.sharpe.toFixed(2) : '—') + '</span>' +
+        (ex != null ? '<span class="chip ' + exCls + '">EXCESS RISK +' + (ex * 100).toFixed(1) + 'pp vs frontier</span>' : '') +
+      '</div>';
+
+    /* weights table: current vs optimal portfolios */
+    const marks = [['CUR', cur], ['MVP', a.mvp], ['TAN', a.tangency], ['RP', a.risk_parity]].filter(m => m[1]);
+    const rows = (a.tickers || []).map(t => {
+      const st = (a.asset_stats || {})[t] || {};
+      return '<tr><td class="tk clickable" data-tk="' + escH(t) + '">' + escH(t) + '</td>' +
+        '<td class="mono">' + (st.ret != null ? (st.ret * 100).toFixed(1) + '%' : '—') + '</td>' +
+        '<td class="mono">' + (st.risk != null ? (st.risk * 100).toFixed(1) + '%' : '—') + '</td>' +
+        marks.map(m => {
+          const w = (m[1].weights || {})[t];
+          return '<td class="mono">' + (w ? (w * 100).toFixed(1) : '·') + '</td>';
+        }).join('') + '</tr>';
+    }).join('');
+
+    const notes = 'Window ' + escH(a.window?.start || '?') + ' → ' + escH(a.window?.end || '?') + ' · ' + a.common_days +
+      'd · long-only · risky holdings only' +
+      ((a.excluded_short_history || []).length ? ' · excluded: ' + a.excluded_short_history.map(e => escH(e.ticker) + ' (' + e.days + 'd)').join(', ') : '') +
+      (!a.tangency && a.tangency_note ? '. Tangency ' + escH(a.tangency_note) : '') +
+      '. E[r] = historical means (weakest input); band = 5–95% block-bootstrap. Diagnostic, not a rebalance prescription.';
+
+    panel.innerHTML =
+      '<div class="ptf-tab-strip">' + tabs + '</div>' +
+      chips +
+      buildFrontierChart(a, fr.risk_free_rate || 0) +
+      '<div class="tbl-wrap"><table class="tbl-dense">' +
+        '<thead><tr><th>TICKER</th><th>RET</th><th>VOL</th>' + marks.map(m => '<th>' + m[0] + '</th>').join('') + '</tr></thead>' +
+        '<tbody>' + rows + '</tbody></table></div>' +
+      '<div style="font-size:0.62rem;color:var(--fg-faint);padding:0.3rem">' + notes + '</div>';
+
+    panel.querySelectorAll('.ptf-tab').forEach(tab => {
+      tab.addEventListener('click', () => { _frTab = tab.dataset.name; renderFrontier(); });
+    });
+    panel.querySelectorAll('.tk.clickable').forEach(el => {
+      el.addEventListener('click', () => { if (el.dataset.tk && window.OC_OPEN_MODULE) window.OC_OPEN_MODULE('stock-analysis', { ticker: el.dataset.tk }); });
+    });
+  }
+
   /* ── Render: Cash & P&L ledger ───────────────────────────── */
   function renderLedger() {
     const panel = _body.querySelector('#ptfLedgerPanel');
@@ -1041,6 +1207,7 @@
     renderHoldings();
     renderVaR();
     renderMCR();
+    renderFrontier();
     renderLedger();
     renderTransactions();
     renderFundamentals();
@@ -1115,6 +1282,11 @@
       '<div class="mod-panel">' +
         '<div class="mod-panel-title">VALUE AT RISK · 95% CONFIDENCE</div>' +
         '<div id="ptfVarPanel"></div>' +
+      '</div>' +
+
+      '<div class="mod-panel">' +
+        '<div class="mod-panel-title">EFFICIENT FRONTIER · DIAGNOSTIC</div>' +
+        '<div id="ptfFrontierPanel"></div>' +
       '</div>' +
 
       '<div class="mod-panel">' +
