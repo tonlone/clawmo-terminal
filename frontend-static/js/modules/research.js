@@ -37,6 +37,30 @@
       const disc = `<div class="mod-panel" style="padding:7px 12px;border-left:3px solid #60a5fa">
         <div class="small" style="line-height:1.5"><span style="font-weight:700;color:#60a5fa">📄 Reading list, not a signal.</span> ${esc(d.disclaimer || '')}</div></div>`;
 
+      // Candidates panel (triage=novel). Handles populated / empty / keyword-fallback states.
+      let cand;
+      const novel = (d.papers || []).filter((p) => p.triage === 'novel');
+      if (d.tagging_source === 'keyword') {
+        cand = `<div class="mod-panel" style="padding:8px 12px"><div style="font-weight:700;color:#8b949e">🔬 Candidates worth a look</div>
+          <div class="small" style="color:#6e7681;margin-top:3px">Triage unavailable this run (tagging fell back to keywords). Candidates return next successful refresh.</div></div>`;
+      } else if (!novel.length) {
+        const tc = d.triage_counts || {};
+        const untri = tc['untriaged'] || 0;
+        const triaged = Object.keys(tc).reduce((a, k) => a + (k === 'untriaged' ? 0 : tc[k]), 0);
+        cand = `<div class="mod-panel" style="padding:8px 12px"><div style="font-weight:700;color:#8b949e">🔬 Candidates worth a look · 0</div>
+          <div class="small" style="color:#6e7681;margin-top:3px">No papers flagged novel-vs-our-patterns this week — GLM triaged ${esc(triaged)} as overlapping/known/execution-only/infeasible${untri ? '; ' + esc(untri) + ' not triaged' : ''}. Normal outcome; the funnel is working.</div></div>`;
+      } else {
+        const items = novel.map((p) => {
+          const c = FAM_COLOR[p.family] || '#8b949e';
+          const chip = `<span style="display:inline-block;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;background:${c}22;color:${c};margin-right:5px">${esc(FAM_LABEL[p.family] || p.family)}</span>`;
+          return `<div style="padding:5px 0;border-top:1px solid #21262d">${chip}<a href="${esc(p.link)}" target="_blank" rel="noopener" style="color:#e6edf3;font-weight:600;text-decoration:none">${esc(p.title)}</a>${p.triage_note ? `<div class="small" style="color:#8b949e;margin-top:2px">${esc(p.triage_note)}</div>` : ''}</div>`;
+        }).join('');
+        cand = `<div class="mod-panel" style="padding:8px 12px;border-left:3px solid #4ade80;background:rgba(74,222,128,0.05)">
+          <div style="font-weight:800;color:#4ade80">🔬 Candidates worth a look · ${novel.length}</div>
+          <div class="small" style="color:#6e7681;margin:3px 0 5px;line-height:1.5">Potentially novel vs our patterns + buildable from our data. First-pass filter, NOT a verdict — each needs a probe + review first.</div>
+          ${items}</div>`;
+      }
+
       const card = (name, val, meta) => `<div class="acct-card"><div class="acct-name">${esc(name)}</div>
         <div class="acct-val"><span class="mono">${esc(val)}</span></div>
         <div class="acct-meta"><span class="small">${esc(meta)}</span></div></div>`;
@@ -69,7 +93,7 @@
         Score: 3=directly actionable · 2=useful · 1=tangential · 0=theory (LLM opinion, not a metric). ${esc(d.methodology || '')}<br>
         Source: arXiv q-fin. Snapshot ${esc(d.generated_at || '')}.</div>`;
 
-      body.innerHTML = disc + kpis + (rows || '<div class="small">No papers.</div>') + note;
+      body.innerHTML = disc + cand + kpis + (rows || '<div class="small">No papers.</div>') + note;
     } catch (e) {
       body.innerHTML = `<div class="mod-err">Research radar error: ${esc((e && e.message) || e)}</div>`;
     }
