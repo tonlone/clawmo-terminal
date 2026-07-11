@@ -543,68 +543,6 @@
     return { svg, caption };
   }
 
-  // T3 — Bootstrap path-stats "Stress Test" panel. Mirrors signals.html
-  // renderStressTest (same fields, same legend, same FRAGILE-first ordering).
-  // PURE PRESENTATION over pf_boot_*/ret_boot_*/dd_boot_*/boot_fragile/boot_capped
-  // (block_bootstrap_pathstats — populated by the Saturday weekly backtest since 2026-07-04).
-  // Grade = adaptive grade w/ static-seed fallback, SAME semantics as the web panel
-  // (unlike the scatter above, which deliberately uses the static seed on both surfaces).
-  function buildStressTest(stats, adaptiveGrades) {
-    const rows = (stats || []).filter(s => s.pf_boot_p5 != null);
-    if (!rows.length) return '';  // pre-07-04 JSON or no data: omit the panel entirely
-    const excluded = (stats || []).filter(s => s.pf_boot_p5 == null).map(s => s.signal_type);
-    const gradeOf = (k) => (adaptiveGrades && adaptiveGrades[k] && adaptiveGrades[k].grade) || VG_PATTERN_GRADES[k] || '–';
-    const pf5 = (s) => Number.isFinite(s.pf_boot_p5) ? s.pf_boot_p5 : 0;
-    rows.sort((a, b) => {
-      if (!!a.boot_fragile !== !!b.boot_fragile) return a.boot_fragile ? -1 : 1;
-      return pf5(a) - pf5(b);
-    });
-    const f2 = (v) => v != null ? v.toFixed(2) : '–';
-    const pfHex = (v) => v >= 1.2 ? '#4ade80' : v >= 1.0 ? '#fbbf24' : '#f87171';
-    let body = '';
-    rows.forEach(s => {
-      const g = gradeOf(s.signal_type);
-      let badge = s.boot_fragile
-        ? '<span style="color:#f87171;font-weight:700">FRAGILE</span>'
-        : '<span style="color:#4ade80;font-weight:700">SOLID</span>';
-      if (s.boot_capped) badge += ' <span style="color:#fbbf24;cursor:help" title="Sample exceeded the 50K-trade bootstrap cap: all percentiles computed on a single seeded sub-window — treat as approximate, bias direction not guaranteed">⚠capped</span>';
-      body += `<tr>
-        <td class="pat">${prettyPat(s.signal_type)}</td>
-        <td style="color:${VG_GRADE_HEX[g] || 'var(--fg-dim)'};font-weight:700">${g}</td>
-        <td>${badge}</td>
-        <td class="num mono"><b style="color:${pfHex(s.pf_boot_p5)}">${f2(s.pf_boot_p5)}</b> / ${f2(s.pf_boot_p50)} / ${f2(s.pf_boot_p95)}</td>
-        <td class="num mono">${f2(s.ret_boot_p50)}% (${f2(s.ret_boot_p5)}…${f2(s.ret_boot_p95)})</td>
-        <td class="num mono">${f2(s.dd_boot_p50)}% (${f2(s.dd_boot_p5)}…${f2(s.dd_boot_p95)})</td>
-      </tr>`;
-    });
-    const caption =
-      '<b style="color:#f87171">FRAGILE</b> = 5th-percentile bootstrap PF &lt; 1.0 — more than 5% of resampled paths lose money. <b style="color:#4ade80">SOLID</b> = even the P5 path stays profitable. ' +
-      '<b>P5/P50/P95</b> = percentiles over 5,000 moving-block bootstrap resamples of the pattern\'s own per-trade returns (raw, not mean-centered — a tail/path lens, not a significance test; significance is the funnel\'s FDR bar above). ' +
-      '<b>Max DD is "trade-sequence" drawdown</b>: assumes every trade compounds back-to-back at 100% allocation, so for frequently-firing or overlapping patterns it OVERSTATES drawdown — a bias toward FRAGILE, the conservative direction. NOT a portfolio drawdown. ' +
-      '<b style="color:#fbbf24">⚠capped</b> = trade series exceeded the 50K bootstrap cap; percentiles computed on one seeded contiguous sub-window — window-conditioned approximation, bias direction not guaranteed. ' +
-      'Grade = current adaptive grade (Adaptive Pattern Grades below). ' +
-      (excluded.length ? '<br><span style="color:var(--fg-dim)">' + excluded.length + ' patterns not shown: externally-published patterns (their publishers haven\'t adopted path-stats yet) and patterns with &lt;20 closed backtest trades: ' + escSig(excluded.join(', ')) + '.</span>' : '');
-    return `
-      <div class="mod-panel">
-        <div class="mod-panel-title">BOOTSTRAP STRESS TEST <span class="mod-panel-sub">block-bootstrap path percentiles · recomputed each Saturday backtest</span></div>
-        <div style="padding:10px 12px">
-          <div style="font-size:11px;color:var(--fg-dim);margin-bottom:9px;line-height:1.6">Each pattern's own closed backtest trades are resampled 5,000&times; in contiguous date-ordered blocks; the profit factor, average trade return, and max drawdown of every resampled path are recorded. If even the <b>5th-percentile path</b> keeps PF &gt; 1.0 the edge survives unlucky orderings; if not, the pattern is flagged <b style="color:#f87171">FRAGILE</b>.</div>
-          <div class="tbl-wrap">
-            <table class="tbl-dense">
-              <thead><tr>
-                <th>PATTERN</th><th>GD</th><th>VERDICT</th>
-                <th class="num" title="5th / 50th / 95th percentile profit factor across 5,000 resampled trade orderings">PF P5/P50/P95</th>
-                <th class="num" title="Average return per trade (%), P50 with 5th–95th percentile band">AVG RET P50 (P5…P95)</th>
-                <th class="num" title="Trade-sequence max drawdown, shown as negative %: back-to-back 100% compounding — overstates for overlapping patterns (conservative)">MAX DD P50 (P5…P95)</th>
-              </tr></thead>
-              <tbody>${body}</tbody>
-            </table>
-          </div>
-          <div style="font-size:10px;color:var(--fg-dim);margin-top:7px;line-height:1.6">${caption}</div>
-        </div>
-      </div>`;
-  }
-
   // Outcome label/color — mirrors signals.html outcomeMap. 7 canonical outcomes from update-trade-status.py.
   const OUTCOME_MAP = {
     'tp_hit':          { label: 'Take Profit',     color: 'var(--up, #4ade80)'   },
@@ -832,10 +770,10 @@
       const thColorMap = { NONE: 'num-up', WATCH: 'num-warn', ELEVATED: 'num-warn', HIGH: 'num-dn' };
       const slRatePct = scl.total_closes ? Math.round((scl.sl_rate || 0) * 100) : 0;
       const throttleCard = scl.window_date ? `
-        <div class="sig-macro" title="${escSig(th.active ? (th.reason || '') : 'Stop-outs within normal range — full signal generation. Trailing stops are profit-taking (stop ratcheted up, locking ~+1R since the 2026-07-07 staged-stop lock), weighted 0.15x vs 1.0x for hard SL — a trail-heavy day does not trip this throttle.')}">
+        <div class="sig-macro" title="${escSig(th.active ? (th.reason || '') : 'Stop-outs within normal range — full signal generation')}">
           <div class="sig-macro-lbl">Stop-Out Throttle</div>
           <div class="sig-macro-val mono ${thColorMap[thTier] || ''}">${thLabelMap[thTier] || 'Normal'}</div>
-          <div class="sig-macro-sub mono">${scl.sl_count || 0} SL / ${scl.total_closes || 0} closes · ${slRatePct}% SL${scl.trail_count ? ' · ' + scl.trail_count + ' trail (profit)' : ''}${th.active && th.allowed_grades ? ' · ' + th.allowed_grades.join('/') + ' only' : ''}</div>
+          <div class="sig-macro-sub mono">${scl.sl_count || 0} SL / ${scl.total_closes || 0} closes · ${slRatePct}% SL${th.active && th.allowed_grades ? ' · ' + th.allowed_grades.join('/') + ' only' : ''}</div>
         </div>
       ` : '';
 
@@ -1250,7 +1188,6 @@
       // AI-Pathways cross-ref (§7.A) panels — built over the same fetched JSON, no compute.
       const _vgFunnel  = buildValidationFunnel(backtestStatsArr, qualityGates.passed, adaptiveGrades);
       const _vgScatter = buildValidationScatter(backtestStatsArr, vgGradeOf);
-      const _vgStress  = buildStressTest(backtestStatsArr, adaptiveGrades);
       const validationPanels = `
         <div class="mod-panel">
           <div class="mod-panel-title">STRATEGY VALIDATION FUNNEL <span class="mod-panel-sub">illustrative decomposition across our statistical bars</span></div>
@@ -1266,7 +1203,6 @@
             <div style="font-size:10px;color:var(--fg-dim);margin-top:7px;line-height:1.6">${_vgScatter.caption}</div>
           </div>
         </div>
-        ${_vgStress}
       `;
       const backtestContent = `
         ${validationPanels}
@@ -1448,8 +1384,6 @@
                 <span><b>TREND</b> — recent win rate vs earlier period win rate</span>
               </span>
               &#128274; regime-locked — pattern only fires in its designated regime &bull; ACTIVE/INACTIVE badge shows current status &bull; ⚠ = grade was downgraded by regime context
-              <span style="display:block;margin-top:0.3rem"><b>Q-&lt;tier&gt;</b> — quarantine severity: <b>Q-mild</b> live PF 0.8–1.0 (60-day + 20 closed paper trades) &bull; <b>Q-moderate</b> live PF 0.5–0.8 or a 5+ loss streak (3-day + 3 paper) &bull; <b>Q-severe</b> live PF &lt; 0.5 (5-day + 5 paper; mothballed if PF still &lt; 0.7 after quarantine)</span>
-              <span style="display:block;margin-top:0.3rem;color:var(--fg-dim)">Paper-trade policy (mixed by column): LIVE PF / LIVE WR / AVG RET / TOTAL P&amp;L <b>include</b> paper trades (they feed the reactivation blend); EXPECT / SHARPE / MAX DD / DECAY / TREND are <b>real-live-only</b> — don't compute ratios across the two groups.</span>
               <span style="display:block;margin-top:0.35rem;padding-top:0.35rem;border-top:1px solid var(--border);color:var(--fg-dim)">
                 <b style="color:var(--fg)">2026-05-20:</b>
                 Patch A (bos cap 5→15) will increase bos closed-trade count over coming days — Live PF / # column will move accordingly. Patch B/C/D affect vcp / cup_handle / mom_top_decile exit composition. Patch E removes BULL+short bos pollution from the live ledger. Patch F (queued 05-26, sizing 2%→1%) doesn't affect these columns — all PF/WR/Sharpe/decay are direction-agnostic of sizing. <b>pocket_pivot</b> is on track to auto-mothball Saturday 2026-05-23 (paper PF 0.0 over 6 trades — see How It Works tab).
@@ -1900,7 +1834,7 @@
               <thead><tr>
                 <th>TICKER</th><th>PATTERN</th><th>DIR</th><th>EXIT</th>
                 <th class="num">HOLD</th><th class="num">ENTRY</th><th class="num">EXIT $</th>
-                <th class="num">RET %</th><th class="num">P&amp;L $</th><th title="How the trade closed. tp_hit = take-profit reached · sl_hit = original stop-loss hit (Chandelier stage 0) · trail_stop = trail-stop fired after stop moved up (stages 1-3: +1.0R lock, +1R, peak−3ATR — stage-1 lock breakeven→+0.5R 2026-06-20, +0.5R→+1.0R 2026-07-07 per the extended staged-stop grid; pre-07-07 locked trades keep +0.5R) · early_exit = early-exit model triggered (primary for VCP / Cup &amp; Handle since Patch D 2026-05-20: 60%+ of target hit in <40% of time) · expired = full holding window elapsed without TP/SL · regime_exit = confirmed market regime contradicted trade direction (long closed on locked BEAR, short closed on locked BULL) · exhaustion_exit = parabolic-exhaustion overlay (Luk #3, longs only, since 2026-05-26: price >2.5σ above SMA21 + 5 consecutive higher closes with daily range >1.5×ATR + RSI>80).">OUTCOME</th>
+                <th class="num">RET %</th><th class="num">P&amp;L $</th><th title="How the trade closed. tp_hit = take-profit reached · sl_hit = original stop-loss hit (Chandelier stage 0) · trail_stop = trail-stop fired after stop moved up (stages 1-3: +0.5R lock, +1R, peak−3ATR — stage-1 tightened from breakeven to +0.5R lock 2026-06-20 per the staged-stop A/B; see Trailing Stop 2026-05-06) · early_exit = early-exit model triggered (primary for VCP / Cup &amp; Handle since Patch D 2026-05-20: 60%+ of target hit in <40% of time) · expired = full holding window elapsed without TP/SL · regime_exit = confirmed market regime contradicted trade direction (long closed on locked BEAR, short closed on locked BULL) · exhaustion_exit = parabolic-exhaustion overlay (Luk #3, longs only, since 2026-05-26: price >2.5σ above SMA21 + 5 consecutive higher closes with daily range >1.5×ATR + RSI>80).">OUTCOME</th>
               </tr></thead>
               <tbody>${closedRows || '<tr><td colspan="10" class="empty">no closed trades yet</td></tr>'}</tbody>
             </table>
@@ -1926,12 +1860,9 @@
       }).join('');
       const howContent = `
         <div class="mod-panel">
-          <div class="mod-panel-title">RECENT CHANGES · 2026-07-07 staged stop tightened to +1.0R lock (LIVE; backtest PFs re-baseline at the 07-11 Saturday run — history across 07-07 not comparable) · analyst_upgrade_drift DROPPED (pre-registered rule: live PF 0.0 at n=4) · Bootstrap Stress Test panel added to Backtest tab · 2026-06-30 Backtest tab gains Strategy Validation Funnel + In-Sample/Out-of-Sample "Overfit Graveyard" scatter (AI-Pathways cross-ref; mirrors stocks.clawmo.tech/signals) · 2026-06-25 Liquidity Sweep regraded on live daily-exit model → B→A, now active all regimes (was CAUTION/BEAR-only) · 2026-06-25 earnings_run_up set DORMANT (refreshed backtest PF decayed 1.262→1.185 through the 1.20 gate; weekly re-validation cron watches for recovery) · 2026-06-20 Win Rate label fixed (% profitable, not TP-hit) · staged-stop tightened to +0.5R lock (LIVE) · PEAD published → grade A (LIVE) · cointegration probe (no edge) · F6+F7 risk-overlay shadow · Phase 2 Piece C · F8 long-short + grade-priority</div>
+          <div class="mod-panel-title">RECENT CHANGES · 2026-06-30 Backtest tab gains Strategy Validation Funnel + In-Sample/Out-of-Sample "Overfit Graveyard" scatter (AI-Pathways cross-ref; mirrors stocks.clawmo.tech/signals) · 2026-06-25 Liquidity Sweep regraded on live daily-exit model → B→A, now active all regimes (was CAUTION/BEAR-only) · 2026-06-25 earnings_run_up set DORMANT (refreshed backtest PF decayed 1.262→1.185 through the 1.20 gate; weekly re-validation cron watches for recovery) · 2026-06-20 Win Rate label fixed (% profitable, not TP-hit) · staged-stop tightened to +0.5R lock (LIVE) · PEAD published → grade A (LIVE) · cointegration probe (no edge) · F6+F7 risk-overlay shadow · Phase 2 Piece C · F8 long-short + grade-priority</div>
           <div class="sig-how-meth">
             <div class="sig-how-meth-row" style="border-left:2px solid var(--accent);padding-left:8px">
-              <b>2026-07-07 — staged stop tightened: stage-1 +0.5R → +1.0R lock (LIVE) · analyst_upgrade_drift DROPPED</b> — at the +1R peak the trailing stop now locks the <b>full initial risk (+1.0R)</b> as profit. Decided at the scheduled 07-07 review on the pre-registered extended grid (n=432,942): PF monotone +0.5R 1.203 → +0.75R 1.225 → <b>+1.0R 1.264</b>, ordering held OOS in all 3 splits, loss tail identical across variants (the initial stop owns the tail). Character shift by design: more locked wins, fewer runners. One-shot lock ⇒ trades locked before 07-07 keep their +0.5R stop. <b>⚠ Basis note:</b> live management changed 07-07; published backtest PFs re-baseline at the <b>07-11 Saturday weekly run</b> — PF history spanning 07-07 is not directly comparable. Separately, <code>analyst_upgrade_drift</code> was <b>dropped</b> per its pre-registered rule (live PF 0.0 at n=4, all stopped out); <code>target_upside_top_decile</code> (same data source) unaffected.
-            </div>
-            <div class="sig-how-meth-row">
               <b>2026-06-20 — "Win Rate" now means % PROFITABLE (was mistakenly the TP-hit rate)</b> — the WR column was showing the <b>take-profit-hit rate</b> (% of trades that reached the FULL profit target) and labeling it "win rate". For wide-target patterns that badly understated reality, and it once misled a review. WR now correctly shows <b>% of trades closed profitable</b> (return &gt; 0); the old TP-hit number is preserved as a separate <code>tp_hit_rate</code> (hover the WR cell). So the displayed numbers jump up — e.g. <code>bos</code> 2% → <b>49%</b>, <code>high_tight_flag</code> 7% → <b>86%</b>, <code>pead_drift</code> 4% → <b>60%</b> — same trades, honest label. Fixed at source (<code>backtest.py</code>) + glossary; grading was always on the correct stat, so no grades change.
             </div>
             <div class="sig-how-meth-row">

@@ -1405,7 +1405,7 @@
             <tr><td style="padding:3px 6px;">🌫️ <b>Vega</b></td><td style="padding:3px 6px;">You want a <b>storm</b>: rising IV inflates your premium.</td><td style="padding:3px 6px;">You want <b>calm</b>: IV crush is your payday.</td></tr>
           </tbody>
         </table></div>
-        <div style="font-size:10px;color:var(--fg-dim);margin-top:5px;">Premium = intrinsic + time value · breakeven = strike ± premium · long max-loss = premium paid, short max-gain = premium received. Try the interactive <b><a href="https://stocks.clawmo.tech/gex.html?gexsim=${encodeURIComponent(td.ticker)}" target="_blank" rel="noopener" style="color:var(--accent)">Simulator &amp; Collar builder ↗</a></b> on the stocks GEX page — pre-loaded with ${escapeGex(td.ticker)}.</div>
+        <div style="font-size:10px;color:var(--fg-dim);margin-top:5px;">Premium = intrinsic + time value · breakeven = strike ± premium · long max-loss = premium paid, short max-gain = premium received. Try the interactive <b>Simulator</b> on the stocks GEX page.</div>
       </details>
 
       ${greeksTable}

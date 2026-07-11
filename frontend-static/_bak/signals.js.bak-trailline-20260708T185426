@@ -835,7 +835,7 @@
         <div class="sig-macro" title="${escSig(th.active ? (th.reason || '') : 'Stop-outs within normal range — full signal generation. Trailing stops are profit-taking (stop ratcheted up, locking ~+1R since the 2026-07-07 staged-stop lock), weighted 0.15x vs 1.0x for hard SL — a trail-heavy day does not trip this throttle.')}">
           <div class="sig-macro-lbl">Stop-Out Throttle</div>
           <div class="sig-macro-val mono ${thColorMap[thTier] || ''}">${thLabelMap[thTier] || 'Normal'}</div>
-          <div class="sig-macro-sub mono">${scl.sl_count || 0} SL / ${scl.total_closes || 0} closes · ${slRatePct}% SL${scl.trail_count ? ' · ' + scl.trail_count + ' trail (profit)' : ''}${th.active && th.allowed_grades ? ' · ' + th.allowed_grades.join('/') + ' only' : ''}</div>
+          <div class="sig-macro-sub mono">${scl.sl_count || 0} SL / ${scl.total_closes || 0} closes · ${slRatePct}% SL${th.active && th.allowed_grades ? ' · ' + th.allowed_grades.join('/') + ' only' : ''}</div>
         </div>
       ` : '';
 

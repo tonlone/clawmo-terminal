@@ -61,48 +61,6 @@
           ${items}</div>`;
       }
 
-      // "Methodology worth a look" (2026-07-07, §4b item 1) — triage='method': validation-stack
-      // upgrade papers, NOT trade ideas. Mirrors web renderMethodPanel. Silent pre-schema-v3
-      // (class doesn't exist until the next Sat run) and on keyword-fallback runs.
-      let meth = '';
-      if (Number(d.schema_version) >= 3 && d.tagging_source !== 'keyword') {
-        const method = (d.papers || []).filter((p) => p.triage === 'method');
-        if (!method.length) {
-          meth = `<div class="mod-panel" style="padding:8px 12px"><div style="font-weight:700;color:#8b949e">🧪 Methodology worth a look · 0</div>
-            <div class="small" style="color:#6e7681;margin-top:3px">No papers flagged this week as upgrades to how we validate (overfitting control, bootstrap/CV variants, cost models, regime detection, drawdown estimation). Normal outcome.</div></div>`;
-        } else {
-          const mItems = method.map((p) => {
-            const c = FAM_COLOR[p.family] || '#8b949e';
-            const chip = `<span style="display:inline-block;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;background:${c}22;color:${c};margin-right:5px">${esc(FAM_LABEL[p.family] || p.family)}</span>`;
-            return `<div style="padding:5px 0;border-top:1px solid #21262d">${chip}<a href="${esc(p.link)}" target="_blank" rel="noopener" style="color:#e6edf3;font-weight:600;text-decoration:none">${esc(p.title)}</a>${p.triage_note ? `<div class="small" style="color:#8b949e;margin-top:2px">${esc(p.triage_note)}</div>` : ''}</div>`;
-          }).join('');
-          meth = `<div class="mod-panel" style="padding:8px 12px;border-left:3px solid #a78bfa;background:rgba(167,139,250,0.05)">
-            <div style="font-weight:800;color:#a78bfa">🧪 Methodology worth a look · ${method.length}</div>
-            <div class="small" style="color:#6e7681;margin:3px 0 5px;line-height:1.5">${esc(d.method_disclaimer || 'Not trade ideas — papers that might upgrade how we VALIDATE. First-pass filter, not a verdict.')}</div>
-            ${mItems}</div>`;
-        }
-      }
-
-      // "Overlaps our live book" (2026-07-07, §4b item 2) — collapsed literature-context list.
-      // No schema_version gate (unlike the method panel): 'overlaps' rows exist in v2 JSON
-      // already, so the list is correct on day one; notes (which pattern/question) appear
-      // from schema v3 on — older rows render title-only.
-      let ovl = '';
-      if (d.tagging_source !== 'keyword') {
-        const ov = (d.papers || []).filter((p) => p.triage === 'overlaps');
-        if (ov.length) {
-          const oItems = ov.map((p) => {
-            const c = FAM_COLOR[p.family] || '#8b949e';
-            const chip = `<span style="display:inline-block;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;background:${c}22;color:${c};margin-right:5px">${esc(FAM_LABEL[p.family] || p.family)}</span>`;
-            return `<div style="padding:5px 0;border-top:1px solid #21262d">${chip}<a href="${esc(p.link)}" target="_blank" rel="noopener" style="color:#e6edf3;font-weight:600;text-decoration:none">${esc(p.title)}</a>${p.triage_note ? `<div class="small" style="color:#8b949e;margin-top:2px">touches: ${esc(p.triage_note)}</div>` : ''}</div>`;
-          }).join('');
-          ovl = `<details class="mod-panel" style="padding:8px 12px;cursor:pointer">
-            <summary style="font-weight:700;color:#8b949e">📚 Overlaps our live book · ${ov.length} <span class="small" style="font-weight:400;color:#6e7681">— literature context for patterns/questions we already run (click to expand)</span></summary>
-            <div class="small" style="color:#6e7681;margin:3px 0 5px;line-height:1.5">NOT new ideas — each touches a live pattern or an open question already on our list. Useful for keep/tune/drop discussions of the pattern it names.</div>
-            ${oItems}</details>`;
-        }
-      }
-
       const card = (name, val, meta) => `<div class="acct-card"><div class="acct-name">${esc(name)}</div>
         <div class="acct-val"><span class="mono">${esc(val)}</span></div>
         <div class="acct-meta"><span class="small">${esc(meta)}</span></div></div>`;
@@ -135,7 +93,7 @@
         Score: 3=directly actionable · 2=useful · 1=tangential · 0=theory (LLM opinion, not a metric). ${esc(d.methodology || '')}<br>
         Source: arXiv q-fin. Snapshot ${esc(d.generated_at || '')}.</div>`;
 
-      body.innerHTML = disc + cand + meth + ovl + kpis + (rows || '<div class="small">No papers.</div>') + note;
+      body.innerHTML = disc + cand + kpis + (rows || '<div class="small">No papers.</div>') + note;
     } catch (e) {
       body.innerHTML = `<div class="mod-err">Research radar error: ${esc((e && e.message) || e)}</div>`;
     }
