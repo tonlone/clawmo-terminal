@@ -551,9 +551,6 @@
               <span>P/B</span><span class="mono">${fmt.num(m.price_to_book, 1)}</span>
               <span>P/S</span><span class="mono">${fmt.num(m.price_to_sales, 1)}</span>
               <span>PEG</span><span class="mono">${fmt.num(m.peg_ratio, 2)}</span>
-              <span title="Forward P/E ÷ next fiscal-year consensus EPS growth. <1 cheap-for-growth · ~1 fair · >2 rich. Analyst-estimated (forward), unlike the trailing PEG above. Cyclicals (e.g. semis) look deceptively cheap near a cycle peak.">Fwd PEG</span><span class="mono">${fmt.num(m.forward_peg, 2)}</span>
-              <span title="Consensus next fiscal-year EPS growth (analyst mean${m.expected_eps_growth_n ? ', ' + m.expected_eps_growth_n + ' analysts' : ''}). Denominator of Fwd PEG.">Exp EPS growth</span><span class="mono ${pctCls(m.expected_eps_growth)}">${fmt.pct(m.expected_eps_growth, 0)}</span>
-              <span title="Most recent reported quarter's EPS vs the same quarter a year ago (year-over-year, trailing).">EPS growth (Q)</span><span class="mono ${pctCls(m.earnings_quarterly_growth)}">${fmt.pct(m.earnings_quarterly_growth, 0)}</span>
               <span>EPS</span><span class="mono">${fmt.num(info.eps, 2)}</span>
               <span>Div yield</span><span class="mono">${info.dividend_yield != null ? info.dividend_yield.toFixed(2) + '%' : '—'}</span>
               <span>Rev (B)</span><span class="mono">${fmt.num(m.revenue, 1)}</span>

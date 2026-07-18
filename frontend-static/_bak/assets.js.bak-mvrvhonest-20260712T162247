@@ -228,90 +228,6 @@
     return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:${W}px;height:${H}px"><path d="${d}" fill="none" stroke="${color}" stroke-width="1.1"/></svg>`;
   }
 
-  /* USDT.D (proxy) vs BTC — dual-axis SVG mirror of the crypto.html panel.
-     Left axis = USDT.D % (FIXED 0-15% on both surfaces so the line's visual character is
-     stable across windows/time); right axis = BTC price, linear + auto-min (NOT
-     zero-anchored — BTC spans only ~2.4x here). Dashed line = today's TRUE dominance from
-     CoinGecko, so the proxy's ~2pp overstatement is visible, not just described.
-     DESCRIPTIVE ONLY: the inverse relation is mechanical (BTC is most of the denominator)
-     and has no predictive lead — evidence in compute_usdtd.py's docstring. No signals. */
-  const USDTD_DOM_MIN = 0, USDTD_DOM_BASE_MAX = 15;
-  // The series starts at the 2020-05-11 halving, not 2016 — before ~2019 USDT.D measures
-  // Tether's adoption (0.05% in 2016), not risk appetite, and 4 of the 10 denominator
-  // assets didn't exist yet (compute_usdtd.py's header has the full fence). Keys must
-  // match crypto.html's usdtdSlice.
-  function usdtdSlice(series, key) {
-    if (key === '2024' || key === 'halving') return series.filter(r => r.d >= '2024-04-20');
-    if (key === '2025') return series.filter(r => r.d >= '2025-01-01');
-    if (key === '12m') {
-      const cut = new Date(Date.now() - 365 * 864e5).toISOString().slice(0, 10);
-      return series.filter(r => r.d >= cut);
-    }
-    return series;
-  }
-  // BTC scale follows the SELECTED window's span — mirrors crypto.html: log past 4x (the
-  // 2020-halving window spans ~14.5x and linear squashes the 2020-22 cycle flat), linear
-  // below it (the 2024 window spans ~2.4x, where log is needless friction). Shared by the
-  // chart and its legend so the "log" label can never disagree with the axis actually drawn.
-  function usdtdUseLog(rows) {
-    const btc = (rows || []).map(r => r.btc).filter(v => typeof v === 'number' && v > 0);
-    if (btc.length < 2) return false;
-    return Math.max(...btc) / Math.min(...btc) >= 4;
-  }
-  function buildUsdtdSVG(u, rangeKey) {
-    const rows = usdtdSlice(u.series || [], rangeKey);
-    if (rows.length < 10) return '<div class="pane-empty">No data</div>';
-    const W = 780, H = 210, padL = 34, padR = 44, padT = 10, padB = 20;
-    const dom = rows.map(r => r.dom), btc = rows.map(r => r.btc);
-    const rawMin = Math.min(...btc), rawMax = Math.max(...btc);
-    const useLog = usdtdUseLog(rows);
-    let bMin, bMax;
-    if (useLog) { bMin = rawMin * 0.85; bMax = rawMax * 1.15; }
-    else { const p = (rawMax - rawMin) * 0.08 || 1; bMin = rawMin - p; bMax = rawMax + p; }
-    const trueDom = (u.latest || {}).dom_true != null ? u.latest.dom_true : null;
-    // Fixed 0-15% normally (stable visual character), expanded only if data would clip —
-    // a stablecoin-panic spike is exactly when you'd want to see it. Mirrors crypto.html.
-    const domCeil = Math.max(...dom, trueDom != null ? trueDom : 0);
-    const domMax = domCeil > USDTD_DOM_BASE_MAX ? Math.ceil(domCeil / 5) * 5 : USDTD_DOM_BASE_MAX;
-    const n = rows.length;
-    const sx = i => padL + (i / (n - 1)) * (W - padL - padR);
-    const dy = v => padT + (1 - (v - USDTD_DOM_MIN) / (domMax - USDTD_DOM_MIN)) * (H - padT - padB);
-    const lg = Math.log;
-    const by = useLog
-      ? v => padT + (1 - (lg(v) - lg(bMin)) / (lg(bMax) - lg(bMin))) * (H - padT - padB)
-      : v => padT + (1 - (v - bMin) / (bMax - bMin)) * (H - padT - padB);
-    const pathOf = (arr, yfn) => {
-      let d = '', started = false;
-      arr.forEach((v, i) => {
-        if (typeof v !== 'number' || !isFinite(v)) { started = false; return; }
-        d += (started ? 'L' : 'M') + sx(i).toFixed(1) + ' ' + yfn(v).toFixed(1) + ' '; started = true;
-      });
-      return d;
-    };
-    let trueLine = '';
-    if (trueDom != null && trueDom > USDTD_DOM_MIN && trueDom < domMax) {
-      const y = dy(trueDom).toFixed(1);
-      trueLine = `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="rgba(96,165,250,0.5)" stroke-width="1" stroke-dasharray="4 3"></line>` +
-                 `<text x="${padL + 3}" y="${(+y - 3).toFixed(1)}" fill="rgba(96,165,250,0.8)" font-size="9">true ${trueDom.toFixed(2)}%</text>`;
-    }
-    const domTicks = [0, domMax / 3, (domMax / 3) * 2, domMax].map(v =>
-      `<text x="${padL - 3}" y="${(dy(v) + 3).toFixed(1)}" fill="#60A5FA" font-size="9" text-anchor="end">${v.toFixed(0)}%</text>`).join('');
-    // Log axis needs geometrically-spaced ticks; a linear midpoint would sit wrong.
-    const btcTickVals = useLog
-      ? [bMin, Math.sqrt(bMin * bMax), bMax]
-      : [bMin, (bMin + bMax) / 2, bMax];
-    const btcTicks = btcTickVals.map(v =>
-      `<text x="${W - padR + 3}" y="${(by(v) + 3).toFixed(1)}" fill="#E5B94C" font-size="9">$${(v / 1000).toFixed(0)}k</text>`).join('');
-    const dates = [0, Math.floor((n - 1) / 2), n - 1].map((i, k) =>
-      `<text x="${sx(i).toFixed(1)}" y="${H - 6}" fill="#8b949e" font-size="9" text-anchor="${k === 0 ? 'start' : k === 2 ? 'end' : 'middle'}">${rows[i].d}</text>`).join('');
-    return `<svg class="oc-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-      ${trueLine}
-      <path d="${pathOf(btc, by)}" style="fill:none;stroke:#E5B94C;stroke-width:1.4"></path>
-      <path d="${pathOf(dom, dy)}" style="fill:none;stroke:#60A5FA;stroke-width:1.4"></path>
-      ${domTicks}${btcTicks}${dates}
-    </svg>`;
-  }
-
   async function renderCrypto(body) {
     // Cache full payload so toggle clicks re-render without refetching
     let d = body._cryData;
@@ -322,25 +238,6 @@
       if (!d) {
         d = await fetchJSON(`${BASE}/crypto.json`);
         body._cryData = d;
-      }
-      // usdtd.json is a SEPARATE pipeline (compute_usdtd.py, daily 08:10 ET) — a USDT.D
-      // outage must not blank the whole CRY module, so tolerate null.
-      let usdtd = body._usdtdData;
-      if (usdtd === undefined) {
-        usdtd = await fetchJSON(`${BASE}/usdtd.json`).catch(() => null);
-        body._usdtdData = usdtd;
-      }
-      // 'halving' is the pre-2026-07-14 stored value (when the window started at the 2024
-      // halving) — usdtdSlice still honours it, so an existing user's choice survives.
-      const usdtdRange = localStorage.getItem('oc_cry_usdtd_range') || 'full';
-      // Staleness keys off the DATA date (last row), never generated_at — a no-op run must
-      // not render old data as current. (compute_usdtd.py also refuses to write when its
-      // source lags >4d, so this is belt-and-braces.)
-      let usdtdStale = '';
-      if (usdtd && (usdtd.series || []).length) {
-        const lastD = usdtd.series[usdtd.series.length - 1].d;
-        const ageDays = Math.floor((Date.now() - Date.parse(lastD + 'T00:00:00Z')) / 864e5);
-        if (ageDays > 2) usdtdStale = `<span class="chip chip-warn" style="margin-left:6px">STALE · ${ageDays}d</span>`;
       }
       const g = d.global_stats || {};
       const oi = d.open_interest || {};
@@ -363,20 +260,9 @@
       const cryShowVol   = localStorage.getItem('oc_cry_vol')   !== 'off';  // default on
       const cryShowTrend = localStorage.getItem('oc_cry_trend') !== 'off';  // default on
 
-      const mvrvCtx = onchain.mvrv_context || null;
       const lastMvrv = mvrv.length ? mvrv[mvrv.length - 1].value : null;
-      const mvrvPct = mvrvCtx && mvrvCtx.pct_rank != null ? mvrvCtx.pct_rank : null;
-      let mvrvZone, mvrvLabel;
-      if (mvrvPct != null) {
-        // Distribution-relative standing (percentile since 2012) — NOT a stale fixed
-        // threshold. Consistent with the "tops decay, fixed levels are stale" framing.
-        mvrvZone  = mvrvPct >= 90 ? 'num-dn' : mvrvPct >= 70 ? 'num-warn' : mvrvPct >= 30 ? 'num-up-soft' : 'num-up';
-        mvrvLabel = `${mvrvPct >= 90 ? 'HIGH' : mvrvPct >= 70 ? 'ELEVATED' : mvrvPct >= 30 ? 'MID' : 'LOW'} · ${mvrvPct}th pct`;
-      } else {
-        // Fallback for old cached JSON without mvrv_context.
-        mvrvZone  = lastMvrv == null ? '' : lastMvrv > 3.5 ? 'num-dn' : lastMvrv > 2.5 ? 'num-warn' : lastMvrv > 1 ? 'num-up-soft' : 'num-up';
-        mvrvLabel = lastMvrv == null ? '—' : lastMvrv > 3.5 ? 'TOP ZONE' : lastMvrv > 2.5 ? 'ELEVATED' : lastMvrv > 1 ? 'FAIR' : 'ACCUMULATION';
-      }
+      const mvrvZone = lastMvrv == null ? '' : lastMvrv > 3.5 ? 'num-dn' : lastMvrv > 2.5 ? 'num-warn' : lastMvrv > 1 ? 'num-up-soft' : 'num-up';
+      const mvrvLabel = lastMvrv == null ? '—' : lastMvrv > 3.5 ? 'CYCLE TOP' : lastMvrv > 2.5 ? 'ELEVATED' : lastMvrv > 1 ? 'FAIR' : 'ACCUMULATION';
 
       // Top 10 coins with sparklines + 30d column
       const coins = (d.top_coins || []).slice(0, 10).map(c => {
@@ -487,48 +373,14 @@
             </div>
           ` : ''}
 
-          ${usdtd && (usdtd.series || []).length ? `
-            <div class="mod-panel">
-              <div class="mod-panel-title">
-                USDT DOMINANCE vs BTC · ${usdtd.window_label || ''} · risk-on / risk-off context${usdtdStale}
-                <span class="fin-stmt-toggles" style="margin-left:8px">
-                  ${[['full', '2020 HALVING'], ['2024', '2024 HALVING'], ['12m', '12M'], ['2025', '2025+']].map(([k, lbl]) =>
-                    `<button class="fin-mode-btn cry-usdtd-btn${(usdtdRange === k || (usdtdRange === 'halving' && k === '2024')) ? ' active' : ''}" data-usdtd="${k}">${lbl}</button>`).join('')}
-                </span>
-              </div>
-              <div class="chart-wrap">${buildUsdtdSVG(usdtd, usdtdRange)}</div>
-              <div class="chart-legend">
-                <span><span class="lg-line" style="background:#60A5FA"></span>USDT.D proxy % (left)</span>
-                <span><span class="lg-line" style="background:#E5B94C"></span>BTC price (right${usdtdUseLog(usdtdSlice(usdtd.series || [], usdtdRange)) ? ', log' : ''})</span>
-                <span><span class="lg-line" style="background:rgba(96,165,250,0.5)"></span>true USDT.D today${(usdtd.latest || {}).dom_true != null ? ` (${usdtd.latest.dom_true.toFixed(2)}%)` : ''}</span>
-                <span class="chart-note">
-                  proxy <b>${(usdtd.latest || {}).dom_proxy != null ? usdtd.latest.dom_proxy.toFixed(2) + '%' : '—'}</b>
-                  vs true <b>${(usdtd.latest || {}).dom_true != null ? usdtd.latest.dom_true.toFixed(2) + '%' : '—'}</b>
-                  ${(usdtd.latest || {}).gap_range_pp
-                    ? `(gap ${usdtd.latest.gap_range_pp.min.toFixed(2)}–${usdtd.latest.gap_range_pp.max.toFixed(2)}pp over ${usdtd.latest.gap_range_pp.n}d)`
-                    : ((usdtd.latest || {}).gap_pp != null ? `(gap ${usdtd.latest.gap_pp.toFixed(2)}pp · ${usdtd.latest.gap_basis || ''})` : '')}
-                  · ${(usdtd.latest || {}).date || ''}
-                </span>
-              </div>
-              <div class="chart-note" style="margin-top:4px;line-height:1.5">
-                <b>Context, not a signal.</b> ${usdtd.caveat || ''}
-              </div>
-            </div>
-          ` : ''}
-
           <div class="mod-grid-2">
             ${mvrv.length ? `
               <div class="mod-panel">
                 <div class="mod-panel-title">MVRV RATIO · on-chain valuation · ${mvrv.length} days</div>
                 <div class="chart-wrap">${buildMvrvChart(mvrv)}</div>
                 <div class="chart-legend">
-                  <span class="chart-note">&gt;3.5 top zone · 2.5–3.5 elevated · 1–2.5 fair · &lt;1 accumulation</span>
-                </div>${mvrvCtx && mvrvCtx.current != null ? `
-                <div class="chart-note" style="margin-top:4px;line-height:1.5">
-                  ${(+mvrvCtx.current).toFixed(2)} = <b>${mvrvCtx.pct_rank}th pct</b> since ${(mvrvCtx.first_date||'').slice(0,4)} ·
-                  tops decaying: ${(mvrvCtx.cycle_peaks||[]).filter(p=>!p.current).map(p=>`${p.cycle}≈${(+p.value).toFixed(1)}`).join(' › ')} ·
-                  descriptive over ≈3 cycles, not a signal
-                </div>` : ''}
+                  <span class="chart-note">&gt;3.5 cycle top · 2.5–3.5 elevated · 1–2.5 fair · &lt;1 accumulation</span>
+                </div>
               </div>
             ` : ''}
             ${hashrate.length ? `
@@ -574,7 +426,7 @@
           <div class="mod-panel">
             <div class="mod-panel-title">HOW TO READ THIS DASHBOARD</div>
             <div class="cry-glossary">
-              <p><b>MVRV Ratio</b> — Market Value ÷ Realized Value. Compares BTC market cap to the aggregate cost basis of all coins; <b>1.0</b> = aggregate breakeven. Elevated readings have coincided with cycle tops and <b>&lt;1</b> with accumulation (2018, 2022) — but the top has <b>decayed every cycle</b> (≈5.9 in 2013 → 4.7 in 2017 → 4.0 in 2021), so fixed thresholds are stale. Descriptive context over ≈3 independent cycles, not a predictive signal or sizing input. (The plain ratio, not the Z-Score variant — Z-Score uses a different scale.) Source: CoinMetrics.</p>
+              <p><b>MVRV Ratio</b> — Market Value ÷ Realized Value. Compares BTC market cap to the aggregate cost basis of all coins. <b>&gt;3.5</b> historically marks cycle tops (2013, 2017, 2021). <b>&lt;1</b> marks accumulation zones (2018, 2022). (The plain ratio, not the Z-Score variant — Z-Score uses a different scale.) Source: CoinMetrics.</p>
               <p><b>Hash Rate</b> — Total computational power securing the Bitcoin network (EH/s). Rising = miner confidence + network security. Sustained drops &gt;10% signal miner capitulation — historically a late-stage bear market marker.</p>
               <p><b>Funding Rate</b> — Periodic fee between long/short perp futures traders. <b>Positive</b> = longs pay shorts (bullish positioning, potentially overleveraged). <b>Negative</b> = shorts pay longs (bearish, squeeze setup). Source: OKX.</p>
               <p><b>Long/Short Ratio</b> — Top-trader account ratio. &gt;1 = more accounts long. Extremes are contrarian — crowded long positioning often precedes squeezes.</p>
@@ -611,14 +463,6 @@
           renderCrypto(body);
         });
       }
-
-      // USDT.D window toggle — re-renders from the cached payloads (no refetch)
-      body.querySelectorAll('.cry-usdtd-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          localStorage.setItem('oc_cry_usdtd_range', btn.dataset.usdtd);
-          renderCrypto(body);
-        });
-      });
     } catch (e) { body.innerHTML = `<div class="mod-err">${e.message}</div>`; }
   }
 

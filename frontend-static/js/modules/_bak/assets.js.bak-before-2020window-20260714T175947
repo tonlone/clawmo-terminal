@@ -234,14 +234,9 @@
      zero-anchored — BTC spans only ~2.4x here). Dashed line = today's TRUE dominance from
      CoinGecko, so the proxy's ~2pp overstatement is visible, not just described.
      DESCRIPTIVE ONLY: the inverse relation is mechanical (BTC is most of the denominator)
-     and has no predictive lead — evidence in compute_usdtd.py's docstring. No signals. */
+     and has no predictive lead — see roadmaps/usdtd-btc-panel-2026-07-14.md §1. No signals. */
   const USDTD_DOM_MIN = 0, USDTD_DOM_BASE_MAX = 15;
-  // The series starts at the 2020-05-11 halving, not 2016 — before ~2019 USDT.D measures
-  // Tether's adoption (0.05% in 2016), not risk appetite, and 4 of the 10 denominator
-  // assets didn't exist yet (compute_usdtd.py's header has the full fence). Keys must
-  // match crypto.html's usdtdSlice.
   function usdtdSlice(series, key) {
-    if (key === '2024' || key === 'halving') return series.filter(r => r.d >= '2024-04-20');
     if (key === '2025') return series.filter(r => r.d >= '2025-01-01');
     if (key === '12m') {
       const cut = new Date(Date.now() - 365 * 864e5).toISOString().slice(0, 10);
@@ -249,25 +244,13 @@
     }
     return series;
   }
-  // BTC scale follows the SELECTED window's span — mirrors crypto.html: log past 4x (the
-  // 2020-halving window spans ~14.5x and linear squashes the 2020-22 cycle flat), linear
-  // below it (the 2024 window spans ~2.4x, where log is needless friction). Shared by the
-  // chart and its legend so the "log" label can never disagree with the axis actually drawn.
-  function usdtdUseLog(rows) {
-    const btc = (rows || []).map(r => r.btc).filter(v => typeof v === 'number' && v > 0);
-    if (btc.length < 2) return false;
-    return Math.max(...btc) / Math.min(...btc) >= 4;
-  }
   function buildUsdtdSVG(u, rangeKey) {
     const rows = usdtdSlice(u.series || [], rangeKey);
     if (rows.length < 10) return '<div class="pane-empty">No data</div>';
     const W = 780, H = 210, padL = 34, padR = 44, padT = 10, padB = 20;
     const dom = rows.map(r => r.dom), btc = rows.map(r => r.btc);
-    const rawMin = Math.min(...btc), rawMax = Math.max(...btc);
-    const useLog = usdtdUseLog(rows);
-    let bMin, bMax;
-    if (useLog) { bMin = rawMin * 0.85; bMax = rawMax * 1.15; }
-    else { const p = (rawMax - rawMin) * 0.08 || 1; bMin = rawMin - p; bMax = rawMax + p; }
+    let bMin = Math.min(...btc), bMax = Math.max(...btc);
+    const bPad = (bMax - bMin) * 0.08 || 1; bMin -= bPad; bMax += bPad;
     const trueDom = (u.latest || {}).dom_true != null ? u.latest.dom_true : null;
     // Fixed 0-15% normally (stable visual character), expanded only if data would clip —
     // a stablecoin-panic spike is exactly when you'd want to see it. Mirrors crypto.html.
@@ -276,10 +259,7 @@
     const n = rows.length;
     const sx = i => padL + (i / (n - 1)) * (W - padL - padR);
     const dy = v => padT + (1 - (v - USDTD_DOM_MIN) / (domMax - USDTD_DOM_MIN)) * (H - padT - padB);
-    const lg = Math.log;
-    const by = useLog
-      ? v => padT + (1 - (lg(v) - lg(bMin)) / (lg(bMax) - lg(bMin))) * (H - padT - padB)
-      : v => padT + (1 - (v - bMin) / (bMax - bMin)) * (H - padT - padB);
+    const by = v => padT + (1 - (v - bMin) / (bMax - bMin)) * (H - padT - padB);
     const pathOf = (arr, yfn) => {
       let d = '', started = false;
       arr.forEach((v, i) => {
@@ -296,11 +276,7 @@
     }
     const domTicks = [0, domMax / 3, (domMax / 3) * 2, domMax].map(v =>
       `<text x="${padL - 3}" y="${(dy(v) + 3).toFixed(1)}" fill="#60A5FA" font-size="9" text-anchor="end">${v.toFixed(0)}%</text>`).join('');
-    // Log axis needs geometrically-spaced ticks; a linear midpoint would sit wrong.
-    const btcTickVals = useLog
-      ? [bMin, Math.sqrt(bMin * bMax), bMax]
-      : [bMin, (bMin + bMax) / 2, bMax];
-    const btcTicks = btcTickVals.map(v =>
+    const btcTicks = [bMin, (bMin + bMax) / 2, bMax].map(v =>
       `<text x="${W - padR + 3}" y="${(by(v) + 3).toFixed(1)}" fill="#E5B94C" font-size="9">$${(v / 1000).toFixed(0)}k</text>`).join('');
     const dates = [0, Math.floor((n - 1) / 2), n - 1].map((i, k) =>
       `<text x="${sx(i).toFixed(1)}" y="${H - 6}" fill="#8b949e" font-size="9" text-anchor="${k === 0 ? 'start' : k === 2 ? 'end' : 'middle'}">${rows[i].d}</text>`).join('');
@@ -330,9 +306,7 @@
         usdtd = await fetchJSON(`${BASE}/usdtd.json`).catch(() => null);
         body._usdtdData = usdtd;
       }
-      // 'halving' is the pre-2026-07-14 stored value (when the window started at the 2024
-      // halving) — usdtdSlice still honours it, so an existing user's choice survives.
-      const usdtdRange = localStorage.getItem('oc_cry_usdtd_range') || 'full';
+      const usdtdRange = localStorage.getItem('oc_cry_usdtd_range') || 'halving';
       // Staleness keys off the DATA date (last row), never generated_at — a no-op run must
       // not render old data as current. (compute_usdtd.py also refuses to write when its
       // source lags >4d, so this is belt-and-braces.)
@@ -492,14 +466,14 @@
               <div class="mod-panel-title">
                 USDT DOMINANCE vs BTC · ${usdtd.window_label || ''} · risk-on / risk-off context${usdtdStale}
                 <span class="fin-stmt-toggles" style="margin-left:8px">
-                  ${[['full', '2020 HALVING'], ['2024', '2024 HALVING'], ['12m', '12M'], ['2025', '2025+']].map(([k, lbl]) =>
-                    `<button class="fin-mode-btn cry-usdtd-btn${(usdtdRange === k || (usdtdRange === 'halving' && k === '2024')) ? ' active' : ''}" data-usdtd="${k}">${lbl}</button>`).join('')}
+                  ${[['halving', 'HALVING'], ['12m', '12M'], ['2025', '2025+']].map(([k, lbl]) =>
+                    `<button class="fin-mode-btn cry-usdtd-btn${usdtdRange === k ? ' active' : ''}" data-usdtd="${k}">${lbl}</button>`).join('')}
                 </span>
               </div>
               <div class="chart-wrap">${buildUsdtdSVG(usdtd, usdtdRange)}</div>
               <div class="chart-legend">
                 <span><span class="lg-line" style="background:#60A5FA"></span>USDT.D proxy % (left)</span>
-                <span><span class="lg-line" style="background:#E5B94C"></span>BTC price (right${usdtdUseLog(usdtdSlice(usdtd.series || [], usdtdRange)) ? ', log' : ''})</span>
+                <span><span class="lg-line" style="background:#E5B94C"></span>BTC price (right)</span>
                 <span><span class="lg-line" style="background:rgba(96,165,250,0.5)"></span>true USDT.D today${(usdtd.latest || {}).dom_true != null ? ` (${usdtd.latest.dom_true.toFixed(2)}%)` : ''}</span>
                 <span class="chart-note">
                   proxy <b>${(usdtd.latest || {}).dom_proxy != null ? usdtd.latest.dom_proxy.toFixed(2) + '%' : '—'}</b>

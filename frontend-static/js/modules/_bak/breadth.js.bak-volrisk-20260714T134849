@@ -321,12 +321,11 @@
   async function render(body) {
     body.innerHTML = `<div class="mod-loading">Loading market breadth…</div>`;
     try {
-      const [br, ind, mon, rot, vr] = await Promise.all([
+      const [br, ind, mon, rot] = await Promise.all([
         fetchJSON(BREADTH_URL),
         fetchJSON(INDUSTRY_URL),
         fetchJSON(MONITOR_URL).catch(() => null),
         fetchJSON(ROTATION_URL).catch(() => null),
-        fetchJSON('https://stocks.clawmo.tech/data/vol-risk.json').catch(() => null),
       ]);
 
       const periods = br.ma_periods || [50, 100, 200];
@@ -480,8 +479,6 @@
           </div>
         </div>
 
-        ${renderEwbdPanel(vr)}
-
         ${renderStockbeePanel(mon)}
 
         <div class="mod-grid-2">
@@ -567,41 +564,6 @@
   /* ── Stockbee Market Monitor ────────────────────────────────
      T2108 + 4%-movers + 5d/10d ratio + monthly 25/50% extremes.
      Source: /data/monitor.json (82 days, updated daily by stockbee pipeline). */
-  /* ── Equal-Weight Breadth Divergence (RSP vs SPY) — mirror of breadth.html.
-     Same data (vol-risk.json), hand-rolled SVG via OC_CHART.lineAbs. */
-  function ewbdColor(regime) {
-    const r = (regime || '').toLowerCase();
-    if (/concentrated|hidden/.test(r)) return '#DC2626';
-    if (/narrowing/.test(r))           return '#FB923C';
-    if (/broad/.test(r))               return '#5BB77A';
-    return 'var(--fg-dim)';
-  }
-  function renderEwbdPanel(vr) {
-    const bd = (vr && vr.breadth_divergence) || {};
-    if (bd.gap == null || !bd.history || !bd.history.length) return '';
-    const col = ewbdColor(bd.regime);
-    const labels = bd.history.map(r => r[0].slice(5));
-    const chart = window.OC_CHART ? window.OC_CHART.lineAbs([
-      { name: 'RSP (avg stock)', values: bd.history.map(r => r[1]), color: '#A78BFA' },
-      { name: 'SPY (index)',     values: bd.history.map(r => r[2]), color: '#60A5FA' },
-    ], { gridY: 3, xLabels: labels, yFmt: v => v.toFixed(0) + '%' }) : '';
-    return `<div class="mod-panel">
-      <div class="mod-panel-title">EQUAL-WEIGHT BREADTH DIVERGENCE · RSP vs SPY · descriptive, not a signal</div>
-      <div style="font-size:11px;margin-bottom:6px">
-        <span style="color:${col};font-weight:700">${bd.regime}</span>
-        <span style="color:var(--fg-dim)"> · avg stock (RSP) </span><b class="mono">${bd.rsp_drawdown}%</b>
-        <span style="color:var(--fg-dim)"> vs index (SPY) </span><b class="mono">${bd.spy_drawdown}%</b>
-        <span style="color:var(--fg-dim)"> from 52-wk high · gap </span><b class="mono" style="color:${col}">${bd.gap > 0 ? '+' : ''}${bd.gap}pp</b>${bd.gap_pct_rank != null ? ` <span style="color:var(--fg-dim)">(${bd.gap_pct_rank}%ile)</span>` : ''}
-      </div>
-      <div class="chart-wrap">${chart}</div>
-      <div class="chart-legend">
-        <span><span class="lg-line" style="background:#A78BFA"></span>RSP drawdown (equal-weight, the average stock)</span>
-        <span><span class="lg-line" style="background:#60A5FA"></span>SPY drawdown (cap-weight index)</span>
-        <span class="chart-note">RSP more underwater than SPY = a few mega-caps masking broad weakness</span>
-      </div>
-    </div>`;
-  }
-
   function renderStockbeePanel(mon) {
     if (!mon || !mon.data || !mon.data.length) {
       return `<div class="mod-panel">

@@ -140,13 +140,12 @@
   async function renderSentiment(body, ctx) {
     body.innerHTML = `<div class="mod-loading">Loading sentiment…</div>`;
     try {
-      const [d, preds, div, pc, vr, si] = await Promise.all([
+      const [d, preds, div, pc, vr] = await Promise.all([
         fetchJSON(`${BASE}/sentiment.json`),
         fetchJSON(`${BASE}/predictions.json`).catch(() => null),
         fetchJSON(`${BASE}/polymarket-divergence.json`).catch(() => ({ pairs: [] })),
         fetchJSON(`${BASE}/putcall.json`).catch(() => null),
         fetchJSON(`${BASE}/vol-risk.json`).catch(() => null),
-        fetchJSON(`${BASE}/short-interest.json`).catch(() => null),
       ]);
       window._senPutCall = pc;
       // Build divergence index for in-row spread pills (POL module owns the data)
@@ -345,8 +344,6 @@
 
           ${pc ? `<div class="mod-panel" data-pc-panel>${buildPutCallPanel(pc, 'total')}</div>` : ''}
 
-          ${si && (si.history || []).length ? `<div class="mod-panel">${buildShortIntPanel(si)}</div>` : ''}
-
           ${preds && preds.categories ? renderPredictionsPanel(preds, initialCat) : ''}
         </div>
       `;
@@ -520,80 +517,6 @@
       <div style="margin-top:6px">${pcAccTable(pc.extremes.equity)}</div>
       <div style="font-size:9px;color:var(--fg-dim);margin-top:6px;line-height:1.5"><span style="color:#5BB77A">green ▲ = fear</span> (raw ≥ fear line, Total 1.20 → contrarian BUY, bottoms); <span style="color:#DC2626">red ▼ = greed</span> (raw ≤ greed line, Total 0.70 → contrarian SELL, tops). Deduped into episodes. Forward SPY return · hit-rate · n. <span style="color:#FB923C">*</span>=n&lt;12. Descriptive not predictive — ~6.7y ≈ one cycle, 3 horizons untested for multiplicity. Equity-only = traditional gauge; Total matches MacroMicro.</div>`;
   }
-  /* ── Aggregate Short Interest (mirror of stocks sentiment.html SII panel) ──
-     Same data (short-interest.json), same framing, same caveats. DESCRIPTIVE ONLY —
-     no signals coupling, no predictive claim. Hand-rolled SVG (no Chart.js here). */
-  function buildShortIntSVG(si) {
-    const hist = si.history || [];
-    if (hist.length < 2) return '<div class="mod-err">no history</div>';
-    const W = 700, H = 200, padL = 34, padR = 34, padT = 8, padB = 18;
-    const z = hist.map(h => h.sii_z);
-    const spy = hist.map(h => (typeof h.spy === 'number' ? h.spy : null));
-    const zvals = z.filter(v => typeof v === 'number');
-    let zMin = Math.min(...zvals), zMax = Math.max(...zvals);
-    const zPad = (zMax - zMin) * 0.05 || 0.1; zMin -= zPad; zMax += zPad;
-    const svals = spy.filter(v => typeof v === 'number');
-    const hasSpy = svals.length > 1;
-    const sMin = hasSpy ? Math.min(...svals) : 0, sMax = hasSpy ? Math.max(...svals) : 1;
-    const n = hist.length;
-    const sx = i => padL + (i / (n - 1)) * (W - padL - padR);
-    const zy = v => padT + (1 - (v - zMin) / (zMax - zMin)) * (H - padT - padB);
-    const syy = v => padT + (1 - (v - sMin) / (sMax - sMin)) * (H - padT - padB);
-    const pathOf = (arr, yfn) => {
-      let d = '', started = false;
-      arr.forEach((v, i) => { if (typeof v !== 'number') { started = false; return; }
-        d += (started ? 'L' : 'M') + sx(i).toFixed(1) + ' ' + yfn(v).toFixed(1) + ' '; started = true; });
-      return d;
-    };
-    // zero line = the detrended mean
-    const zeroY = (zMin <= 0 && zMax >= 0) ? zy(0) : null;
-    const zeroLine = zeroY == null ? '' :
-      `<line x1="${padL}" y1="${zeroY.toFixed(1)}" x2="${W - padR}" y2="${zeroY.toFixed(1)}" stroke="rgba(148,163,184,0.35)" stroke-width="1" stroke-dasharray="4 3"></line>`;
-    const yTicks = [zMin, (zMin + zMax) / 2, zMax].map(v =>
-      `<text x="${padL - 3}" y="${(zy(v) + 3).toFixed(1)}" fill="#f472b6" font-size="9" text-anchor="end">${v.toFixed(1)}</text>`).join('');
-    const sTicks = !hasSpy ? '' : [sMin, sMax].map(v =>
-      `<text x="${W - padR + 2}" y="${(syy(v) + 3).toFixed(1)}" fill="var(--fg-dim)" font-size="9">${v.toFixed(0)}</text>`).join('');
-    const xTicks = [0, Math.floor(n / 2), n - 1].map(i => {
-      const anchor = i === 0 ? 'start' : (i === n - 1 ? 'end' : 'middle');
-      return `<text x="${sx(i).toFixed(1)}" y="${H - 5}" fill="#8b949e" font-size="9" text-anchor="${anchor}" font-family="monospace">${(hist[i].date || '').slice(0, 7)}</text>`;
-    }).join('');
-    const spyPath = hasSpy
-      ? `<path d="${pathOf(spy, syy)}" style="fill:none;stroke:rgba(139,148,158,0.8);stroke-width:1"></path>` : '';
-    return `<svg class="oc-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-      ${zeroLine}${spyPath}
-      <path d="${pathOf(z, zy)}" style="fill:none;stroke:#f472b6;stroke-width:1.6"></path>
-      ${yTicks}${sTicks}${xTicks}
-    </svg>`;
-  }
-  function buildShortIntPanel(si) {
-    const c = si.context || {}, mp = si.mirror_probe || {}, pn = si.panel || {};
-    const band = c.now_pctile >= 90 ? ['ELEVATED', '#FB923C']
-               : c.now_pctile <= 10 ? ['DEPRESSED', '#60A5FA']
-               : ['MIDDLING', '#8b949e'];
-    return `
-      <div class="mod-panel-title">AGGREGATE SHORT INTEREST (FINRA) · settlement ${c.settlement_date || '—'} · positioning</div>
-      <div style="display:flex;gap:18px;flex-wrap:wrap;margin:6px 0;font-size:11px">
-        <span>short interest <b class="mono" style="color:#f472b6">${c.now_pct_shares_out ?? '—'}%</b> of shares out</span>
-        <span>SII <b class="mono">z=${c.now_z ?? '—'}</b></span>
-        <span>pctile <b class="mono">${c.now_pctile == null ? '—' : c.now_pctile + '%'}</b></span>
-        <span class="chip" style="background:${band[1]};color:#0d1117;font-weight:700">${band[0]}</span>
-        <span style="color:var(--fg-dim)">${c.n_names ?? '—'} names · <b>${c.lag_days ?? '?'}d old</b></span>
-      </div>
-      <div class="chart-wrap">${buildShortIntSVG(si)}</div>
-      <div style="font-size:9px;color:var(--fg-dim);margin-top:6px;line-height:1.5">
-        <span style="color:#f472b6">pink</span> = SII (equal-weighted short interest as % of shares outstanding across a frozen
-        ${pn.n ?? '—'}-name large-cap panel, detrended + standardized, per Rapach-Ringgenberg-Zhou 2016);
-        <span style="color:#8b949e">grey</span> = SPY. Coverage from ${si.coverage_start || '—'}.
-        <b>Descriptive not predictive.</b> Reading is <b>9–23 days stale by construction</b> (bi-monthly settlement +
-        ~8–9 business day publication lag) — the date shown is the SETTLEMENT date, not the fetch date.
-        Days-to-cover is deliberately NOT used: its volume denominator inverts it at stress (near-lowest reading at the
-        COVID bottom). Not a VIX mirror — SII vs VIX+SKEW+21d-ret R²=${mp.r2_combined ?? '—'} (n=${mp.n ?? '—'}).
-        Panel frozen ${pn.frozen_at || '—'} ⇒ names since acquired/delisted are absent (survivorship; bias direction on an
-        "N-year high" ambiguous). RRZ read high short interest bearishly — <b>we make no such call</b>; untested here and
-        wired to no signal.
-      </div>`;
-  }
-
   function wirePutCallPanel(body, pc) {
     const panel = body.querySelector('[data-pc-panel]');
     if (!panel) return;
