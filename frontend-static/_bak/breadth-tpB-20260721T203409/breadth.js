@@ -379,7 +379,7 @@
       const sectorRows = sectors.map(s => `
         <tr>
           <td class="lbl">${s}</td>
-          <td class="cell ${breadthCls(latest50.sectors?.[s])}">${markedToday.has(s) ? '<span style="color:#FFC107;font-weight:700" title="Turning-point marker (first ≥3pp recovery within 2 sessions of a ≥10-day washout low). Descriptive only, not a signal.">▲</span> ' : ''}${latest50.sectors?.[s] ?? '—'}</td>
+          <td class="cell ${breadthCls(latest50.sectors?.[s])}">${markedToday.has(s) ? '<span style="color:#FFC107;font-weight:700" title="Turning-point marker (first up-day after a ≥10-day washout low). Descriptive only, not a signal.">▲</span> ' : ''}${latest50.sectors?.[s] ?? '—'}</td>
           <td class="cell ${breadthCls(latest100.sectors?.[s])}">${latest100.sectors?.[s] ?? '—'}</td>
           <td class="cell ${breadthCls(latest200.sectors?.[s])}">${latest200.sectors?.[s] ?? '—'}</td>
           <td class="spark-cell">${sectorSparkline(sectorHistory[s])}</td>
@@ -402,7 +402,7 @@
               <tbody>${tpRows}</tbody></table>
           </div>
           <div style="font-size:0.62rem;color:var(--text-muted,#888);padding:0.4rem 0.5rem;line-height:1.4">
-            First ≥3pp recovery within 2 sessions of a ≥10-day low at ≤25% breadth. <b>Descriptive marker only — not a recovery signal; no predictive edge measured.</b>
+            First up-day after a ≥10-day low at ≤25% breadth. <b>Descriptive marker only — not a recovery signal; no predictive edge measured.</b>
             5y backfill: marked sectors recover ~71%/10 sessions ≈ any low-breadth day (~76%); value is fewer
             premature calls (27% vs 38% naive). ~1-in-4 still make a lower low. Latest mark per sector.
           </div>
@@ -1469,7 +1469,7 @@
           const v = d.sectors?.[s];
           if (marked.includes(s)) {
             const o = tpDetail[d.date + '|' + s];
-            const tip = o ? `Turning-point marker — first ≥3pp recovery within 2 sessions of a ≥10-day washout low. Low ${o.low}% on ${o.low_date} → ${o.value}% (+${o.uptick}pp). Descriptive only, not a signal.` : 'Turning-point marker';
+            const tip = o ? `Turning-point marker — first up-day after a ≥10-day washout low. Low ${o.low}% on ${o.low_date} → ${o.value}% (+${o.uptick}pp). Descriptive only, not a signal.` : 'Turning-point marker';
             return `<td class="cell ${breadthCls(v)}" title="${tip.replace(/"/g,'&quot;')}"><span style="color:#FFC107;font-weight:700">▲</span>${v != null ? v : '—'}</td>`;
           }
           return `<td class="cell ${breadthCls(v)}">${v != null ? v : '—'}</td>`;

@@ -140,14 +140,13 @@
   async function renderSentiment(body, ctx) {
     body.innerHTML = `<div class="mod-loading">Loading sentiment…</div>`;
     try {
-      const [d, preds, div, pc, vr, si, fgm] = await Promise.all([
+      const [d, preds, div, pc, vr, si] = await Promise.all([
         fetchJSON(`${BASE}/sentiment.json`),
         fetchJSON(`${BASE}/predictions.json`).catch(() => null),
         fetchJSON(`${BASE}/polymarket-divergence.json`).catch(() => ({ pairs: [] })),
         fetchJSON(`${BASE}/putcall.json`).catch(() => null),
         fetchJSON(`${BASE}/vol-risk.json`).catch(() => null),
         fetchJSON(`${BASE}/short-interest.json`).catch(() => null),
-        fetchJSON(`${BASE}/fear-greed-market.json`).catch(() => null),
       ]);
       window._senPutCall = pc;
       // Build divergence index for in-row spread pills (POL module owns the data)
@@ -321,8 +320,6 @@
             </div>
           </div>
 
-          ${fgm && (fgm.history || []).length ? `<div class="mod-panel" data-fgm-panel>${buildFGMarketPanel(fgm, '3y')}</div>` : ''}
-
           <div class="mod-panel">
             <div class="mod-panel-title">AAII INVESTOR SENTIMENT · ${aaii.date || '—'} · weekly survey</div>
             <div class="mod-grid-2">
@@ -354,7 +351,6 @@
         </div>
       `;
       if (pc) wirePutCallPanel(body, pc);
-      if (fgm && (fgm.history || []).length) wireFGMarketPanel(body, fgm);
       if (preds && preds.categories) wirePredictionsPanel(body, preds);
     } catch (e) { body.innerHTML = `<div class="mod-err">${e.message}</div>`; }
   }
@@ -596,112 +592,6 @@
         "N-year high" ambiguous). RRZ read high short interest bearishly — <b>we make no such call</b>; untested here and
         wired to no signal.
       </div>`;
-  }
-
-  /* ── CNN F&G vs S&P 500 & VIX overlay (mirror of stocks sentiment.html) ───
-     Same fear-greed-market.json, same episodes/stats (backend is the single
-     source — no recompute here). Hand-rolled dual-axis SVG (no Chart.js). */
-  const FGM_FG = '#60A5FA', FGM_VIX = '#E5B94C', FGM_SPX = 'rgba(220,38,38,0.85)';
-  function fgmSliceT(hist, range) {
-    if (range === 'all' || !hist.length) return hist;
-    const yrs = range === '1y' ? 1 : 3;
-    const last = new Date(hist[hist.length - 1].date);
-    const cut = new Date(last); cut.setFullYear(cut.getFullYear() - yrs);
-    const cutStr = cut.toISOString().slice(0, 10);
-    return hist.filter(h => h.date >= cutStr);
-  }
-  function fgRatingT(v) {
-    if (v == null) return '—';
-    if (v <= 25) return 'Extreme Fear'; if (v <= 45) return 'Fear';
-    if (v <= 55) return 'Neutral'; if (v <= 75) return 'Greed'; return 'Extreme Greed';
-  }
-  function buildFGMarketSVG(fgm, range) {
-    const hist = fgmSliceT(fgm.history || [], range);
-    if (hist.length < 10) return '<div class="pane-empty">No data</div>';
-    const W = 780, H = 230, padL = 30, padR = 44, padT = 10, padB = 20;
-    const fg = hist.map(h => h.fg), vix = hist.map(h => h.vix), spx = hist.map(h => h.spx);
-    const n = hist.length;
-    const svals = spx.filter(v => typeof v === 'number');
-    let sMin = Math.min(...svals), sMax = Math.max(...svals);
-    const sPad = (sMax - sMin) * 0.03 || 1; sMin -= sPad; sMax += sPad;
-    const sx = i => padL + (i / (n - 1)) * (W - padL - padR);
-    const fy = v => padT + (1 - v / 100) * (H - padT - padB);          // fixed 0..100 (F&G + VIX)
-    const syy = v => padT + (1 - (v - sMin) / (sMax - sMin)) * (H - padT - padB);
-    const pathOf = (arr, yfn) => {
-      let d = '', started = false;
-      arr.forEach((v, i) => { if (typeof v !== 'number') { started = false; return; }
-        d += (started ? 'L' : 'M') + sx(i).toFixed(1) + ' ' + yfn(v).toFixed(1) + ' '; started = true; });
-      return d;
-    };
-    const zl = [25, 75].map(p => `<line x1="${padL}" y1="${fy(p).toFixed(1)}" x2="${W - padR}" y2="${fy(p).toFixed(1)}" stroke="rgba(148,163,184,0.3)" stroke-width="1" stroke-dasharray="4 3"></line>`).join('');
-    const dateIdx = {}; hist.forEach((h, i) => dateIdx[h.date] = i);
-    const mk = (eps, color, diamond) => (eps || []).map(e => {
-      const i = dateIdx[e.onset_date]; if (i == null) return '';
-      const x = sx(i), y = fy(fg[i] != null ? fg[i] : e.onset_fg);
-      return diamond ? `<path d="M${x} ${(y - 6).toFixed(1)} l5 6 l-5 6 l-5 -6 z" fill="${color}"></path>`
-                     : `<path d="M${x} ${(y - 7).toFixed(1)} l4 7 l-8 0 z" fill="${color}"></path>`;
-    }).join('');
-    const ev = fgm.extremes || {};
-    const marks = mk((ev.fear || {}).episodes, '#5BB77A', false) + mk((ev.fear_vix || {}).episodes, '#FB923C', true);
-    const yTicks = [0, 25, 50, 75, 100].map(v => `<text x="${padL - 3}" y="${(fy(v) + 3).toFixed(1)}" fill="${FGM_FG}" font-size="9" text-anchor="end">${v}</text>`).join('');
-    const sTicks = [sMin, sMax].map(v => `<text x="${W - padR + 2}" y="${(syy(v) + 3).toFixed(1)}" fill="var(--fg-dim)" font-size="9">${v.toFixed(0)}</text>`).join('');
-    const xTicks = [0, Math.floor(n / 2), n - 1].map(i => {
-      const anchor = i === 0 ? 'start' : (i === n - 1 ? 'end' : 'middle');
-      return `<text x="${sx(i).toFixed(1)}" y="${H - 5}" fill="#8b949e" font-size="9" text-anchor="${anchor}" font-family="monospace">${(hist[i].date || '').slice(0, 7)}</text>`;
-    }).join('');
-    return `<svg class="oc-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-      ${zl}
-      <path d="${pathOf(spx, syy)}" style="fill:none;stroke:${FGM_SPX};stroke-width:1"></path>
-      <path d="${pathOf(fg, fy)}" style="fill:none;stroke:${FGM_FG};stroke-width:1.3"></path>
-      <path d="${pathOf(vix, fy)}" style="fill:none;stroke:${FGM_VIX};stroke-width:1"></path>
-      ${marks}${yTicks}${sTicks}${xTicks}
-    </svg>`;
-  }
-  function fgmAccTable(ev, label) {
-    const pct = x => x == null ? '—' : (x >= 0 ? '+' : '') + (x * 100).toFixed(1) + '%';
-    const s = ev.summary || {}, b = ev.base_rate || {};
-    const cells = [5, 21, 63].map(h => {
-      const d = s['fwd' + h] || {}, bd = b['fwd' + h] || {};
-      if (!d.n) return '<td>—</td>';
-      const ci = d.hit_ci95_block ? ` [${(d.hit_ci95_block[0] * 100).toFixed(0)}–${(d.hit_ci95_block[1] * 100).toFixed(0)}]` : '';
-      const base = bd.base_up_rate != null ? ` vs ${(bd.base_up_rate * 100).toFixed(0)}%` : '';
-      const star = d.unstable ? '<span style="color:#FB923C" title="n<12, exploratory">*</span>' : '';
-      return `<td class="mono">${pct(d.median)} · ${(d.hit_rate * 100).toFixed(0)}%${ci}${base} · n${d.n}${star}</td>`;
-    }).join('');
-    return `<tr><td>${label} <span style="color:var(--fg-dim)">(${ev.n_episodes})</span></td>${cells}</tr>`;
-  }
-  function buildFGMarketPanel(fgm, range) {
-    const cur = (fgm.history || [])[(fgm.history || []).length - 1] || {};
-    const rangeBtns = ['1y', '3y', 'all'].map(r =>
-      `<button class="sen-pred-btn${r === range ? ' active' : ''}" data-fgm-range="${r}">${r.toUpperCase()}</button>`).join('');
-    const prov = fgm.provisional_date === cur.date ? ' <span class="chip" style="background:var(--fg-dim);color:#0d1117">today provisional</span>' : '';
-    return `
-      <div class="mod-panel-title">CNN FEAR &amp; GREED vs S&amp;P 500 &amp; VIX · ${fgm.latest_date || ''} · attention context, not a signal</div>
-      <div style="margin:4px 0 8px">${rangeBtns}</div>
-      <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:6px;font-size:11px;align-items:center">
-        <span>F&amp;G <b class="mono" style="color:${FGM_FG}">${cur.fg ?? '—'}</b></span>
-        <span>VIX <b class="mono" style="color:${FGM_VIX}">${cur.vix ?? '—'}</b></span>
-        <span>S&amp;P <b class="mono" style="color:#DC2626">${cur.spx ?? '—'}</b></span>
-        <span class="chip" style="background:${fgColor(cur.fg)};color:#0d1117;font-weight:700">${fgRatingT(cur.fg)}</span>${prov}
-      </div>
-      <div class="chart-wrap" data-fgm-svg>${buildFGMarketSVG(fgm, range)}</div>
-      <div style="margin-top:8px"><table class="tbl-dense mod-table" style="width:100%;font-size:11px">
-        <thead><tr><th>Extreme-fear onset</th><th>+5d</th><th>+21d</th><th>+63d</th></tr></thead>
-        <tbody>
-          ${fgmAccTable(fgm.extremes.fear, '<span style="color:#5BB77A">▲</span> F&amp;G&lt;25')}
-          ${fgmAccTable(fgm.extremes.fear_vix, '<span style="color:#FB923C">◆</span> F&amp;G&lt;25 &amp; VIX top-10%')}
-        </tbody></table></div>
-      <div style="font-size:9px;color:var(--fg-dim);margin-top:6px;line-height:1.5"><span style="color:#5BB77A">green ▲</span> = extreme-fear onset (F&amp;G&lt;25); <span style="color:#FB923C">orange ◆</span> = + VIX top-10% (post-2021). Forward S&amp;P return · hit-rate [block-bootstrap 95% CI] vs base rate · n. Markers sit at ONSET, not the hindsight low. ${(fgm.note || '').replace(/</g, '&lt;')}</div>`;
-  }
-  function wireFGMarketPanel(body, fgm) {
-    const panel = body.querySelector('[data-fgm-panel]');
-    if (!panel) return;
-    panel.addEventListener('click', e => {
-      const b = e.target.closest('[data-fgm-range]'); if (!b) return;
-      panel.querySelectorAll('[data-fgm-range]').forEach(x => x.classList.toggle('active', x === b));
-      const wrap = panel.querySelector('[data-fgm-svg]');
-      if (wrap) wrap.innerHTML = buildFGMarketSVG(fgm, b.dataset.fgmRange);
-    });
   }
 
   function wirePutCallPanel(body, pc) {

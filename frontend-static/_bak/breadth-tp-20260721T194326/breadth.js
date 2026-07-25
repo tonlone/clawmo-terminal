@@ -371,42 +371,15 @@
           .map(d => d.sectors?.[s])
           .filter(v => typeof v === 'number');
       });
-      // Turning-point markers (50-DMA only). overlay = {date:[sector,...]}; recent = [mark,...].
-      const tp = br.turning_points || {};
-      const tpOverlay = tp.overlay || {};
-      const tpRecent = tp.recent || [];
-      const markedToday = new Set(tpOverlay[latestDate] || []);
       const sectorRows = sectors.map(s => `
         <tr>
           <td class="lbl">${s}</td>
-          <td class="cell ${breadthCls(latest50.sectors?.[s])}">${markedToday.has(s) ? '<span style="color:#FFC107;font-weight:700" title="Turning-point marker (first ≥3pp recovery within 2 sessions of a ≥10-day washout low). Descriptive only, not a signal.">▲</span> ' : ''}${latest50.sectors?.[s] ?? '—'}</td>
+          <td class="cell ${breadthCls(latest50.sectors?.[s])}">${latest50.sectors?.[s] ?? '—'}</td>
           <td class="cell ${breadthCls(latest100.sectors?.[s])}">${latest100.sectors?.[s] ?? '—'}</td>
           <td class="cell ${breadthCls(latest200.sectors?.[s])}">${latest200.sectors?.[s] ?? '—'}</td>
           <td class="spark-cell">${sectorSparkline(sectorHistory[s])}</td>
         </tr>
       `).join('');
-
-      // Compact recent turning-points panel (mirrors the web card).
-      const tpDateIdx = {}; (data['50'] || []).forEach((r, i) => { tpDateIdx[r.date] = i; });
-      const tpRows = tpRecent.map(o => {
-        const since = tpDateIdx[o.date]; const ago = since === 0 ? 'today' : (since != null ? since + 'd' : o.date);
-        return `<tr><td class="lbl"><span style="color:#FFC107">▲</span> ${o.sector}</td>
-          <td class="mono">${o.low}%→${o.value}%</td><td class="mono num-up">+${o.uptick}</td>
-          <td class="mono" style="color:var(--text-muted,#888)">${ago}</td></tr>`;
-      }).join('');
-      const tpPanel = tpRecent.length ? `
-        <div class="mod-panel">
-          <div class="mod-panel-title"><span style="color:#FFC107">▲</span> BREADTH TURNING POINTS · recent · 50-DMA</div>
-          <div class="tbl-wrap">
-            <table class="tbl-dense"><thead><tr><th>SECTOR</th><th>LOW→UP</th><th>Δpp</th><th>AGO</th></tr></thead>
-              <tbody>${tpRows}</tbody></table>
-          </div>
-          <div style="font-size:0.62rem;color:var(--text-muted,#888);padding:0.4rem 0.5rem;line-height:1.4">
-            First ≥3pp recovery within 2 sessions of a ≥10-day low at ≤25% breadth. <b>Descriptive marker only — not a recovery signal; no predictive edge measured.</b>
-            5y backfill: marked sectors recover ~71%/10 sessions ≈ any low-breadth day (~76%); value is fewer
-            premature calls (27% vs 38% naive). ~1-in-4 still make a lower low. Latest mark per sector.
-          </div>
-        </div>` : '';
 
       // Recent 10 days trend
       const recent = (data[String(periods[0])] || []).slice(0, 10);
@@ -525,8 +498,6 @@
               </div>
             </div>
 
-            ${tpPanel}
-
             <div class="mod-panel">
               <div class="mod-panel-title">SECTOR BREADTH · heatmap + 20d trend</div>
               <div class="tbl-wrap">
@@ -574,7 +545,7 @@
         ${renderIndustryShell(industries)}
       `;
 
-      wireHistoricalHeat(body, data, sectors, br.turning_points || {});
+      wireHistoricalHeat(body, data, sectors);
       wireIndustryTable(body, industries);
 
       // Crosshair + tooltip on the divergence chart
@@ -1434,17 +1405,13 @@
     `;
   }
 
-  function wireHistoricalHeat(body, dataByMA, sectors, tp) {
+  function wireHistoricalHeat(body, dataByMA, sectors) {
     const panelEl = body.querySelector('[data-breadth-panel="histheat"]');
     if (!panelEl) return;
     const headEl = panelEl.querySelector('#hist-heat-head');
     const bodyEl = panelEl.querySelector('#hist-heat-body');
     const btns = panelEl.querySelectorAll('.hist-range-btn');
     const rows = dataByMA['50'] || [];
-    // Turning-point marks (50-DMA only). overlay={date:[sector]}; marks_window=full detail.
-    const tpOverlay = (tp && tp.overlay) || {};
-    const tpDetail = ((tp && tp.marks_window) || [])
-      .reduce((m, o) => (m[o.date + '|' + o.sector] = o, m), {});
     let range = '3M';
 
     function render() {
@@ -1464,14 +1431,8 @@
           const v = d[k];
           return `<td class="cell ${breadthCls(v)}">${v != null ? v : '—'}</td>`;
         }).join('');
-        const marked = tpOverlay[d.date] || [];
         const sectorCols = sectors.map(s => {
           const v = d.sectors?.[s];
-          if (marked.includes(s)) {
-            const o = tpDetail[d.date + '|' + s];
-            const tip = o ? `Turning-point marker — first ≥3pp recovery within 2 sessions of a ≥10-day washout low. Low ${o.low}% on ${o.low_date} → ${o.value}% (+${o.uptick}pp). Descriptive only, not a signal.` : 'Turning-point marker';
-            return `<td class="cell ${breadthCls(v)}" title="${tip.replace(/"/g,'&quot;')}"><span style="color:#FFC107;font-weight:700">▲</span>${v != null ? v : '—'}</td>`;
-          }
           return `<td class="cell ${breadthCls(v)}">${v != null ? v : '—'}</td>`;
         }).join('');
         return `<tr>

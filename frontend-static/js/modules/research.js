@@ -32,7 +32,12 @@
       const topFam = Object.keys(fc).filter((k) => k !== 'other')
         .sort((a, b) => fc[b] - fc[a])[0];
       const actionable = (d.papers || []).filter((p) => p.score >= 3).length;
-      const srcLabel = { glm: 'GLM-5.2', keyword: 'KEYWORD', mixed: 'GLM+KW' }[d.tagging_source] || d.tagging_source;
+      // 2026-07-18: tagger moved GLM-5.2 → Kimi. Prefer the published `tagging_model` so the
+      // badge tracks reality; map is fallback and still accepts legacy 'glm' for a pre-cutover JSON.
+      const srcModel = (d.tagging_model || '').toUpperCase();
+      const srcLabel = d.tagging_source === 'keyword' ? 'KEYWORD'
+        : d.tagging_source === 'mixed' ? ((srcModel || 'LLM') + '+KW')
+        : (srcModel || { glm: 'GLM-5.2', llm: 'LLM' }[d.tagging_source] || d.tagging_source);
 
       const disc = `<div class="mod-panel" style="padding:7px 12px;border-left:3px solid #60a5fa">
         <div class="small" style="line-height:1.5"><span style="font-weight:700;color:#60a5fa">📄 Reading list, not a signal.</span> ${esc(d.disclaimer || '')}</div></div>`;
@@ -48,7 +53,7 @@
         const untri = tc['untriaged'] || 0;
         const triaged = Object.keys(tc).reduce((a, k) => a + (k === 'untriaged' ? 0 : tc[k]), 0);
         cand = `<div class="mod-panel" style="padding:8px 12px"><div style="font-weight:700;color:#8b949e">🔬 Candidates worth a look · 0</div>
-          <div class="small" style="color:#6e7681;margin-top:3px">No papers flagged novel-vs-our-patterns this week — GLM triaged ${esc(triaged)} as overlapping/known/execution-only/infeasible${untri ? '; ' + esc(untri) + ' not triaged' : ''}. Normal outcome; the funnel is working.</div></div>`;
+          <div class="small" style="color:#6e7681;margin-top:3px">No papers flagged novel-vs-our-patterns this week — the tagger triaged ${esc(triaged)} as overlapping/known/execution-only/infeasible${untri ? '; ' + esc(untri) + ' not triaged' : ''}. Normal outcome; the funnel is working.</div></div>`;
       } else {
         const items = novel.map((p) => {
           const c = FAM_COLOR[p.family] || '#8b949e';

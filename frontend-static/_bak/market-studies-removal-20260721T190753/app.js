@@ -30,6 +30,7 @@
     { id: 'valuation-map',  code: 'VAL', fkey: null, label: 'Valuation Map',  labelCN: '估值地圖', group: 'Macro',    src: 'stocks.clawmo.tech/valuation-map.html', pdfExportable: true, pdfNeedsTicker: false },
     { id: 'gpu',            code: 'GPU', fkey: null, label: 'GPU Cloud',      labelCN: 'GPU算力',  group: 'Macro',    src: 'stocks.clawmo.tech/gpu.html', pdfExportable: false, pdfNeedsTicker: false },
     { id: 'research',       code: 'RAD', fkey: null, label: 'Research Radar', labelCN: '研究雷達', group: 'Research', src: 'stocks.clawmo.tech/research.html', pdfExportable: false, pdfNeedsTicker: false },
+    { id: 'studies',        code: 'STU', fkey: null, label: 'Base-Rate Studies', labelCN: '基準研究', group: 'Research', src: 'stocks.clawmo.tech/market-studies.html', pdfExportable: false, pdfNeedsTicker: false },
     { id: 'geo',            code: 'GEO', fkey: null, label: 'Geo Risk',       labelCN: '地緣風險', group: 'Macro',    src: 'stocks.clawmo.tech/data/hormuz.json' },
     { id: 'crypto',         code: 'CRY', fkey: null, label: 'Crypto',        labelCN: '加密貨幣', group: 'Assets',   src: 'stocks.clawmo.tech/crypto.html', pdfExportable: true, pdfNeedsTicker: false },
     { id: 'bonds',          code: 'BND', fkey: null, label: 'Bonds',         labelCN: '債券',     group: 'Assets',   src: 'stocks.clawmo.tech/bonds.html', pdfExportable: true, pdfNeedsTicker: false },
