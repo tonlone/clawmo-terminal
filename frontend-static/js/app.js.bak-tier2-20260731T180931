@@ -494,36 +494,15 @@
     return squashed ? squashed.id : null;
   }
 
-  // Parse a deep link from the query string, falling back to the hash.
-  //
-  // The hash forms matter for two reasons: (1) a bare '#VAL' is the obvious thing to type
-  // or share for a 3-letter-code UI, and it used to be silently ignored — the saved
-  // ocWorkspace pane always won, so a pasted link opened whatever panel the recipient had
-  // open last; (2) site-alert.js routes by assigning `location.hash = '#module=bonds'`,
-  // which nothing read, making the alert-banner click a no-op on this surface.
-  function parseModuleQuery(qs) {
-    if (!qs) return null;
+  function readUrlState() {
+    const qs = window.location.search;
+    if (!qs || qs.length < 2) return null;
     const p = new URLSearchParams(qs);
     const id = resolveModuleKey(p.get('module'));
     if (!id) return null;
     const params = {};
     p.forEach((v, k) => { if (k !== 'module' && v !== '') params[k] = v; });
     return { id, params };
-  }
-
-  function readUrlState() {
-    const qs = window.location.search;
-    if (qs && qs.length > 1) {
-      const fromQuery = parseModuleQuery(qs.replace(/^\?/, ''));
-      if (fromQuery) return fromQuery;
-    }
-    const raw = (window.location.hash || '').replace(/^#/, '');
-    if (!raw) return null;
-    // '#module=bonds&ticker=NVDA' — same shape as the query string.
-    if (raw.includes('=')) return parseModuleQuery(raw);
-    // Bare '#VAL' / '#valuation-map'.
-    const id = resolveModuleKey(raw);
-    return id ? { id, params: {} } : null;
   }
 
   async function exportPaneAsPdf(mod, ticker, market, pane) {
@@ -1037,19 +1016,6 @@
       saveState();
     }
 
-    // Route on hash changes too. Without this, assigning location.hash from inside the
-    // app (site-alert.js does exactly that) changed the URL and nothing else.
-    window.addEventListener('hashchange', () => {
-      const next = readUrlState();
-      if (!next) return;
-      const cur = state.panes[state.focus];
-      if (cur && cur.module === next.id) return;
-      state.panes[state.focus] = { module: next.id, params: next.params };
-      saveState();
-      renderWorkspace();
-      updateRailActive();
-    });
-
     // workspace
     renderWorkspace();
 
@@ -1110,13 +1076,7 @@
     const sbSpy = document.getElementById('sbSpy');
     const sbU = document.getElementById('sbUpdate');
     const pill = document.getElementById('regimePill');
-    // Match updateClock()'s format exactly. This used to return the BROWSER's local time
-    // in 12-hour form with seconds ("3:06:38 PM") while the clock beside it showed ET
-    // ("15:07 ET"), so the same status bar disagreed with itself depending on which code
-    // path last wrote it — and a non-ET reader was silently shown their own timezone.
-    const now = () => new Date().toLocaleTimeString('en-US', {
-      timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
-    }) + ' ET';
+    const now = () => new Date().toLocaleTimeString();
     try {
       const s = await window.OC_DATA.fetchJSON('https://stocks.clawmo.tech/data/signals-summary.json');
       const r = s && s.regime && s.regime.regime;

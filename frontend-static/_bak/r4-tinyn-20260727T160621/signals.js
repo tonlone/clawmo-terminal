@@ -702,29 +702,12 @@
       // fixed_fractional (default)
       dollarRisk = account * riskFrac * gradeMult;
     }
-    // ── R6 STOPGAP CAP (2026-07-27) — twin of the signals.html cap; keep in lockstep ──
-    // Risk-based sizing divides by stopDist, so shares → ∞ as the stop nears entry. The only
-    // guard above is stopDist <= 0, which rejects a zero stop but accepts a one-cent one.
-    // Live example: LQD desc_triangle 2026-07-23, entry 106.22 / stop 106.31 = $0.09/share →
-    // at $100K/2% this module would have said 22,222 shares = $2.36M = 23.6x the account.
-    // 2.0x = Reg-T overnight margin; measured before adopting — binds on 0/269 active setups
-    // and 29/1,977 historical rows. Display stopgap only; the real fix is engine-side R6
-    // (min stop distance), which is basis-moving and Tony-gated.
-    const MAX_POS_MULT = 2.0;
-    let shares = Math.floor(dollarRisk / stopDist);
-    const uncappedShares = shares;
-    let posCapped = false;
-    if (shares * entry > account * MAX_POS_MULT) {
-      shares = Math.floor((account * MAX_POS_MULT) / entry);
-      posCapped = true;
-      dollarRisk = shares * stopDist;   // restate risk from the CLAMPED size, not the intent
-    }
+    const shares = Math.floor(dollarRisk / stopDist);
     const positionValue = shares * entry;
     const dollarPnL = (opts.returnPct != null && shares > 0)
       ? (shares * entry * opts.returnPct / 100) - (positionValue * EXEC_COST_PCT)
       : null;
-    return { shares, dollarRisk, positionValue, dollarPnL, methodLbl: sizer.method, gradeMult,
-             posCapped, uncappedShares, maxPosMult: MAX_POS_MULT, stopDist };
+    return { shares, dollarRisk, positionValue, dollarPnL, methodLbl: sizer.method, gradeMult };
   }
   function fmtUsd(v, compact) {
     if (v == null || !isFinite(v)) return '—';
@@ -994,7 +977,7 @@
             <td class="${rrClass(rr)}">${rr != null ? rr.toFixed(2) : '—'}</td>
             <td class="mono">${fmt.num(s.confidence, 0)}</td>
             <td class="mono ${pnlClass(pnl)}">${fmt.pct(pnl)}</td>
-            <td class="mono sig-pos-col">${ps.shares > 0 ? ps.shares : '—'}${ps.posCapped ? `<span class="sig-tinyn" title="POSITION CAPPED at ${ps.maxPosMult.toFixed(1)}x account. This setup's stop is only $${ps.stopDist.toFixed(2)} from entry, so risk-based sizing implied ${ps.uncappedShares.toLocaleString()} shares. A very tight stop inflates share count AND R:R together — an unusually good-looking R:R here is a warning sign, not an edge. Size manually.">&#9888; CAP</span>` : ''}</td>
+            <td class="mono sig-pos-col">${ps.shares > 0 ? ps.shares : '—'}</td>
             <td class="mono sig-pos-col">${ps.positionValue > 0 ? fmtUsd(ps.positionValue, true) : '—'}</td>
             <td class="mono num-dn sig-pos-col">${ps.dollarRisk > 0 ? '-' + fmtUsd(ps.dollarRisk, true) : '—'}</td>
             <td class="mono ${ptCls}" title="Analyst consensus price-target upside (target_high − current) / current, %. Source: FMP /stable/price-target-consensus. Drives target_upside_top_decile pattern (C1).">${ptTxt}</td>
@@ -1042,10 +1025,6 @@
                 <span>total signals</span><span class="mono">${ov.total_signals ?? '—'}</span>
                 <span>active</span><span class="mono">${ov.active ?? '—'}</span>
                 <span>closed</span><span class="mono">${ov.closed ?? '—'}</span>
-                <!-- Without this row the ledger reads as if signals go missing:
-                     total(2148) - active(295) - closed(1593) = 260 unaccounted for.
-                     They are the paper-traded closes. total = active + closed + paper. -->
-                <span>closed (paper)</span><span class="mono">${ov.closed_paper ?? '—'}</span>
                 <span>win rate</span><span class="mono ${wrClass(ov.win_rate)}">${ov.win_rate != null ? ov.win_rate.toFixed(0) + '%' : '—'}</span>
                 <span>avg return</span><span class="mono ${pnlClass(ov.avg_return)}">${fmt.pct(ov.avg_return)}</span>
               </div>
@@ -1228,35 +1207,17 @@
         const bold = v >= 0.95 ? ' font-weight:600' : '';
         return `<td class="num mono" style="color:${col};${bold}">${pct}%</td>`;
       };
-      // R4 (peer review 2026-07-19, shipped 2026-07-27) — twin of the signals.html badge.
-      // Tiny-n rows showed an unqualified headline PF (momentum_rest_entry 7.05 on n=5,
-      // high_tight_flag 7.59 on n=15). Threshold and semantics MUST match the web surface.
-      const TINY_N = 50;
       const backtestRows = advPatterns.map(p => {
         const status = p.quarantined ? '<span class="sig-quarantine">Q</span>'
                      : p.passes_gate === false ? '<span class="sig-blocked">BLOCK</span>'
                      : '';
-        // Guard (caught by the 07-27 R4 smoke test, which badged 5 terminal rows vs 2 on web):
-        // a row with NO backtest at all (value_top_decile, target_upside_top_decile,
-        // analyst_upgrade_drift — backtest_count null/0) is not a "tiny sample", it is a
-        // different statement entirely. Badging n=0 as tiny-sample would swap one misleading
-        // label for another. Only badge a real, non-zero, small n — matching the web surface,
-        // which never shows these rows because it renders only backtest-results.json stats.
-        const n = p.backtest_count;
-        const isTinyN = n != null && n > 0 && n < TINY_N;
-        const tinyBadge = isTinyN
-          ? ` <span class="sig-tinyn" title="TINY SAMPLE — only ${n} backtested occurrences (n &lt; ${TINY_N}). PF and WR on this row are NOT statistically reliable and may be extreme by chance. Treat as anecdotal, not as an edge.">&#9888; n=${n}</span>`
-          : '';
-        // Never paint a tiny-n PF green — the colour is the robustness claim.
-        const pfCls = isTinyN ? 'sig-dim' : (p.profit_factor >= 1.1 ? 'num-up' : 'num-dn');
-        const pfTitle = isTinyN ? ` title="Computed on only ${n} occurrences (n &lt; ${TINY_N}) — not statistically reliable."` : '';
         return `
           <tr>
-            <td class="pat">${prettyPat(p.signal_type)} ${status}${tinyBadge}</td>
+            <td class="pat">${prettyPat(p.signal_type)} ${status}</td>
             <td class="${'gd-' + (p.grade || '').toLowerCase()}">${p.grade || '—'}</td>
             <td class="num">${p.backtest_count != null ? fmt.compact(p.backtest_count) : '—'}</td>
             <td class="num ${p.live_count > 0 ? '' : 'sig-dim'}">${p.live_count ?? 0}</td>
-            <td class="num ${pfCls}"${pfTitle}>${p.profit_factor != null ? p.profit_factor.toFixed(2) : '—'}</td>
+            <td class="num ${p.profit_factor >= 1.1 ? 'num-up' : 'num-dn'}">${p.profit_factor != null ? p.profit_factor.toFixed(2) : '—'}</td>
             <td class="num ${wrClass(p.win_rate)}">${p.win_rate != null ? p.win_rate.toFixed(0) + '%' : '—'}</td>
             <td class="num ${pnlClass(p.expectancy)}">${p.expectancy != null ? p.expectancy.toFixed(3) : '—'}</td>
             <td class="num num-up">${p.avg_win  != null ? '+' + p.avg_win.toFixed(2)  + '%' : '—'}</td>
@@ -1339,7 +1300,6 @@
           </div>
           <div class="chart-legend">
             <span class="chart-note" style="display:block">
-              <span style="display:block;margin-bottom:0.4rem"><span class="sig-tinyn">&#9888; n=N</span> <b>tiny sample (n &lt; 50)</b> — that row's PF/WR rest on fewer than 50 backtested occurrences and are <b>not statistically reliable</b>; its PF is dimmed rather than coloured for the same reason. Small samples produce the most extreme numbers in this table, and the significance columns that would catch it are blank at low n (PSR/DSR need n ≥ 30). An unbadged PF 1.4 on n=50,000 is stronger evidence than a badged PF 7.0 on n=5. Rows without any backtest (BT N &mdash;) are not badged: that is "not backtested", a different thing from a small sample.</span>
               <span style="display:grid;grid-template-columns:1fr 1fr;gap:0.1rem 1.2rem;margin-bottom:0.35rem">
                 <span><b>BT N</b> — backtest trade count (5-year historical)</span>
                 <span><b>LIVE N</b> — closed live trades since tracking began</span>
@@ -2149,12 +2109,6 @@
             font-family:var(--font-mono); font-weight:700; border:1px solid; margin-left:3px; vertical-align:middle;
           }
           [data-mod-panel="sig"] .sig-dim { color: var(--fg-faint); }
-          /* R4 tiny-sample badge (2026-07-27) — twin of the amber n<50 badge on signals.html */
-          [data-mod-panel="sig"] .sig-tinyn {
-            display:inline-block; font-size:8px; padding:1px 4px; border-radius:2px;
-            font-family:var(--font-mono); font-weight:700; vertical-align:middle;
-            color:#f59e0b; background:rgba(245,158,11,0.15); border:1px solid #f59e0b44;
-          }
 
           [data-mod-panel="sig"] .sig-sizer-bar {
             display:flex; align-items:center; gap:10px; flex-wrap:wrap;

@@ -56,6 +56,14 @@
     return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
   function pnlCls(v) { return (v == null || isNaN(v)) ? '' : v > 0 ? 'num-up' : v < 0 ? 'num-dn' : ''; }
+  // Coverage colour — how much of an account the risk figure actually covers.
+  // Anything under 100% means positions could not be modelled (see the VaR coverage note).
+  function covColor(st) {
+    if (st === 'refused' || st === 'error') return 'var(--red,#f55)';
+    if (st === 'degraded') return 'var(--amber,#fa0)';
+    if (st === 'disclosed') return 'var(--amber,#fa0)';
+    return 'var(--fg-dim,#888)';
+  }
   function riskCls(l) {
     if (!l) return '';
     const s = String(l).toUpperCase();
@@ -728,9 +736,27 @@
         '<td class="mono">' + (v.var_daily_pct != null ? v.var_daily_pct.toFixed(2) + '%' : (v.var_1day_pct != null ? v.var_1day_pct.toFixed(2) + '%' : '—')) + '</td>' +
         '<td class="mono">' + (v.var_weekly_amount != null ? fmt.compact(v.var_weekly_amount) : (v.var_weekly_95 != null ? fmt.compact(v.var_weekly_95) : '—')) + '</td>' +
         '<td class="mono">' + (v.var_weekly_pct != null ? v.var_weekly_pct.toFixed(2) + '%' : '—') + '</td>' +
+        '<td class="mono">' + (v.var_weekly_amount_account_est != null ? fmt.compact(v.var_weekly_amount_account_est) : '—') + '</td>' +
+        '<td class="mono" style="color:' + covColor(v.coverage_status) + '">' +
+          (v.coverage_pct != null ? v.coverage_pct.toFixed(1) + '%' +
+            (v.coverage_status === 'refused' ? ' ⛔' : v.coverage_status === 'degraded' ? ' ⚠' : '') : '—') +
+        '</td>' +
         '<td class="' + riskCls(v.risk_level) + '">' + riskTxt(v.risk_level) + '</td>' +
       '</tr>'
     ).join('');
+
+    // Coverage disclosure — parity with the sister page's VaR panel.
+    const covNotes = [];
+    varAccts.forEach(v => {
+      if (v.coverage_note) covNotes.push(escH(v.account_name) + ': ' + escH(v.coverage_note));
+      if (v.bookkeeping_error) covNotes.push('BOOKKEEPING ' + escH(v.account_name) + ': ' + escH(v.bookkeeping_error));
+    });
+    const covHtml = covNotes.length
+      ? '<div class="ptf-note" style="border-left:2px solid var(--amber,#f0a);padding:4px 8px;' +
+        'font-size:10px;opacity:0.85;margin:4px 0">COVERAGE<br>' + covNotes.join('<br>') +
+        '<br><em>VaR 1W $ = modelled sleeve only. ACCT EST $ assumes the unmodelled slice ' +
+        'carries the same risk profile — an assumption, not a measurement.</em></div>'
+      : '';
 
     const hist = DATA?.var_history || [];
     let chartHtml = '';
@@ -742,12 +768,20 @@
       chartW    = built.W;
     }
 
+    const mb = DATA?.var?.methodology_break;
+    const mbHtml = mb
+      ? '<div class="ptf-note var-methodology-note" style="border-left:2px solid var(--fg-dim,#888);' +
+        'padding:4px 8px;font-size:10px;opacity:0.8;margin:4px 0">METHODOLOGY CHANGE ' +
+        escH(mb.date) + ' — ' + escH(mb.note) + '</div>'
+      : '';
+
     panel.innerHTML =
-      chartHtml +
+      chartHtml + mbHtml +
       '<div class="tbl-wrap"><table class="tbl-dense">' +
-        '<thead><tr><th>ACCOUNT</th><th>CCY</th><th>VALUE</th><th>VaR 1D $</th><th>VaR 1D %</th><th>VaR 1W $</th><th>VaR 1W %</th><th>RISK</th></tr></thead>' +
+        '<thead><tr><th>ACCOUNT</th><th>CCY</th><th>VALUE</th><th>VaR 1D $</th><th>VaR 1D %</th><th>VaR 1W $</th><th>VaR 1W %</th><th>ACCT EST $</th><th>COVERAGE</th><th>RISK</th></tr></thead>' +
         '<tbody>' + rows + '</tbody>' +
-      '</table></div>';
+      '</table></div>' +
+      covHtml;
 
     if (chartPts.length) wireVaRChart(panel, chartPts, chartW);
   }
@@ -779,8 +813,20 @@
       '</tr>'
     ).join('');
 
+    // Coverage disclosure — parity with the sister page's MCR panel. MCR has no completeness
+    // gate while VaR gates at 0.75, so the two panels can cover different position sets.
+    const mCov = (macct.coverage_status && macct.coverage_status !== 'clean')
+      ? '<div class="ptf-note mcr-coverage-note" style="border-left:2px solid var(--amber,#fa0);' +
+        'padding:4px 8px;font-size:10px;opacity:0.85;margin:4px 0">COVERAGE ' +
+        (macct.coverage_pct != null ? macct.coverage_pct.toFixed(1) : '—') + '% — ' +
+        escH((macct.uncovered_tickers || []).join(', ')) + ' could not be modelled. Weights and ' +
+        'risk contributions below are on the covered basis and will differ from account weights.' +
+        '</div>'
+      : '';
+
     panel.innerHTML =
       '<div class="ptf-tab-strip">' + tabs + '</div>' +
+      mCov +
       '<div class="tbl-wrap"><table class="tbl-dense">' +
         '<thead><tr><th>TICKER</th><th>WT</th><th>MCR</th><th title="Over/under relative to weight">Δ</th><th>STATUS</th></tr></thead>' +
         '<tbody>' + (mrows || '<tr><td colspan="5" class="empty">no data</td></tr>') + '</tbody>' +

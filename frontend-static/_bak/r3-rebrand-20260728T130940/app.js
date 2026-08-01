@@ -28,7 +28,7 @@
     { id: 'recession',      code: 'REC', fkey: null, label: 'Recession',      labelCN: '衰退監測', group: 'Macro',    src: 'stocks.clawmo.tech/recession.html', pdfExportable: true, pdfNeedsTicker: false },
     { id: 'liquidity',      code: 'LIQ', fkey: null, label: 'Liquidity',      labelCN: '流動性',   group: 'Macro',    src: 'stocks.clawmo.tech/liquidity.html', pdfExportable: false, pdfNeedsTicker: false },
     { id: 'valuation-map',  code: 'VAL', fkey: null, label: 'Valuation Map',  labelCN: '估值地圖', group: 'Macro',    src: 'stocks.clawmo.tech/valuation-map.html', pdfExportable: true, pdfNeedsTicker: false },
-    { id: 'sem',            code: 'SEM', fkey: null, label: 'Semiconductor',  labelCN: '半導體',    group: 'Macro',    src: 'stocks.clawmo.tech/semiconductor.html', pdfExportable: false, pdfNeedsTicker: false },
+    { id: 'gpu',            code: 'GPU', fkey: null, label: 'GPU Cloud',      labelCN: 'GPU算力',  group: 'Macro',    src: 'stocks.clawmo.tech/gpu.html', pdfExportable: false, pdfNeedsTicker: false },
     { id: 'research',       code: 'RAD', fkey: null, label: 'Research Radar', labelCN: '研究雷達', group: 'Research', src: 'stocks.clawmo.tech/research.html', pdfExportable: false, pdfNeedsTicker: false },
     { id: 'geo',            code: 'GEO', fkey: null, label: 'Geo Risk',       labelCN: '地緣風險', group: 'Macro',    src: 'stocks.clawmo.tech/data/hormuz.json' },
     { id: 'crypto',         code: 'CRY', fkey: null, label: 'Crypto',        labelCN: '加密貨幣', group: 'Assets',   src: 'stocks.clawmo.tech/crypto.html', pdfExportable: true, pdfNeedsTicker: false },
@@ -476,17 +476,10 @@
   // ('smart-money') or the display code ('SMY'/'smy'), case-insensitive — the
   // code is what users read off the terminal rail, so deep-links naturally use
   // it (mirrors the command-palette code match).
-  // Retired module ids kept resolvable so old deep-links/bookmarks don't 404 into an empty
-  // panel. 2026-07-28: 'gpu'/'GPU' -> 'sem' (GPU Cloud page became the Semiconductor Hub).
-  const LEGACY_MODULE_ALIASES = { gpu: 'sem' };
-
   function resolveModuleKey(raw) {
     if (!raw) return null;
     if (MODULE_BY_ID[raw]) return raw;
     const lc = raw.toLowerCase();
-    if (LEGACY_MODULE_ALIASES[lc] && MODULE_BY_ID[LEGACY_MODULE_ALIASES[lc]]) {
-      return LEGACY_MODULE_ALIASES[lc];
-    }
     const hit = MODULES.find(m => m.id.toLowerCase() === lc || m.code.toLowerCase() === lc);
     if (hit) return hit.id;
     // Hyphen-less convenience form ('smartmoney', 'valuationmap', …)
@@ -494,36 +487,15 @@
     return squashed ? squashed.id : null;
   }
 
-  // Parse a deep link from the query string, falling back to the hash.
-  //
-  // The hash forms matter for two reasons: (1) a bare '#VAL' is the obvious thing to type
-  // or share for a 3-letter-code UI, and it used to be silently ignored — the saved
-  // ocWorkspace pane always won, so a pasted link opened whatever panel the recipient had
-  // open last; (2) site-alert.js routes by assigning `location.hash = '#module=bonds'`,
-  // which nothing read, making the alert-banner click a no-op on this surface.
-  function parseModuleQuery(qs) {
-    if (!qs) return null;
+  function readUrlState() {
+    const qs = window.location.search;
+    if (!qs || qs.length < 2) return null;
     const p = new URLSearchParams(qs);
     const id = resolveModuleKey(p.get('module'));
     if (!id) return null;
     const params = {};
     p.forEach((v, k) => { if (k !== 'module' && v !== '') params[k] = v; });
     return { id, params };
-  }
-
-  function readUrlState() {
-    const qs = window.location.search;
-    if (qs && qs.length > 1) {
-      const fromQuery = parseModuleQuery(qs.replace(/^\?/, ''));
-      if (fromQuery) return fromQuery;
-    }
-    const raw = (window.location.hash || '').replace(/^#/, '');
-    if (!raw) return null;
-    // '#module=bonds&ticker=NVDA' — same shape as the query string.
-    if (raw.includes('=')) return parseModuleQuery(raw);
-    // Bare '#VAL' / '#valuation-map'.
-    const id = resolveModuleKey(raw);
-    return id ? { id, params: {} } : null;
   }
 
   async function exportPaneAsPdf(mod, ticker, market, pane) {
@@ -1037,19 +1009,6 @@
       saveState();
     }
 
-    // Route on hash changes too. Without this, assigning location.hash from inside the
-    // app (site-alert.js does exactly that) changed the URL and nothing else.
-    window.addEventListener('hashchange', () => {
-      const next = readUrlState();
-      if (!next) return;
-      const cur = state.panes[state.focus];
-      if (cur && cur.module === next.id) return;
-      state.panes[state.focus] = { module: next.id, params: next.params };
-      saveState();
-      renderWorkspace();
-      updateRailActive();
-    });
-
     // workspace
     renderWorkspace();
 
@@ -1110,13 +1069,7 @@
     const sbSpy = document.getElementById('sbSpy');
     const sbU = document.getElementById('sbUpdate');
     const pill = document.getElementById('regimePill');
-    // Match updateClock()'s format exactly. This used to return the BROWSER's local time
-    // in 12-hour form with seconds ("3:06:38 PM") while the clock beside it showed ET
-    // ("15:07 ET"), so the same status bar disagreed with itself depending on which code
-    // path last wrote it — and a non-ET reader was silently shown their own timezone.
-    const now = () => new Date().toLocaleTimeString('en-US', {
-      timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
-    }) + ' ET';
+    const now = () => new Date().toLocaleTimeString();
     try {
       const s = await window.OC_DATA.fetchJSON('https://stocks.clawmo.tech/data/signals-summary.json');
       const r = s && s.regime && s.regime.regime;

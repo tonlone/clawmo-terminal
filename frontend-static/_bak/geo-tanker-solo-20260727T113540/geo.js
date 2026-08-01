@@ -466,30 +466,6 @@
       });
     }
 
-    /* True when exactly one type is showing and it is `type` */
-    function isSoloType(type) {
-      return _activeTypes.size === 1 && _activeTypes.has(type);
-    }
-
-    /* The TANKERS ONLY chip lights up whenever the map happens to be showing
-       tankers alone — including when the user got there by toggling by hand. */
-    function syncSoloBtn() {
-      const solo = document.getElementById('geo-solo-tanker');
-      if (solo) solo.classList.toggle('active', isSoloType('Tanker'));
-    }
-
-    /* Isolate one type (pass null to restore all types) */
-    function setTypeIsolation(type) {
-      _activeTypes = new Set(type ? [type] : allTypes);
-      document.querySelectorAll('.geo-type-btn[data-type]').forEach(b => {
-        const on = !type || b.dataset.type === type;
-        b.classList.toggle('active', on);
-        b.classList.toggle('inactive', !on);
-      });
-      syncSoloBtn();
-      applyMapFilters();
-    }
-
     vessels.forEach(v => {
       if (v.lat == null || v.lon == null) return;
       _vesselByMmsi[v.mmsi] = v;
@@ -545,31 +521,17 @@
     requestAnimationFrame(_settleMap);
     setTimeout(_settleMap, 300);
 
-    /* Type toggle buttons — plain click toggles one type, shift/⌘/ctrl-click
-       isolates it (and repeating the modifier-click restores all types). */
-    document.querySelectorAll('.geo-type-btn[data-type]').forEach(btn => {
-      btn.addEventListener('click', ev => {
+    /* Type toggle buttons */
+    document.querySelectorAll('.geo-type-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
         const type = btn.dataset.type;
         if (!_layers[type]) return;
-        if (ev.shiftKey || ev.metaKey || ev.ctrlKey) {
-          setTypeIsolation(isSoloType(type) ? null : type);
-          return;
-        }
         const nowActive = btn.classList.toggle('active');
         btn.classList.toggle('inactive', !nowActive);
         if (nowActive) _activeTypes.add(type); else _activeTypes.delete(type);
-        syncSoloBtn();
         applyMapFilters();
       });
     });
-
-    /* One-click TANKERS ONLY shortcut (click again to restore all types) */
-    const soloBtn = document.getElementById('geo-solo-tanker');
-    if (soloBtn) {
-      soloBtn.addEventListener('click', () => {
-        setTypeIsolation(isSoloType('Tanker') ? null : 'Tanker');
-      });
-    }
 
     /* Flow filter buttons — radio style (click active to reset to 'all') */
     document.querySelectorAll('.geo-flow-btn').forEach(btn => {
@@ -769,15 +731,6 @@
       })
       .join('');
 
-    /* One-click tanker isolation — only offered when there are tankers to show */
-    const tankerSoloBtn = (typeCounts['Tanker'] || 0) > 0 ? `
-          <button class="geo-type-btn" id="geo-solo-tanker" style="--geo-btn-color:#f59e0b"
-                  title="Show tankers only on the map — click again to restore all vessel types">
-            <span class="geo-legend-dot" style="background:#f59e0b"></span>
-            TANKERS ONLY
-          </button>
-          <span class="geo-filter-sep" style="opacity:.5">|</span>` : '';
-
     const transitFilterHtml = (isGulf || isCronTracked) ? `
         <div class="geo-map-legend geo-map-legend-flow">
           <span class="geo-legend-label">TRANSIT FILTER</span>
@@ -805,8 +758,8 @@
           <div id="geo-map-canvas" style="height:400px;width:100%"></div>
         </div>
         <div class="geo-map-legend">
-          ${tankerSoloBtn}${btns}
-          <span style="margin-left:auto;font-size:9px;color:var(--fg-faint)">${vessels.length} vessels · click type to toggle · shift-click to isolate · dot = details</span>
+          ${btns}
+          <span style="margin-left:auto;font-size:9px;color:var(--fg-faint)">${vessels.length} vessels · click type to toggle · dot = details</span>
         </div>
         ${transitFilterHtml}
       </div>

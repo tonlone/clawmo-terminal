@@ -267,24 +267,6 @@
   .mod-grid-2 { grid-template-columns: minmax(0, 1fr); }
 }
 
-/* Even 2-column variant, for two PEER tables rather than main+sidebar.
-   .mod-grid-2 above is a 2.5:1 main+sidebar primitive (32 uses across 10
-   modules) — correct there, wrong for SCTR, whose US and TSX panes are the
-   same table at the same importance. Under 2.5:1 the TSX pane got 304–524px
-   against a 579px min-content table, so its last column sat off-pane behind a
-   nested scroller at every viewport width.
-   Both tables need ~620px; below 1340px an even split can no longer give them
-   that, so stack instead of handing both panes a hidden overflow. */
-.mod-grid-2-even {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-}
-@media (max-width: 1340px) {
-  .mod-grid-2-even { grid-template-columns: minmax(0, 1fr); }
-}
-
 .mod-panel {
   background: var(--panel);
   border: 1px solid var(--border);

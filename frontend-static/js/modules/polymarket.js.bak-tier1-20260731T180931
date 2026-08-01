@@ -258,10 +258,8 @@
      persists collapse choice in localStorage so it stays out of the way after first read. */
   function howToReadPanel() {
     const key = 'pol_howto_collapsed_v1';
-    // Default collapsed: the help wall consumed ~60% of the panel on every visit, pushing
-    // the actual markets below the fold for regulars. An explicit stored '0' still opens it.
-    let collapsed = true;
-    try { const v = localStorage.getItem(key); if (v !== null) collapsed = v === '1'; } catch (e) {}
+    let collapsed = false;
+    try { collapsed = localStorage.getItem(key) === '1'; } catch (e) {}
     return `
       <div class="mod-panel pol-howto" data-howto>
         <div class="mod-panel-title pol-howto-head" data-howto-toggle style="cursor:pointer;user-select:none">

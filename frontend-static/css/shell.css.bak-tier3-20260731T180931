@@ -800,37 +800,3 @@ html, body {
   .regime { padding: 2px 4px; }
   .regime-label { display: none; }
 }
-
-/* ── Reduced motion ──────────────────────────────────────────
-   The index marquee scrolls continuously and the pane spinner rotates; both run for the
-   whole session. Users who ask the OS for reduced motion (vestibular sensitivity) get a
-   static tape instead — the content is still fully readable, it just stops moving. */
-@media (prefers-reduced-motion: reduce) {
-  .tape-inner, .marquee, [class*="marquee"] {
-    animation: none !important;
-    transform: none !important;
-  }
-  @keyframes pane-spin { from { transform: none; } to { transform: none; } }
-  *, *::before, *::after {
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
-  }
-}
-
-/* ── Rail overflow affordance ────────────────────────────────
-   29 rail items don't fit at 900px viewport height and the rail scrolls with no scrollbar,
-   so the top block (PRE…SIG) simply vanished with nothing indicating it was there.
-   A soft fade at each end signals "more above / more below" without stealing width.
-   `scroll-timeline`-free: the mask is static, which is honest enough at this size. */
-.rail {
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14px,
-                                       #000 calc(100% - 14px), transparent 100%);
-          mask-image: linear-gradient(to bottom, transparent 0, #000 14px,
-                                       #000 calc(100% - 14px), transparent 100%);
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
-}
-.rail::-webkit-scrollbar { width: 6px; }
-.rail::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-.rail::-webkit-scrollbar-track { background: transparent; }

@@ -666,7 +666,7 @@
           <div class="mod-title">${window.OC_TITLE('sctr')} · TECHNICAL RANK</div>
           <div class="mod-meta"><span class="chip chip-dim">${fmt.ago(d.us?.updated)}</span></div>
         </div>
-        <div class="mod-grid-2-even">
+        <div class="mod-grid-2">
           <div>${panelShell('us', d.us)}</div>
           <div>${panelShell('tsx', d.tsx)}</div>
         </div>
@@ -1602,15 +1602,6 @@
     { id: 'moo',        label: 'Opening Auction' },
     { id: 'moc',        label: 'Closing Auction' },
   ];
-  /* FMP hands the disclosed amount through verbatim, and a few filings arrive
-     with the upper bound missing — "$15,001 -" (11 of 4291 as of 2026-08).
-     Rendered raw that looks like a clipped cell, so close the range. */
-  function fmtCgAmount(a) {
-    const s = String(a == null ? '' : a).trim();
-    if (!s) return '—';
-    return /[-–]$/.test(s) ? s.replace(/\s*[-–]$/, '+') : s;
-  }
-
   const INSIDER_URL    = 'https://stocks.clawmo.tech/data/insider-trades.json';
   const CONGRESS_URL   = 'https://stocks.clawmo.tech/data/congress-trades.json';
   const MOC_URL        = 'https://stocks.clawmo.tech/data/moc.json';
@@ -1890,35 +1881,6 @@
     { key: 'etf_flow_5d_pct',    label: 'ETF 5d',  type: 'num', gloss: 'ETF-FLOW-5D',  group: 'wyckoff'   },
     { key: 'sector_flow_5d_pct', label: 'SEC 5d',  type: 'num', gloss: 'SECTOR-FLOW',  group: 'wyckoff'   },
   ];
-  /* TODO — lean default column set (measured, NOT yet implemented).
-     Fill rates over smart-money-full.json, n=567 signals, 2026-07-31:
-
-       etf_flow_5d_pct       1% populated   <- the only genuinely near-empty column
-       churn_bars           11% populated
-       vol_trend_diverging  11% populated   <- read via s.vol_trend.diverging, NOT this
-                                               flat key (the key is only a sort/gloss
-                                               handle; measuring it directly reads 0%
-                                               and is misleading)
-       insider_cluster       0% populated   <- and insider_cluster_info is 0/567 too.
-                                               Possibly a genuinely quiet 7-day window,
-                                               possibly a broken producer join. Check the
-                                               PRODUCER before hiding it — a hidden column
-                                               would mask the outage.
-       flow_score           23% · streak_up_days 43% · sector_flow_5d_pct 42%
-       everything else     >98% populated with real spread
-
-     Conclusion: only ONE column is actually near-empty, so hiding columns is NOT worth
-     the refactor described below. Left here so the next person doesn't re-measure.
-     It is also NOT a one-line filter: this header maps
-     over SMY_SIG_COLS, but the body rows below are a hand-written <td> sequence, so
-     hiding a column here without deleting the matching cell would shift every row's
-     columns out of alignment. Doing this properly means driving the body off the same
-     array first. Re-measure fill rates before acting — a producer fix could repopulate
-     any of these.
-
-     (Note: 'score' is NOT a candidate — it has 38 distinct values. Rows all reading
-     "SCORE 100" is the default sort surfacing the top, not a broken column.) */
-
   // Group headers above the column row — disambiguate the original composite (blue, OBV/CMF/MFI/RVOL) from the new Wyckoff distribution layer (red).
   const SMY_GROUP_META = {
     identity:  { label: '',                                       rgb: null         },
@@ -3066,7 +3028,7 @@
           <td class="small">${t.district || '—'}</td>
           <td class="tk clickable" data-tk="${t.symbol || ''}">${t.symbol || '—'}</td>
           <td class="${txCls}">${t.type || '—'}</td>
-          <td class="mono">${fmtCgAmount(t.amount)}</td>
+          <td class="mono">${t.amount || '—'}</td>
           <td>${t.link ? `<a href="${t.link}" target="_blank" rel="noopener" style="color:var(--accent)">Filing ↗</a>` : '—'}</td>
         </tr>`;
       }).join('') || '<tr><td colspan="9" class="empty">no trades match filters</td></tr>';
@@ -3268,9 +3230,8 @@
     H += `<div class="acct-strip" style="grid-template-columns:repeat(${_cols},1fr)">
       ${c('REGIME', (r.regime || '—') + (r.score != null ? ' ' + r.score + '/4' : ''), r.regime === 'BULL' ? 'num-up' : 'num-dn', 'RSI ' + n(r.rsi, 1),
         'Market health from 4 S&P 500 trend checks: price > SMA50, price > SMA200, golden cross (SMA50 > SMA200), RSI > 45. 3-4 = BULL, 2 = CAUTION, 0-1 = BEAR.')}
-      ${c('SPY', n(r.price), '', 'SMA50 ' + n(r.sma50, 0),
-        'SPY (the S&P 500 ETF) vs its 50-day and 200-day moving averages — above both = uptrend. '
-        + 'This is the regime engine\'s S&P proxy, so the level is SPY\'s (~1/10 of the SPX index level), not SPX\'s.')}
+      ${c('SPX', n(r.price), '', 'SMA50 ' + n(r.sma50, 0),
+        'S&P 500 level vs its 50-day and 200-day moving averages — above both = uptrend.')}
       ${c('KILL SWITCH', r.kill_switch_active ? 'ARMED' : 'off', r.kill_switch_active ? 'num-dn' : 'num-up', 'avg trade ' + n(r.avg_trade_20d, 2) + '%',
         'Automatic circuit-breaker: halts ALL new trade signals when recent trades deteriorate badly. off = trading normally.')}
       ${_thCard}

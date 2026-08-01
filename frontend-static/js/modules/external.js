@@ -1397,7 +1397,7 @@
               </tr></thead>
               <tbody>${topRows || '<tr><td colspan="14" class="empty">no picks</td></tr>'}</tbody>
             </table></div>
-            <div class="chart-legend"><span class="chart-note"><b>SCORE</b> ≥70 green · <b>DISC</b> = current PE vs sector median (positive = trading at discount) · <b>SHARES/WEIGHT</b> = portfolio simulator allocation on $${fmt.compact(pf.capital)} capital · <b>RC%</b> = risk contribution vs portfolio · <b>VOL</b> = annualized vol</span></div>
+            <div class="chart-legend"><span class="chart-note"><b>SCORE</b> ≥70 green · composite 0–100 = <b>Valuation 40% + ROE 25% + Growth 20% + Health 15%</b> · <b>DISC</b> = current PE vs sector median (positive = trading at discount) · <b>SHARES/WEIGHT</b> = portfolio simulator allocation on $${fmt.compact(pf.capital)} capital · <b>RC%</b> = risk contribution vs portfolio · <b>VOL</b> = annualized vol</span></div>
           </div>
 
           <div class="mod-panel">

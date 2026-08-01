@@ -1,0 +1,424 @@
+/* GPU Cloud Pricing — native terminal module.
+   Hand-rolled SVG (no Chart.js). Mirrors stocks.clawmo.tech/semiconductor.html; reads the same
+   gpu-pricing.json + gpu-pricing-history.json written by compute_gpu_pricing.py. */
+(function () {
+  'use strict';
+  const { fetchJSON } = window.OC_DATA;
+  const BASE = 'https://stocks.clawmo.tech/data';
+  const px = (v) => (v == null ? '—' : '$' + Number(v).toFixed(2));
+
+  /* Horizontal SVG bar chart of marketplace floor per SKU. */
+  function barChartSVG(skus) {
+    const items = (skus || []).filter((s) => s.floor != null);
+    if (!items.length) return '<div class="small">No priced SKUs.</div>';
+    const maxV = Math.max.apply(null, items.map((s) => s.floor));
+    const rowH = 26, padL = 96, padR = 56, w = 580, barMax = w - padL - padR;
+    const h = items.length * rowH + 8;
+    let svg = `<svg viewBox="0 0 ${w} ${h}" width="100%" preserveAspectRatio="xMidYMid meet">`;
+    items.forEach((s, i) => {
+      const y = i * rowH + 6;
+      const bw = Math.max(2, (s.floor / maxV) * barMax);
+      svg += `<text x="${padL - 6}" y="${y + 13}" text-anchor="end" font-size="11" fill="#9aa4b2">${s.label}</text>`;
+      svg += `<rect x="${padL}" y="${y + 3}" width="${bw.toFixed(1)}" height="14" rx="2" fill="#4ade80" opacity="0.5"/>`;
+      svg += `<text x="${(padL + bw + 5).toFixed(1)}" y="${y + 13}" font-size="11" fill="#e6edf3" font-weight="700">$${s.floor.toFixed(2)}</text>`;
+    });
+    return svg + '</svg>';
+  }
+
+
+  // ── Semiconductor Hub panels (P3, 2026-07-28) — twin of semiconductor.html ────────────────
+  // Reads sector-rs.json (P1) + short-interest-sectors.json (P2). Display-tier only.
+  // Disclosures are rendered FROM the JSON, never restated here — the computes emit them as
+  // data so neither surface can quietly drop them and drift from the other.
+  const SEM_LABEL = { semis: 'Semiconductors', storage: 'Storage / memory',
+                      hardware: 'Hardware', mag7: 'Mega-cap tech' };
+  const semEsc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g,
+    c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  const semPct = (v, dp = 2) => v == null ? '<span class="sig-dim">—</span>'
+    : `<span class="${v > 0 ? 'num-up' : v < 0 ? 'num-dn' : ''}">${v > 0 ? '+' : ''}${Number(v).toFixed(dp)}%</span>`;
+
+
+  // ── "How to read this" guides (2026-07-28) ───────────────────────────────────────────────────
+  // Tony (a non-specialist reader) could not interpret the columns. Caveats had shipped; a GUIDE
+  // had not — the §5.C rule is that a legend ships WITH the feature, and only half of it was met.
+  // Kept in ONE place per surface so the web page and this module cannot drift apart in wording.
+
+  // ── Column tooltips + caveat cards (2026-07-28, twin of semiconductor.html) ─────────────────
+  // ONE definitions map feeds BOTH the <th title> tooltip and the "How to read" guide, so they
+  // cannot drift. Caveats render as LABELLED CARDS using the JSON's own keys — the previous
+  // renderer concatenated the values and discarded the keys, which is what made it a wall of text.
+  const SEM_COLDEFS = {
+    rs: {'BASKET':'A fixed group of stocks, equally weighted — every member counts the same, so NVDA does not drown out the rest. Membership frozen and dated.',
+         'N':'How many stocks are in the group.',
+         '5D vs SPY':"The group's return MINUS SPY's over 5 trading days (~1 week). Negative = worse than the market. A difference, not a return.",
+         '21D vs SPY':'Same over 21 trading days (~1 month). −17% means it trailed SPY by 17 points, NOT that it fell 17%.',
+         '63D vs SPY':'Same over 63 trading days (~3 months) — the slowest of the three.',
+         '21D vs EW MKT':'The 1-month comparison against an EQUAL-WEIGHT average of our ~540-stock universe instead of SPY. SPY is dominated by a few giants, so comparing an equal-weight basket to SPY quietly mixes in a size effect. Agreement = a real sector story; divergence = partly big-vs-small.',
+         '>50DMA':'Share of the group above its own 50-day average price. THE BREADTH CHECK — 0% means every member is below trend, so weakness is broad, not one bad apple.',
+         '21D CORR':'How closely members moved together this month (0 = unrelated, 1 = lockstep). High while falling = the whole complex sold as a block; low = company-specific news.',
+         'PCTILE':"Where today's 1-month spread ranks vs this basket's own history. 0th = worst on record. Windows overlap heavily — a rank, not a probability."},
+    si: {'SLICE':'The group. Bold = hand-picked sector groups; faded = broad market sectors for context.',
+         'N':'How many stocks in the group.',
+         'SI % SO':"Short interest as a share of all the company's shares. Selling short bets the price falls. 3% = ~3 of every 100 shares. High is NOT automatically bearish — crowded shorts can squeeze upward violently.",
+         'Δ vs PRIOR':'Change since the previous reading, in percentage points. Published only TWICE A MONTH — a two-week change.',
+         'Z':"How unusual today's level is vs this group's own history. ~0 normal, 2 high, 3 very high. Blank = we refused to compute one.",
+         'vs MARKET':'THE COLUMN TO READ FIRST. Group z minus the whole market’s z. Short interest is elevated almost everywhere, so a big z can be entirely market-wide. Positive = more crowded than the market; negative = less.'},
+    pos: {'TICKER':'The individual stock.',
+          'NET GEX $BN':'Dealer GAMMA EXPOSURE. POSITIVE = market makers buy dips and sell rallies, DAMPING moves. NEGATIVE = they sell into weakness and buy into strength, AMPLIFYING moves. Negative gamma is why some days feel violent.',
+          'REGIME':'Plain-language version of the sign of Net GEX.',
+          'P/C OI':"Put vs call OPEN INTEREST for this one stock — contracts outstanding, not today's volume.",
+          'IV RANK':"Where this stock's implied volatility sits vs its own past year (0–100). High = options expensive vs normal.",
+          'GAMMA FLIP':'Price at which dealer positioning would flip between damping and amplifying. A rough reference, not a trigger.'},
+    kl: {'TICKER':'The individual stock.','SPOT':'Most recent closing price.',
+         'ATR14':'AVERAGE TRUE RANGE — how much this stock typically moves in a day, in dollars. Everything is measured in ATR because $5 means something different for a $900 stock than a $30 one.',
+         'NEAREST ZONE':'What the level is and HOW IT WAS DERIVED — a prior swing low, the price where most volume traded, a volume-weighted average, a 52-week extreme.',
+         'DIST (ATR)':'How far the zone is from today’s price, in ATR. +1.0 ≈ one average trading day away. Read this first — comparable across every stock.',
+         'ZONE RANGE':'A price BAND, not a single number: showing "870.00" would imply precision the method does not have.'}
+  };
+  const semTh = (label, group) => {
+    const t = (SEM_COLDEFS[group] || {})[label];
+    return `<th class="num"${t ? ` title="${semEsc(t)}"` : ''}>${label}</th>`;
+  };
+  const semThL = (label, group) => {
+    const t = (SEM_COLDEFS[group] || {})[label];
+    return `<th${t ? ` title="${semEsc(t)}"` : ''}>${label}</th>`;
+  };
+  const SEM_CAV_LABEL = {
+    survivorship:'Survivorship', equal_weight:'Equal weight', spy_ew:'EW benchmark',
+    membership:'Membership', overlap:'Overlap', not_a_signal:'Not a signal',
+    descriptive_only:'Descriptive only', lag:'Data lag', small_slices:'Small slices',
+    equal_weight_size_bias:'Size bias', sector_map:'Sector labels', curated_groups:'Group choice',
+    excess_vs_aggregate:'Read this first', in_sample_endpoint:'In-sample',
+    gics_membership_floats:'Sector membership', z_magnitude_caveat:'How precise is the z?',
+    untested:'Untested', zones:'Zones not lines', distance:'Distance in ATR',
+    proximity:'What is shown', naming:'Naming', why_separate:'Why not one number',
+    putcall_scope:'Scope', cot_lag:'Freshness', gex_basis:'What GEX is'
+  };
+  const SEM_CAV_KEY = ['not_a_signal','descriptive_only','untested','excess_vs_aggregate','z_magnitude_caveat'];
+  function semCaveats(disc, order) {
+    const keys = (order || []).filter(k => disc[k])
+      .concat(Object.keys(disc).filter(k => (order || []).indexOf(k) < 0));
+    const items = keys.map(k => `<div class="sem-cav-item${SEM_CAV_KEY.includes(k) ? ' key' : ''}">
+        <span class="sem-cav-tag">${semEsc(SEM_CAV_LABEL[k] || k.replace(/_/g,' '))}</span>
+        <span class="sem-cav-txt">${semEsc(disc[k])}</span></div>`).join('');
+    return `<details class="sem-cav"><summary>Caveats &amp; limitations (${keys.length}) — worth reading once</summary>
+      <div class="sem-cav-list">${items}</div></details>`;
+  }
+
+  function semGuide(what, rows, eg) {
+    const dl = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+    return `<div class="sem-whatis"><b>What this answers:</b> ${what}</div>
+      <details class="sem-hrt"><summary>How to read this table</summary>
+        <dl>${dl}</dl>
+        <div class="sem-eg"><b>Worked example:</b> ${eg}</div></details>`;
+  }
+  const SEM_GUIDES = {
+    rs: () => semGuide(
+      'Is the semiconductor complex actually being sold off relative to the market — and is it the whole group, or one or two big names dragging the average?',
+      [['BASKET','A fixed, equally weighted group (every member counts the same, so NVDA does not drown out the rest). Membership frozen and dated.'],
+       ['N','How many stocks in the group.'],
+       ['5D / 21D / 63D vs SPY','The group\'s return MINUS SPY\'s over 5, 21 or 63 <i>trading days</i> (~1 week, 1 month, 3 months). Negative = trailed the market. This is a difference, not a return: −17% means it lagged SPY by 17 points, not that it fell 17%.'],
+       ['21D vs EW MKT','Same month, but against an EQUAL-WEIGHT average of our ~540-stock universe. SPY is dominated by a few giants, so comparing an equal-weight basket to SPY quietly mixes in a company-size effect. Agreement = a real sector story; divergence = partly big-vs-small.'],
+       ['&gt;50DMA','Share of members above their own 50-day average price. THE BREADTH CHECK: 0% means every member is below trend, so weakness is broad, not one bad apple.'],
+       ['21D CORR','How closely members moved together over the month (0 = unrelated, 1 = lockstep). High correlation while falling = the whole complex sold as a block; low = company-specific news.'],
+       ['PCTILE','Where today\'s 1-month spread ranks against the basket\'s own history. 0th = worst on record; 50th = ordinary. Windows overlap heavily — read it as a rank, not a probability.']],
+      'Storage at −30% (21D vs SPY), 0% above 50dma, corr 0.84, 0th percentile: it trailed the market by ~30 points, EVERY member is below trend, they fell together rather than for separate reasons, and it is the worst stretch on record. Compare mega-cap tech the same day: +2.4% vs SPY but only 14% above 50dma — the group looks healthy only because one member is carrying it.'),
+    si: () => semGuide(
+      'Are traders betting AGAINST these stocks unusually heavily — and is that specific to this sector, or is the whole market crowded?',
+      [['SLICE','The group. Bold = hand-picked sector groups; faded = broad market sectors, for context.'],
+       ['SI % SO','Short interest as a share of all the company\'s shares. Selling short is a bet the price falls. 3% = about 3 of every 100 shares. High is not automatically bearish — crowded shorts can squeeze upward violently.'],
+       ['Δ vs PRIOR','Change since the previous reading, in percentage points. Published only TWICE A MONTH, so this is a two-week change.'],
+       ['Z','How unusual today\'s level is versus the group\'s own history. ~0 = normal, 2 = high, 3 = very high. Blank = we refused to compute one.'],
+       ['vs MARKET','THE COLUMN TO READ FIRST. Group z minus the whole market\'s z. Short interest is elevated almost everywhere right now, so a big z can be entirely market-wide. Positive = more crowded than the market; negative = less.'],
+       ['⚠ no z','We deliberately refused to publish a z — the group is too small or its history too short for one to mean anything. Hover for the reason.'],
+       ['thin','Few enough members that one company can swing the average. Treat with caution.']],
+      'Semis show z 1.57 — sounds high — but vs market −1.41. The market sits near a record level of short interest and semis are well BELOW it, so despite the price weakness traders are NOT unusually positioned against semis. Storage shows "no z" on purpose: with 4 companies any z would mostly reflect one of them.'),
+    pos: () => semGuide(
+      'What are options and futures traders positioned for? Three separate feeds, deliberately un-blended.',
+      [['PUT/CALL','Puts traded ÷ calls traded, market-wide. Puts profit when prices fall (or are bought as insurance). Above ~1.0 = defensive; below ~0.8 = complacent. Not semis-specific.'],
+       ['SPEC z','Speculative futures positioning in Nasdaq-100 / S&amp;P-500, as how unusual it is versus the past year. Negative = net bet on lower prices. Beyond ±2 is a real extreme, and extremes often precede sharp reversals because crowded positions unwind. Friday-published for Tuesday\'s snapshot.'],
+       ['NET GEX $BN','Dealer gamma exposure. Market makers hedge continuously: POSITIVE = they buy dips and sell rallies, DAMPING moves; NEGATIVE = they sell into weakness and buy into strength, AMPLIFYING moves. Negative gamma is why some days feel unusually violent.'],
+       ['REGIME','Plain-language version of the sign of Net GEX.'],
+       ['P/C OI','Put vs call OPEN INTEREST for that one stock — contracts outstanding, not today\'s trading.'],
+       ['IV RANK','Where the stock\'s implied volatility sits versus its own past year (0–100). High = options expensive vs normal.'],
+       ['GAMMA FLIP','Price at which dealer positioning would flip between damping and amplifying. A rough reference, not a trigger.']],
+      'Today: put/call 0.94 (mildly defensive), Nasdaq futures z −2.27 (a real extreme — speculators heavily positioned for declines), 14 of 18 semis in negative gamma (hedging is amplifying moves, not cushioning them). These three often disagree — that is why they are shown separately rather than combined.'),
+    kl: () => semGuide(
+      'Which prices near the current price are worth being aware of, and how far away are they in the stock\'s own terms?',
+      [['SPOT','Most recent closing price.'],
+       ['ATR14','Average True Range — how much this stock typically moves in a day, in dollars. Everything here is measured in ATR because $5 means something different for a $900 stock than a $30 one.'],
+       ['NEAREST ZONE','What the level is and HOW IT WAS DERIVED — a prior swing low, the price where most volume traded, a volume-weighted average, a 52-week extreme. The name describes its origin only.'],
+       ['DIST (ATR)','How far the zone is from today\'s price, in ATR. +1.0 ≈ one average trading day away. Read this first — it is comparable across every stock.'],
+       ['ZONE RANGE','A price BAND, not a single number, deliberately: showing "870.00" would imply precision the method does not have.']],
+      'NVDA spot 196.51, ATR 8.03, nearest zone a prior swing low at +0.18 ATR (band 193.95–201.99) — price is sitting essentially ON a level where it previously turned, less than a fifth of a typical day away. ⚠ Whether price reacts at these levels more often than chance is UNTESTED. Reference points for attention, not predictions.'),
+  };
+
+  async function semDivergencePanel() {
+    let d;
+    try { d = await fetchJSON(`${BASE}/sector-rs.json`); }
+    catch (e) { return `<div class="mod-panel"><div class="mod-panel-title">SECTOR DIVERGENCE</div>
+      <div class="mod-panel-sub small">unavailable</div></div>`; }
+    const rows = ['semis','storage','hardware','mag7'].map(k => {
+      const b = d.baskets[k]; if (!b) return '';
+      const sp = b.spreads || {}, br = b.breadth || {}, dp = b.dispersion || {};
+      const pc = (b.percentiles || {}).spy || {};
+      const corr = dp.mean_pairwise_corr_21d;
+      return `<tr><td class="pat"><b>${semEsc(SEM_LABEL[k] || k)}</b></td>
+        <td class="num">${b.n}</td>
+        <td class="num">${semPct((sp.spy||{})['5d'])}</td>
+        <td class="num">${semPct((sp.spy||{})['21d'])}</td>
+        <td class="num">${semPct((sp.spy||{})['63d'])}</td>
+        <td class="num">${semPct((sp.spy_ew||{})['21d'])}</td>
+        <td class="num">${br.pct_above_50dma == null ? '—' : br.pct_above_50dma.toFixed(0)+'%'}</td>
+        <td class="num">${corr == null ? '—' : Number(corr).toFixed(2) +
+          (dp.low_n_warning ? ' <span class="sig-tinyn" title="only '+dp.pairs+' pairs — noisy at this basket size">⚠</span>' : '')}</td>
+        <td class="num">${pc.pctile_21d_spread == null ? '—' :
+          Number(pc.pctile_21d_spread).toFixed(0)+'<span class="sig-dim" title="'+semEsc(pc.basis||'')+
+          ' — '+pc.n_obs_overlapping+' overlapping windows, ~'+pc.effective_n_approx+' independent">th</span>'}</td></tr>`;
+    }).join('');
+    const dis = d.disclosures || {};
+    return `<div class="mod-panel"><div class="mod-panel-title">SECTOR DIVERGENCE
+        <span class="mod-panel-sub">equal-weight baskets vs the index · as of ${semEsc(d.as_of)}</span></div>
+      <div class="tbl-wrap" style="padding:6px 10px"><table class="tbl-dense"><thead><tr>
+        ${semThL('BASKET','rs')}${semTh('N','rs')}${semTh('5D vs SPY','rs')}${semTh('21D vs SPY','rs')}
+        ${semTh('63D vs SPY','rs')}${semTh('21D vs EW MKT','rs')}${semTh('>50DMA','rs')}
+        ${semTh('21D CORR','rs')}${semTh('PCTILE','rs')}</tr></thead><tbody>${rows}</tbody></table></div>
+      ${SEM_GUIDES.rs()}
+      ${semCaveats(dis, ['equal_weight','survivorship','spy_ew','membership','overlap','not_a_signal'])}</div>`;
+  }
+
+  async function semCrowdingPanel() {
+    let d;
+    try { d = await fetchJSON(`${BASE}/short-interest-sectors.json`); }
+    catch (e) { return `<div class="mod-panel"><div class="mod-panel-title">SHORT CROWDING</div>
+      <div class="mod-panel-sub small">unavailable</div></div>`; }
+    const order = ['semis','storage','hardware'].concat(
+      Object.keys(d.slices).filter(k => !['semis','storage','hardware'].includes(k)));
+    const rows = order.map(k => {
+      const s = d.slices[k]; if (!s) return '';
+      const cur = s.kind === 'curated';
+      const zTxt = s.z == null
+        ? `<span class="sig-tinyn" title="${semEsc(s.z_suppressed_reason||'')}">⚠ no z</span>`
+        : Number(s.z).toFixed(2) + (s.thin_slice ? ' <span class="sig-tinyn" title="10–25 names">thin</span>' : '');
+      const ex = s.z_excess_vs_aggregate;
+      const exTxt = ex == null ? '<span class="sig-dim">—</span>'
+        : `<span class="${ex > 0.3 ? 'num-dn' : ex < -0.3 ? 'num-up' : ''}" title="slice z minus the market-wide aggregate z on the same settlement">${ex > 0 ? '+' : ''}${Number(ex).toFixed(2)}</span>`;
+      return `<tr${cur ? '' : ' style="opacity:0.72"'}><td class="pat">${cur ? '<b>' : ''}${semEsc(SEM_LABEL[k]||k)}${cur ? '</b>' : ''}</td>
+        <td class="num">${s.n_names_latest}</td>
+        <td class="num">${s.level_pct_shares_out == null ? '—' : s.level_pct_shares_out.toFixed(2)+'%'}</td>
+        <td class="num">${s.delta_pp_vs_prior == null ? '—' : (s.delta_pp_vs_prior > 0 ? '+' : '')+s.delta_pp_vs_prior.toFixed(3)+'pp'}</td>
+        <td class="num">${zTxt}</td><td class="num">${exTxt}</td></tr>`;
+    }).join('');
+    const st = d.staleness || {}, dd = d.disclosures || {};
+    return `<div class="mod-panel"><div class="mod-panel-title">SHORT-INTEREST CROWDING
+        <span class="mod-panel-sub">settlement ${semEsc(st.settlement_date)} · ${st.days_since_settlement}d old · next ${semEsc(st.next_settlement_expected||'—')}</span></div>
+      <div class="tbl-wrap" style="padding:6px 10px"><table class="tbl-dense"><thead><tr>
+        ${semThL('SLICE','si')}${semTh('N','si')}${semTh('SI % SO','si')}${semTh('Δ vs PRIOR','si')}
+        ${semTh('Z','si')}${semTh('vs MARKET','si')}</tr></thead><tbody>${rows}</tbody></table></div>
+      ${SEM_GUIDES.si()}
+      ${semCaveats(dd, ['excess_vs_aggregate','small_slices','z_magnitude_caveat','lag','survivorship','equal_weight_size_bias','descriptive_only'])}</div>`;
+  }
+
+
+  async function semPositioningPanel() {
+    // Third lens: options & positioning. Three INDEPENDENT feeds, deliberately NOT blended into
+    // a score (fence A15 — one number hides the disagreement that makes this useful).
+    const WATCH = ['NVDA','AMD','AVGO','MU','WDC','STX','SNDK','INTC','QCOM','TXN',
+                   'LRCX','AMAT','KLAC','ADI','MCHP','ON','NXPI','MRVL'];
+    const [pc, cot, gex] = await Promise.all([
+      fetchJSON(`${BASE}/putcall.json`).catch(() => null),
+      fetchJSON(`${BASE}/cot.json`).catch(() => null),
+      fetchJSON(`${BASE}/gex_index.json`).catch(() => null),
+    ]);
+    const card = (n, v, m, cls) => `<div class="acct-card"><div class="acct-name">${n}</div>
+      <div class="acct-val"><span class="mono ${cls || ''}">${v}</span></div>
+      <div class="acct-meta"><span class="small">${semEsc(m)}</span></div></div>`;
+    let cards = '';
+    if (pc && pc.history && pc.history.length) {
+      const l = pc.history[pc.history.length - 1];
+      const ctx = (pc.context || {}).total || {};
+      cards += card('PUT/CALL TOTAL', Number(l.total).toFixed(2),
+        `${l.date}${ctx.now_pctile != null ? ' · ' + ctx.now_pctile.toFixed(0) + 'th pctile' : ''}`,
+        l.total > 1.05 ? 'num-up' : l.total < 0.80 ? 'num-dn' : '');
+      cards += card('EQUITY P/C', Number(l.equity).toFixed(2), 'equity-only leg', '');
+    }
+    if (cot && cot.instruments) {
+      cot.instruments.filter(i => /Nasdaq|S&P 500/i.test(i.name)).forEach(i => {
+        const z = i.zScoreSpec;
+        cards += card(semEsc(i.name) + ' SPEC z', (z > 0 ? '+' : '') + Number(z).toFixed(2),
+          `as of ${i.asOf} · 52wk window`, Math.abs(z) >= 2 ? (z < 0 ? 'num-dn' : 'num-up') : '');
+      });
+    }
+    let rows = '', sub = '';
+    if (gex && gex.stocks) {
+      const by = {}; gex.stocks.forEach(g => { by[g.ticker] = g; });
+      const hit = WATCH.map(t => by[t]).filter(Boolean).sort((a, b) => (a.net_gex_bn||0) - (b.net_gex_bn||0));
+      const negN = hit.filter(g => g.net_gex_bn < 0).length;
+      sub = `dealer GEX covers ${hit.length}/${WATCH.length} watchlist names · ${negN} in negative gamma · as of ${semEsc(gex.updated || '—')}`;
+      rows = hit.map(g => `<tr><td class="tk">${semEsc(g.ticker)}</td>
+        <td class="num ${g.net_gex_bn < 0 ? 'num-dn' : 'num-up'}">${g.net_gex_bn == null ? '—' : (g.net_gex_bn > 0 ? '+' : '') + Number(g.net_gex_bn).toFixed(3)}</td>
+        <td class="num">${semEsc(g.regime || '—')}</td>
+        <td class="num">${g.put_call_ratio == null ? '—' : Number(g.put_call_ratio).toFixed(2)}</td>
+        <td class="num">${g.iv_rank == null ? '—' : Number(g.iv_rank).toFixed(0)}</td>
+        <td class="num">${g.gamma_flip == null ? '—' : Number(g.gamma_flip).toFixed(2)}</td></tr>`).join('');
+    }
+    return `<div class="mod-panel"><div class="mod-panel-title">OPTIONS &amp; POSITIONING
+        <span class="mod-panel-sub">${sub}</span></div>
+      <div class="acct-strip" style="grid-template-columns:repeat(4,1fr)">${cards}</div>
+      <div class="tbl-wrap" style="padding:6px 10px"><table class="tbl-dense"><thead><tr>
+        ${semThL('TICKER','pos')}${semTh('NET GEX $BN','pos')}${semTh('REGIME','pos')}
+        ${semTh('P/C OI','pos')}${semTh('IV RANK','pos')}${semTh('GAMMA FLIP','pos')}
+      </tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">no coverage</td></tr>'}</tbody></table></div>
+      ${SEM_GUIDES.pos()}
+      ${semCaveats({
+        not_a_signal:'None of this is a signal, and none of it measures the intraday "large short flow" that circulating posts claim to detect — no public data source does.',
+        why_separate:'These three feeds measure different things on different clocks and will often disagree. That disagreement is the point, and is why they are not blended into a single gauge.',
+        putcall_scope:'CBOE put/call is MARKET-WIDE, not semis-specific — backdrop, not a read on these stocks.',
+        cot_lag:'CFTC COT is a Tuesday snapshot published on Friday, so it is several days stale; its z is fitted on a rolling 52-week window.',
+        gex_basis:'Dealer GEX is an end-of-day ESTIMATE derived from open interest — not observed order flow.'
+      }, ['not_a_signal','why_separate','putcall_scope','cot_lag','gex_basis'])}</div>`;
+  }
+
+
+  async function semKeyLevelsPanel() {
+    // D3 key levels. RQ6's seven conditions are enforced in the COMPUTE; this renderer must not
+    // undo them — no support/resistance wording, zones not lines, distance-in-ATR first.
+    // ⚠ DELIBERATE DENSITY DIVERGENCE from semiconductor.html: the web page lists every zone
+    // within 2 ATR (72 rows); the terminal shows the NEAREST zone per ticker (18 rows) because a
+    // 72-row table defeats the terminal's density. Same data, same compute, same filter — a
+    // display choice, documented so a future session does not "fix" it as drift.
+    let d;
+    try { d = await fetchJSON(`${BASE}/key-levels.json`); }
+    catch (e) { return `<div class="mod-panel"><div class="mod-panel-title">KEY LEVELS</div>
+      <div class="mod-panel-sub small">unavailable</div></div>`; }
+    const rows = Object.keys(d.tickers).map(t => {
+      const x = d.tickers[t], l = (x.levels || [])[0];
+      if (!l) return `<tr><td class="tk">${semEsc(t)}</td><td class="num">${x.spot.toFixed(2)}</td>
+        <td class="num">${x.atr14.toFixed(2)}</td><td colspan="3" class="empty">no zone within ${d.params.max_atr_away} ATR</td></tr>`;
+      return `<tr><td class="tk">${semEsc(t)}</td>
+        <td class="num">${x.spot.toFixed(2)}</td>
+        <td class="num">${x.atr14.toFixed(2)}</td>
+        <td>${semEsc(l.label)}</td>
+        <td class="num" style="font-weight:600">${l.dist_atr > 0 ? '+' : ''}${l.dist_atr.toFixed(2)} <span class="sig-dim">${semEsc(l.side)}</span></td>
+        <td class="num sig-dim">${l.zone_low.toFixed(2)}–${l.zone_high.toFixed(2)}</td></tr>`;
+    }).join('');
+    const k = d.disclosures || {};
+    return `<div class="mod-panel"><div class="mod-panel-title">KEY LEVELS
+        <span class="mod-panel-sub">nearest reference zone per name · as of ${semEsc(d.as_of)} · only zones within ${d.params.max_atr_away} ATR</span></div>
+      <div class="tbl-wrap" style="padding:6px 10px"><table class="tbl-dense"><thead><tr>
+        ${semThL('TICKER','kl')}${semTh('SPOT','kl')}${semTh('ATR14','kl')}${semThL('NEAREST ZONE','kl')}
+        ${semTh('DIST (ATR)','kl')}${semTh('ZONE RANGE','kl')}</tr></thead><tbody>${rows}</tbody></table></div>
+      ${SEM_GUIDES.kl()}
+      ${semCaveats(k, ['untested','zones','distance','proximity','naming','not_a_signal'])}</div>`;
+  }
+
+  async function renderGpu(body) {
+    body.innerHTML = '<div class="mod-loading">Loading Semiconductor Hub…</div>';
+    try {
+      const d = await fetchJSON(`${BASE}/gpu-pricing.json`);
+      let hist = { series: [] };
+      try { hist = await fetchJSON(`${BASE}/gpu-pricing-history.json`); } catch (e) { /* optional */ }
+      const h = d.headline || {}, v = h.vast || {}, rp = h.runpod || {};
+
+      const disc = `<div class="mod-panel" style="padding:7px 12px;border-left:3px solid #E5B94C">
+        <div class="small" style="line-height:1.5"><span class="num-warn" style="font-weight:700">⚠ Reference rates, not a market-wide index.</span> ${d.disclaimer || ''}</div></div>`;
+
+      const card = (name, val, meta) => `<div class="acct-card"><div class="acct-name">${name}</div>
+        <div class="acct-val"><span class="mono">${val}</span></div>
+        <div class="acct-meta"><span class="small">${meta}</span></div></div>`;
+      const kpis = `<div class="acct-strip" style="grid-template-columns:repeat(4,1fr)">
+        ${card('H100 SXM · FLOOR', px(h.floor), (v.offers ? v.offers + ' Vast offers' : 'RunPod only'))}
+        ${card('RUNPOD SECURE', px(rp.secure), 'managed cloud')}
+        ${card('RUNPOD COMMUNITY', px(rp.community), 'marketplace')}
+        ${card('VAST MEDIAN', px(v.median), 'marketplace median')}
+      </div>`;
+
+      const bars = `<div class="mod-panel"><div class="mod-panel-title">Marketplace floor by GPU ($/GPU-hr)</div>
+        <div class="mod-panel-sub small">Lowest available rate across sources. Lower = looser compute supply.</div>
+        ${barChartSVG(d.skus)}</div>`;
+
+      const rows = (d.skus || []).map((s) => {
+        const r = s.runpod || {}, vv = s.vast || {};
+        return `<tr><td class="mono" style="font-weight:700">${s.label}</td>
+          <td class="mono small">${s.vram_gb ? s.vram_gb + 'G' : '—'}</td>
+          <td class="mono num">${px(r.secure)}</td><td class="mono num">${px(r.community)}</td>
+          <td class="mono num">${px(vv.min)}</td><td class="mono num">${px(vv.median)}</td>
+          <td class="mono num small">${vv.offers || '—'}</td>
+          <td class="mono num num-up" style="font-weight:700">${px(s.floor)}</td></tr>`;
+      }).join('');
+      const table = `<div class="mod-panel"><div class="mod-panel-title">All SKUs</div>
+        <div class="tbl-wrap"><table class="tbl-dense" style="width:100%">
+        <thead><tr><th>GPU</th><th class="num">VRAM</th><th class="num">RP Secure</th><th class="num">RP Comm</th>
+        <th class="num">Vast Min</th><th class="num">Vast Med</th><th class="num">Off</th><th class="num">Floor</th></tr></thead>
+        <tbody>${rows}</tbody></table></div></div>`;
+
+      const days = (hist.series || []).length;
+      const note = `<div class="mod-panel-sub small" style="margin-top:8px;line-height:1.5">
+        History: ${days} day${days === 1 ? '' : 's'} (accrues daily). ${d.methodology || ''}<br>
+        Sources: RunPod GraphQL + Vast.ai marketplace. SemiAnalysis's 63-provider aggregate is paywalled with no API. Snapshot ${d.generated_at || ''}.</div>`;
+
+      // Two-surface parity (D2): the new panels lead, GPU pricing becomes one lens of the hub.
+      const [divPanel, crowdPanel, posPanel, klPanel] = await Promise.all(
+        [semDivergencePanel(), semCrowdingPanel(), semPositioningPanel(), semKeyLevelsPanel()]);
+      const guideCss = `<style>
+          /* "How to read this" guides (2026-07-28) — twin of semiconductor.html's .hrt/.whatis */
+          [data-mod-panel="sem"] .sem-whatis, .mod-panel .sem-whatis {
+            font-size:11px; line-height:1.6; margin:6px 10px 4px; padding:5px 9px;
+            border-left:3px solid var(--num-up,#4ade80); background:rgba(74,222,128,0.06);
+            border-radius:3px; color:var(--fg,#c9d1d9);
+          }
+          .mod-panel .sem-hrt { margin:0 10px 8px; font-size:11px; line-height:1.6; }
+          .mod-panel .sem-hrt > summary {
+            cursor:pointer; color:var(--accent,#FF6B35); font-weight:700; list-style:none;
+            padding:3px 0; user-select:none; letter-spacing:0.3px;
+          }
+          .mod-panel .sem-hrt > summary::-webkit-details-marker { display:none; }
+          .mod-panel .sem-hrt > summary::before { content:'▸  '; }
+          .mod-panel .sem-hrt[open] > summary::before { content:'▾  '; }
+          .mod-panel .sem-hrt dl {
+            margin:4px 0 0; display:grid; grid-template-columns:max-content 1fr; gap:3px 12px;
+          }
+          .mod-panel .sem-hrt dt { font-weight:700; color:var(--fg,#c9d1d9); white-space:nowrap; }
+          .mod-panel .sem-hrt dd { margin:0; color:var(--fg-dim,#8b949e); }
+          .mod-panel .sem-cav { margin:0 10px 8px; font-size:11px; line-height:1.6; }
+          .mod-panel .sem-cav > summary {
+            cursor:pointer; color:var(--fg-dim,#8b949e); font-weight:700; list-style:none;
+            padding:3px 0; user-select:none;
+          }
+          .mod-panel .sem-cav > summary::-webkit-details-marker { display:none; }
+          .mod-panel .sem-cav > summary::before { content:'▸  '; }
+          .mod-panel .sem-cav[open] > summary::before { content:'▾  '; }
+          .mod-panel .sem-cav-list { display:grid; gap:4px; margin-top:5px; }
+          .mod-panel .sem-cav-item {
+            display:grid; grid-template-columns:max-content 1fr; gap:10px; padding:4px 8px;
+            border-radius:3px; background:rgba(139,148,158,0.07);
+            border-left:3px solid rgba(139,148,158,0.4);
+          }
+          .mod-panel .sem-cav-item.key {
+            background:rgba(255,107,53,0.09); border-left-color:var(--accent,#FF6B35);
+          }
+          .mod-panel .sem-cav-tag {
+            font-weight:700; font-size:10px; letter-spacing:0.04em; text-transform:uppercase;
+            color:var(--fg,#c9d1d9); white-space:nowrap; padding-top:1px;
+          }
+          .mod-panel .sem-cav-item.key .sem-cav-tag { color:var(--accent,#FF6B35); }
+          .mod-panel .sem-cav-txt { color:var(--fg-dim,#8b949e); }
+          .mod-panel th[title] { cursor:help; border-bottom:1px dotted rgba(139,148,158,0.55); }
+          .mod-panel .sem-eg {
+            margin-top:7px; padding:5px 9px; border-left:3px solid var(--accent,#FF6B35);
+            background:rgba(255,107,53,0.07); border-radius:3px; color:var(--fg,#c9d1d9);
+          }
+</style>`;
+      body.innerHTML = guideCss + divPanel + crowdPanel + posPanel + klPanel + disc + kpis + bars + table + note;
+    } catch (e) {
+      body.innerHTML = `<div class="mod-err">GPU module error: ${(e && e.message) || e}</div>`;
+    }
+  }
+
+  window.OC_MODULES = window.OC_MODULES || {};
+  // 2026-07-28 rebrand: this module is now 'sem' (Semiconductor Hub). The legacy 'gpu' key
+  // is kept registered so any cached page, bookmark or deep-link that still asks for the
+  // old id renders instead of showing an empty panel.
+  window.OC_MODULES['sem'] = { render: renderGpu };
+  window.OC_MODULES['gpu'] = { render: renderGpu };
+})();

@@ -4,11 +4,6 @@
   const { fetchJSON, fmt } = window.OC_DATA;
 
   const BREADTH_URL = 'https://stocks.clawmo.tech/data/breadth.json?v=' + Date.now();
-  // Point-in-time membership series (5y) — drives the overlay chart and its range selector.
-  // breadth.json stays the source for sectors, the heatmap, turning points and today's tiles,
-  // which are the only places its per-sector columns exist.
-  // ⚠ TWIN CONTRACT: mirrored from stocks-app breadth.html (`normalisePit` / `compRows`).
-  const BREADTH_5Y_URL = 'https://stocks.clawmo.tech/data/breadth_5y.json?v=' + Date.now();
   const INDUSTRY_URL = 'https://stocks.clawmo.tech/data/industry_performance.json';
   const MONITOR_URL = 'https://stocks.clawmo.tech/data/monitor.json';
   const ROTATION_URL = 'https://stocks.clawmo.tech/data/rotation.json';
@@ -16,40 +11,6 @@
   // Per-pane state for industry filter + historical heatmap range.
   // Stored on body element so sort clicks don't leak across modules.
   const HIST_RANGES = { '1M': 22, '3M': 63, '6M': 126, '1Y': 252 };
-
-  // ── Overlay-chart range selector ───────────────────────────────────────────
-  // ⚠ TWIN CONTRACT: these semantics are duplicated from stocks-app breadth.html
-  // (`rangeToRows` / `rangeAvailable` / `syncRangeButtons`). breadth.js and breadth.html are
-  // DUPLICATED TWINS, not shared code — a change to range semantics on either surface must be
-  // made on BOTH or the two pages will disagree about what "YTD" means. Probe:
-  // .claude/skills/openclaw-diagnostics-and-tooling/scripts/breadth_range_smoke.mjs
-  const OVL_RANGES = [
-    { key: '21',  label: '1M'  }, { key: '63',  label: '3M' },
-    { key: '126', label: '6M'  }, { key: '252', label: '1Y' },
-    { key: 'ytd', label: 'YTD' },
-    // "Max", never "All": the file retains ~15 months (310 rows on the 50-day MA), so "All"
-    // overclaims. The button title carries the real span.
-    { key: 'all', label: 'Max' },
-  ];
-  const OVL_DEFAULT = '63';
-  let ovlRange = OVL_DEFAULT;
-
-  // Rows are newest-first. Year comes from the DATA, never `new Date()` — the browser clock is
-  // the viewer's timezone, so a viewer in Asia on Jan 1 (or any viewer of a stale file across a
-  // year boundary) would otherwise compute the window against a year the file lacks.
-  // Returns null when the request cannot be honoured — never a silent full-series fallback,
-  // which would render the whole file under a "YTD" label.
-  function ovlRangeToRows(val, rows) {
-    if (!rows || !rows.length) return null;
-    if (val === 'all') return rows.length;
-    if (val === 'ytd') {
-      const yStart = rows[0].date.slice(0, 4) + '-01-01';
-      const n = rows.filter(r => r.date >= yStart).length;
-      return n > 0 ? n : null;
-    }
-    const n = parseInt(val, 10) || 63;
-    return n <= rows.length ? n : null;      // capped windows are disabled, not clamped
-  }
   const IND_COLS = [
     { key: 'label',   label: 'INDUSTRY',  type: 'str' },
     { key: 'perfT',   label: '1D',        type: 'num' },
@@ -156,125 +117,10 @@
   }
 
   /* Two-line overlay chart: SPY cumulative (rebased to 100) + SP500 breadth score (0-100).
-     Divergence between them is the classic early-warning signal.
-
-     ⚠ WHY THE PRICE LINE DISAPPEARS ON WIDE WINDOWS (peer review 2026-07-30, BOTH reviewers
-     independently called this the sharpest honesty risk in the range-selector work):
-     `normSpy` min-max scales the rebased price into the SAME 0-100 space as breadth, using the
-     min/max OF THE DISPLAYED WINDOW. Three consequences:
-       · the price line's shape is a function of the window, so changing range REDRAWS HISTORY —
-         a "crossing" that appears at 90d can vanish at Max;
-       · a crossing between price and breadth has no meaning in the first place (price is
-         rescaled and non-stationary, breadth is intrinsic and bounded 0-100) — sharing an axis
-         implies a comparability that does not exist;
-       · min-max is outlier-sensitive: one washout low on a multi-year window flattens the rest.
-     At 90d this is a defensible "where is price vs breadth lately" sketch, which is what the
-     panel title claims. Widening the window without removing the price line would let a viewer
-     draw conclusions the data cannot support, so beyond PRICE_MAX_ROWS the line is DROPPED and
-     the panel says so. ⛔ Do not reinstate it on wide windows — freeze its scaling base first. */
-  const PRICE_MAX_ROWS = 126;          // 6M: widest window where the min-max rebase stays honest
-
-  /* Panel title states the ACTUAL drawn span and stops claiming "vs PRICE" once the price line
-     is gone — a title that outlives the series it names is how a chart gets misread. */
-  // ⚠ NAME IT THE SAME AS THE SISTER PAGE. This panel IS breadth.html's "QQQ vs SPY Breadth
-  // Comparison", but it used to be titled "BREADTH vs PRICE", so a reader who knew the chart by
-  // its stocks-app name could not find it here and reasonably concluded it was missing.
-  // Twin parity is not only about the numbers — a chart the user cannot locate is absent to them.
-  // The price overlay is a terminal-only extra on short windows, so it is stated as an addition
-  // rather than allowed to rename the panel.
-  function ovlTitle(series, showPrice) {
-    const span = series && series.length
-      ? `${series[0].date} → ${series[series.length - 1].date} · ${series.length}d` : '—';
-    return showPrice
-      ? `QQQ vs SPY BREADTH COMPARISON · + SPY price · ${span} · divergence watch`
-      : `QQQ vs SPY BREADTH COMPARISON · ${span}`;
-  }
-
-  // ── Individual breadth indicator chart (SPY / QQQ) ─────────────────────────
-  // ⚠ TWIN CONTRACT: mirrors `calcMA` + `makeBreadthChart` in stocks-app breadth.html. Same MA
-  // set (5/20/50), same 50% majority line, same zone bands — if either surface changes them,
-  // change both or the two pages describe the same market differently.
-  function calcMA(arr, period) {
-    if (period <= 1) return arr.slice();
-    return arr.map((val, i) => {
-      if (i < period - 1 || val == null) return null;
-      let sum = 0, count = 0;
-      for (let j = i - period + 1; j <= i; j++) {
-        if (arr[j] != null) { sum += arr[j]; count++; }
-      }
-      return count > 0 ? sum / count : null;
-    });
-  }
-
-  // ⚠ MAs are computed over the FULL series and only THEN sliced to the window (`start`), which
-  // is what breadth.html does. Computing them on the sliced window instead would blank the first
-  // 49 bars of every view and make the 50-day line appear to start late on short ranges — the
-  // line would be correct but the chart would read as missing data.
-  function indicatorChart(fullDaily, fullDates, accent, start, opts) {
-    const W = opts?.w || 780, H = opts?.h || 150, pad = 22;
-    const ma5 = calcMA(fullDaily, 5).slice(start);
-    const ma20 = calcMA(fullDaily, 20).slice(start);
-    const ma50 = calcMA(fullDaily, 50).slice(start);
-    const daily = fullDaily.slice(start);
-    const dates = fullDates.slice(start);
-    if (daily.length < 3) return { html: '', meta: null };
-
-    const sx = (i) => pad + (i / (daily.length - 1)) * (W - 2 * pad);
-    const sy = (v) => pad + (1 - v / 100) * (H - 2 * pad);
-    // Null-safe: break the path rather than drawing a straight line across a gap, which would
-    // invent data. A gap is information; a bridge over it is a fabrication.
-    const path = (arr) => {
-      let d = '', pen = false;
-      arr.forEach((v, i) => {
-        if (v == null) { pen = false; return; }
-        d += `${pen ? 'L' : 'M'} ${sx(i).toFixed(1)} ${sy(v).toFixed(1)} `;
-        pen = true;
-      });
-      return d.trim();
-    };
-    const band = (lo, hi, fill) =>
-      `<rect x="${pad}" y="${sy(hi)}" width="${W - 2 * pad}" height="${(sy(lo) - sy(hi)).toFixed(1)}" fill="${fill}"></rect>`;
-
-    const html = `
-      <svg class="breadth-chart brd-ind-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-        ${band(0, 30, 'rgba(248,113,113,0.08)')}
-        ${band(30, 50, 'rgba(251,191,36,0.05)')}
-        ${band(50, 70, 'rgba(74,222,128,0.06)')}
-        ${band(70, 100, 'rgba(74,222,128,0.10)')}
-        <line class="ch-ref" x1="${pad}" y1="${sy(50)}" x2="${W - pad}" y2="${sy(50)}" stroke-dasharray="6 4"></line>
-        <text class="ch-ref-label" x="${W - pad + 3}" y="${sy(50) + 3}">50</text>
-        <path class="ch-ind-daily" d="${path(daily)}"></path>
-        <path class="ch-ind-ma5"   d="${path(ma5)}"></path>
-        <path class="ch-ind-ma20"  d="${path(ma20)}"></path>
-        <path class="ch-ind-ma50"  d="${path(ma50)}" style="stroke:${accent}"></path>
-        <text class="ch-date" x="${pad}" y="${H - 4}">${(dates[0] || '').slice(5)}</text>
-        <text class="ch-date" x="${W - pad}" y="${H - 4}" text-anchor="end">${(dates[dates.length - 1] || '').slice(5)}</text>
-      </svg>
-    `;
-    return { html, meta: { n: daily.length, first: dates[0], last: dates[dates.length - 1] } };
-  }
-
-  function indicatorPanel(id, title, fullDaily, fullDates, accent, start) {
-    const res = indicatorChart(fullDaily, fullDates, accent, start);
-    if (!res.html) return '';
-    return `
-        <div class="mod-panel" id="${id}">
-          <div class="mod-panel-title">${title}</div>
-          <div class="chart-wrap">${res.html}</div>
-          <div class="chart-legend">
-            <span><span class="lg-line ch-ind-daily-leg"></span>daily</span>
-            <span><span class="lg-line ch-ind-ma5-leg"></span>5d MA</span>
-            <span><span class="lg-line ch-ind-ma20-leg"></span>20d MA</span>
-            <span><span class="lg-line" style="background:${accent}"></span>50d MA</span>
-            <span class="chart-note">shaded: &lt;30 oversold · 30-50 weak · 50-70 healthy · &gt;70 strong</span>
-          </div>
-        </div>`;
-  }
-
+     Divergence between them is the classic early-warning signal. */
   function overlayChart(history, opts) {
     const W = opts?.w || 780, H = opts?.h || 160, pad = 22;
     if (!history || history.length < 3) return { html: '', meta: null };
-    const showPrice = opts?.showPrice !== false && history.length <= PRICE_MAX_ROWS;
     const oldest = history[0];
     // SPY cumulative rebased to 100
     let px = 100;
@@ -310,11 +156,11 @@
         ${ref(80, '80')}
         <path class="ch-qqq" d="${path(qqqBreadthLine)}"></path>
         <path class="ch-breadth" d="${path(breadthLine)}"></path>
-        ${showPrice ? `<path class="ch-spy" d="${path(normSpy)}"></path>` : ''}
+        <path class="ch-spy" d="${path(normSpy)}"></path>
         <text class="ch-date" x="${pad}" y="${H - 4}">${firstDate}</text>
         <text class="ch-date" x="${W - pad}" y="${H - 4}" text-anchor="end">${lastDate}</text>
         <line class="brd-cross-x" x1="0" y1="${pad}" x2="0" y2="${H - pad}" style="stroke:var(--fg);stroke-width:0.5;opacity:0;pointer-events:none;stroke-dasharray:2 2"></line>
-        ${showPrice ? `<circle class="brd-cross-dot brd-cross-dot-spy"     cx="0" cy="0" r="3" style="fill:var(--pnl-up);stroke:var(--fg);stroke-width:0.6;opacity:0;pointer-events:none"></circle>` : ''}
+        <circle class="brd-cross-dot brd-cross-dot-spy"     cx="0" cy="0" r="3" style="fill:var(--pnl-up);stroke:var(--fg);stroke-width:0.6;opacity:0;pointer-events:none"></circle>
         <circle class="brd-cross-dot brd-cross-dot-breadth" cx="0" cy="0" r="3" style="fill:var(--accent);stroke:var(--fg);stroke-width:0.6;opacity:0;pointer-events:none"></circle>
         <circle class="brd-cross-dot brd-cross-dot-qqq"     cx="0" cy="0" r="3" style="fill:#A78BFA;stroke:var(--fg);stroke-width:0.6;opacity:0;pointer-events:none"></circle>
         <rect class="brd-cross-hit" x="${pad}" y="${pad}" width="${W - 2 * pad}" height="${H - 2 * pad}" style="fill:transparent;cursor:crosshair"></rect>
@@ -322,12 +168,11 @@
     `;
     return {
       html,
-      showPrice,
       meta: {
         W, H, pad,
         n: history.length,
         dates: history.map(d => d.date),
-        spyLine, breadthLine, qqqBreadthLine, normSpy, showPrice,
+        spyLine, breadthLine, qqqBreadthLine, normSpy,
       },
     };
   }
@@ -344,7 +189,7 @@
     const dotQqq = svg.querySelector('.brd-cross-dot-qqq');
     const hit = svg.querySelector('.brd-cross-hit');
     if (!xLine || !hit) return;
-    const { W, H, pad, n, dates, spyLine, breadthLine, qqqBreadthLine, normSpy, showPrice } = meta;
+    const { W, H, pad, n, dates, spyLine, breadthLine, qqqBreadthLine, normSpy } = meta;
     const plotW = W - 2 * pad;
     const sx = (i) => pad + (i / (n - 1)) * plotW;
     const sy = (v) => pad + (1 - v / 100) * (H - 2 * pad);  // v in 0-100
@@ -382,15 +227,12 @@
       }
 
       const spyCls = spyPctVs100 > 0 ? 'num-up' : spyPctVs100 < 0 ? 'num-dn' : '';
-      // When the price line is not drawn (wide window — see PRICE_MAX_ROWS) the tooltip must not
-      // quote a price series either, or the chart says one thing and the hover says another.
-      // The divergence pill goes with it: it is a price-vs-breadth statement.
       tooltip.innerHTML = `
         <div class="stk-tt-row"><span class="stk-tt-k">DATE</span><span class="stk-tt-v mono">${dates[i] || '—'}</span></div>
-        ${showPrice ? `<div class="stk-tt-row"><span class="stk-tt-k">SPY cum</span><span class="stk-tt-v mono ${spyCls}">${(spyPctVs100 >= 0 ? '+' : '') + spyPctVs100.toFixed(2)}%</span></div>` : ''}
+        <div class="stk-tt-row"><span class="stk-tt-k">SPY cum</span><span class="stk-tt-v mono ${spyCls}">${(spyPctVs100 >= 0 ? '+' : '') + spyPctVs100.toFixed(2)}%</span></div>
         <div class="stk-tt-row"><span class="stk-tt-k">SP500 brd</span><span class="stk-tt-v mono">${typeof brd === 'number' ? brd.toFixed(1) + '%' : '—'}</span></div>
         <div class="stk-tt-row"><span class="stk-tt-k">QQQ brd</span><span class="stk-tt-v mono">${typeof qqq === 'number' ? qqq.toFixed(1) + '%' : '—'}</span></div>
-        ${(showPrice && divergence) ? `<div class="stk-tt-row"><span class="stk-tt-k">SIGNAL</span><span class="stk-tt-v mono ${divergence.cls}" style="font-size:9px">${divergence.txt}</span></div>` : ''}
+        ${divergence ? `<div class="stk-tt-row"><span class="stk-tt-k">SIGNAL</span><span class="stk-tt-v mono ${divergence.cls}" style="font-size:9px">${divergence.txt}</span></div>` : ''}
       `;
       tooltip.style.opacity = '1';
     }
@@ -479,13 +321,12 @@
   async function render(body) {
     body.innerHTML = `<div class="mod-loading">Loading market breadth…</div>`;
     try {
-      const [br, ind, mon, rot, vr, p5] = await Promise.all([
+      const [br, ind, mon, rot, vr] = await Promise.all([
         fetchJSON(BREADTH_URL),
         fetchJSON(INDUSTRY_URL),
         fetchJSON(MONITOR_URL).catch(() => null),
         fetchJSON(ROTATION_URL).catch(() => null),
         fetchJSON('https://stocks.clawmo.tech/data/vol-risk.json').catch(() => null),
-        fetchJSON(BREADTH_5Y_URL).catch(() => null),
       ]);
 
       const periods = br.ma_periods || [50, 100, 200];
@@ -496,7 +337,8 @@
       const latestDate = latest50.date || '—';
       const regime = latest50.regime || '—';
 
-      // (the overlay-chart series is built below from the range selector — see ovlAll/series)
+      // Historical series for overlay chart (oldest → newest, 90d)
+      const series = (data['50'] || []).slice(0, 90).slice().reverse();
       const ewcw = latest50.ew_cw_spread;
       const ewcw20 = latest50.ew_cw_spread_20d;
       const ewcwCls = ewcw >= 0 ? 'num-up' : 'num-dn';
@@ -579,36 +421,7 @@
       `).join('');
 
       const industries = (ind && ind.industries) || [];
-      // Full 50-day series, newest-first — the range selector slices from this, so switching
-      // range never needs a refetch.
-      // PIT series if the producer published a fresh one, else fall back to breadth.json so a
-      // failed 5y job degrades to the old ~15-month overlay instead of an empty chart.
-      const pit5y = (p5 && p5.data && !(p5.series_meta && p5.series_meta.stale)) ? p5 : null;
-      // ⚠ CARRY `spy_change` ACROSS. It exists ONLY in breadth.json, and overlayChart compounds
-      // it into the rebased SPY price line. Mapping the PIT rows without it made every
-      // `d.spy_change || 0` evaluate to 0, so the price line compounded to a constant 100 and
-      // rendered as a FLAT LINE — present, correctly coloured, and completely meaningless.
-      // It only covers breadth.json's ~15 months, which is fine: the price line is suppressed
-      // beyond PRICE_MAX_ROWS anyway.
-      const spyChg = Object.create(null);
-      (data['50'] || []).forEach(r => { if (r.spy_change != null) spyChg[r.date] = r.spy_change; });
-      const ovlAll = pit5y
-        ? (pit5y.data['50'] || [])
-            .filter(r => r.sp500 != null)
-            .map(r => ({ date: r.date, sp500_breadth: r.sp500, qqq_breadth: r.qqq,
-                         spy_change: spyChg[r.date] }))
-            .reverse()                                  // oldest-first on disk → newest-first
-        : (data['50'] || []);
-      const ovlRows = ovlRangeToRows(ovlRange, ovlAll) ?? ovlRangeToRows(OVL_DEFAULT, ovlAll) ?? ovlAll.length;
-      const series = ovlAll.slice(0, ovlRows).slice().reverse();   // oldest → newest
       const chartResult = overlayChart(series);
-      // Full chronological series for the two indicator charts. They need ALL of it because
-      // their moving averages are computed over the whole history and only then windowed.
-      const ovlChrono = ovlAll.slice().reverse();
-      const indDates = ovlChrono.map(d => d.date);
-      const indSpy = ovlChrono.map(d => d.sp500_breadth);
-      const indQqq = ovlChrono.map(d => d.qqq_breadth);
-      const indStart = Math.max(0, ovlChrono.length - ovlRows);
       const spyToday = latest50.spy_change;
       const qqqToday = latest50.qqq_change;
       const sectorVals = Object.values(latest50.sectors || {}).filter(v => v != null);
@@ -680,38 +493,19 @@
           </div>
         </div>
 
-        <div class="mod-panel" id="brdOvlPanel">
-          <div class="mod-panel-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
-            <span id="brdOvlTitle">${ovlTitle(series, chartResult.showPrice)}</span>
-            <span class="brd-ovl-range-btns">
-              ${OVL_RANGES.map(r => {
-                const n = ovlRangeToRows(r.key, ovlAll);
-                const on = ovlRange === r.key;
-                const title = n == null
-                  ? `Only ${ovlAll.length} trading days retained — this window is not available`
-                  : `${ovlAll[n - 1] ? ovlAll[n - 1].date : '?'} → ${ovlAll[0] ? ovlAll[0].date : '?'} · ${n} trading days`;
-                return `<button class="brd-ovl-range-btn${on ? ' active' : ''}" data-range="${r.key}" type="button"
-                          ${n == null ? 'disabled' : ''} title="${title}"
-                          style="background:${on ? 'var(--accent-bg, rgba(96,165,250,0.15))' : 'transparent'};border:1px solid ${on ? 'var(--accent)' : 'var(--border)'};color:${on ? 'var(--accent)' : 'var(--fg)'};padding:2px 8px;margin-left:4px;border-radius:3px;cursor:${n == null ? 'not-allowed' : 'pointer'};font-size:11px;opacity:${n == null ? '0.35' : '1'};${n == null ? 'text-decoration:line-through;' : ''}">${r.label}</button>`;
-              }).join('')}
-            </span>
-          </div>
+        <div class="mod-panel">
+          <div class="mod-panel-title">BREADTH vs PRICE · 90d · divergence watch</div>
           <div class="chart-wrap" style="position:relative">
             ${chartResult.html}
             <div class="stk-tooltip" style="opacity:0"></div>
           </div>
-          <div class="chart-legend" id="brdOvlLegend">
-            ${chartResult.showPrice ? '<span><span class="lg-line ch-spy-leg"></span>SPY cumulative (rebased, shared scale)</span>' : ''}
+          <div class="chart-legend">
+            <span><span class="lg-line ch-spy-leg"></span>SPY cumulative (rebased, shared scale)</span>
             <span><span class="lg-line ch-breadth-leg"></span>SP500 % above SMA50</span>
             <span><span class="lg-line ch-qqq-leg"></span>QQQ % above SMA50</span>
-            <span class="chart-note">${chartResult.showPrice
-              ? 'price up + breadth flat/down = divergence warning'
-              : 'price line hidden beyond 6M — its rebase is scaled to the visible window, so its shape would change with the range'}</span>
+            <span class="chart-note">price up + breadth flat/down = divergence warning</span>
           </div>
         </div>
-
-        ${indicatorPanel('brdIndSpy', 'SPY Breadth Indicator — S&P 500 % above SMA50', indSpy, indDates, 'var(--pnl-up)', indStart)}
-        ${indicatorPanel('brdIndQqq', 'QQQ Breadth Indicator — Nasdaq-100 % above SMA50', indQqq, indDates, '#60A5FA', indStart)}
 
         ${renderEwbdPanel(vr)}
 
@@ -795,70 +589,9 @@
           );
         }
       }
-
-      // Range buttons: redraw the overlay panel in place. Only this panel depends on ovlRange,
-      // so a full module re-render would be wasteful and would reset the other panes' state
-      // (industry filter, heatmap range) that the module deliberately keeps per-pane.
-      wireOverlayRange(body, ovlAll);
     } catch (e) {
       body.innerHTML = `<div class="mod-err">Failed to load breadth: ${e.message}</div>`;
     }
-  }
-
-  /* Redraw the overlay panel (chart + title + legend + button states) for the active range.
-     Rebuilds the crosshair from the NEW meta — reusing the old meta would leave the tooltip
-     reporting the previous window's values, which is exactly the chart-says-one-thing /
-     hover-says-another failure the price-line rule exists to prevent. */
-  function wireOverlayRange(body, ovlAll) {
-    const panel = body.querySelector('#brdOvlPanel');
-    if (!panel) return;
-    panel.querySelectorAll('.brd-ovl-range-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        if (btn.disabled) return;
-        ovlRange = btn.dataset.range;
-        const n = ovlRangeToRows(ovlRange, ovlAll) ?? ovlAll.length;
-        const series = ovlAll.slice(0, n).slice().reverse();
-        const res = overlayChart(series);
-        const wrap = panel.querySelector('.chart-wrap');
-        const title = panel.querySelector('#brdOvlTitle');
-        const legend = panel.querySelector('#brdOvlLegend');
-        if (title) title.textContent = ovlTitle(series, res.showPrice);
-        if (wrap) {
-          wrap.innerHTML = `${res.html}<div class="stk-tooltip" style="opacity:0"></div>`;
-          if (res.meta) attachBreadthCrosshair(
-            wrap.querySelector('.breadth-chart'), wrap.querySelector('.stk-tooltip'), res.meta);
-        }
-        if (legend) {
-          legend.innerHTML = `
-            ${res.showPrice ? '<span><span class="lg-line ch-spy-leg"></span>SPY cumulative (rebased, shared scale)</span>' : ''}
-            <span><span class="lg-line ch-breadth-leg"></span>SP500 % above SMA50</span>
-            <span><span class="lg-line ch-qqq-leg"></span>QQQ % above SMA50</span>
-            <span class="chart-note">${res.showPrice
-              ? 'price up + breadth flat/down = divergence warning'
-              : 'price line hidden beyond 6M — its rebase is scaled to the visible window, so its shape would change with the range'}</span>`;
-        }
-        // The range buttons drive ALL THREE charts. Redrawing only the overlay would leave the
-        // two indicator panels showing a different window than the selector claims — the same
-        // class of mislabel the selector exists to prevent, just one panel over.
-        const chrono = ovlAll.slice().reverse();
-        const dts = chrono.map(d => d.date);
-        const st = Math.max(0, chrono.length - n);
-        [['#brdIndSpy', chrono.map(d => d.sp500_breadth), 'var(--pnl-up)'],
-         ['#brdIndQqq', chrono.map(d => d.qqq_breadth), '#60A5FA']].forEach(([sel, vals, accent]) => {
-          const host = body.querySelector(sel + ' .chart-wrap');
-          if (!host) return;
-          const r = indicatorChart(vals, dts, accent, st);
-          if (r.html) host.innerHTML = r.html;
-        });
-        panel.querySelectorAll('.brd-ovl-range-btn').forEach(b => {
-          const on = b.dataset.range === ovlRange;
-          b.classList.toggle('active', on);
-          b.style.background = on ? 'var(--accent-bg, rgba(96,165,250,0.15))' : 'transparent';
-          b.style.borderColor = on ? 'var(--accent)' : 'var(--border)';
-          b.style.color = on ? 'var(--accent)' : 'var(--fg)';
-        });
-      });
-    });
   }
 
   /* ── Stockbee Market Monitor ────────────────────────────────

@@ -410,7 +410,7 @@
       <td>${escapeHtml(t.name || '—')}</td>
       <td class="mono">${escapeHtml((t.chamber || '—').toUpperCase())}</td>
       <td class="${txCls(t.type)}">${escapeHtml((t.type || '—').slice(0, 4))}</td>
-      <td class="mono">${escapeHtml(fmtAmountRange(t.amount))}</td>
+      <td class="mono">${escapeHtml(t.amount || '—')}</td>
     </tr>`;
   }
   function congressRowFull(t) {
@@ -424,19 +424,9 @@
       <td><span class="hld-chip ${chamCls}">${escapeHtml((t.chamber || '—').toUpperCase())}</span></td>
       <td class="mono">${escapeHtml(t.district || '—')}</td>
       <td class="${txCls(t.type)}">${escapeHtml(t.type || '—')}</td>
-      <td class="mono">${escapeHtml(fmtAmountRange(t.amount))}</td>
+      <td class="mono">${escapeHtml(t.amount || '—')}</td>
       <td>${t.link ? `<a href="${escapeHtml(t.link)}" target="_blank" rel="noopener" class="hld-sec-link">Filing ↗</a>` : '—'}</td>
     </tr>`;
-  }
-
-  /* FMP hands the disclosed amount through verbatim, and a few filings arrive
-     with the upper bound missing — "$15,001 -" (11 of 4291 as of 2026-08, all
-     but two from one filer). Rendered raw that looks like a clipped cell, so
-     close the range explicitly instead. */
-  function fmtAmountRange(a) {
-    const s = String(a == null ? '' : a).trim();
-    if (!s) return '—';
-    return /[-–]$/.test(s) ? s.replace(/\s*[-–]$/, '+') : s;
   }
 
   function fmtMoney(v) {

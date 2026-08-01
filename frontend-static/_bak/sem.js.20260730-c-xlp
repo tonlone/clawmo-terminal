@@ -1,0 +1,831 @@
+/* GPU Cloud Pricing — native terminal module.
+   Hand-rolled SVG (no Chart.js). Mirrors stocks.clawmo.tech/semiconductor.html; reads the same
+   gpu-pricing.json + gpu-pricing-history.json written by compute_gpu_pricing.py. */
+(function () {
+  'use strict';
+  const { fetchJSON } = window.OC_DATA;
+  const BASE = 'https://stocks.clawmo.tech/data';
+  const px = (v) => (v == null ? '—' : '$' + Number(v).toFixed(2));
+
+  /* Horizontal SVG bar chart of marketplace floor per SKU. */
+  function barChartSVG(skus) {
+    const items = (skus || []).filter((s) => s.floor != null);
+    if (!items.length) return '<div class="small">No priced SKUs.</div>';
+    const maxV = Math.max.apply(null, items.map((s) => s.floor));
+    const rowH = 26, padL = 96, padR = 56, w = 580, barMax = w - padL - padR;
+    const h = items.length * rowH + 8;
+    let svg = `<svg viewBox="0 0 ${w} ${h}" width="100%" preserveAspectRatio="xMidYMid meet">`;
+    items.forEach((s, i) => {
+      const y = i * rowH + 6;
+      const bw = Math.max(2, (s.floor / maxV) * barMax);
+      svg += `<text x="${padL - 6}" y="${y + 13}" text-anchor="end" font-size="11" fill="#9aa4b2">${s.label}</text>`;
+      svg += `<rect x="${padL}" y="${y + 3}" width="${bw.toFixed(1)}" height="14" rx="2" fill="#4ade80" opacity="0.5"/>`;
+      svg += `<text x="${(padL + bw + 5).toFixed(1)}" y="${y + 13}" font-size="11" fill="#e6edf3" font-weight="700">$${s.floor.toFixed(2)}</text>`;
+    });
+    return svg + '</svg>';
+  }
+
+
+  // ── Semiconductor Hub panels (P3, 2026-07-28) — twin of semiconductor.html ────────────────
+  // Reads sector-rs.json (P1) + short-interest-sectors.json (P2). Display-tier only.
+  // Disclosures are rendered FROM the JSON, never restated here — the computes emit them as
+  // data so neither surface can quietly drop them and drift from the other.
+  const SEM_LABEL = { semis: 'Semiconductors', storage: 'Storage / memory',
+                      hardware: 'Hardware', mag7: 'Mega-cap tech' };
+  const semEsc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g,
+    c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  const semPct = (v, dp = 2) => v == null ? '<span class="sig-dim">—</span>'
+    : `<span class="${v > 0 ? 'num-up' : v < 0 ? 'num-dn' : ''}">${v > 0 ? '+' : ''}${Number(v).toFixed(dp)}%</span>`;
+
+
+  // ── "How to read this" guides (2026-07-28) ───────────────────────────────────────────────────
+  // Tony (a non-specialist reader) could not interpret the columns. Caveats had shipped; a GUIDE
+  // had not — the §5.C rule is that a legend ships WITH the feature, and only half of it was met.
+  // Kept in ONE place per surface so the web page and this module cannot drift apart in wording.
+
+  // ── Column tooltips + caveat cards (2026-07-28, twin of semiconductor.html) ─────────────────
+  // ONE definitions map feeds BOTH the <th title> tooltip and the "How to read" guide, so they
+  // cannot drift. Caveats render as LABELLED CARDS using the JSON's own keys — the previous
+  // renderer concatenated the values and discarded the keys, which is what made it a wall of text.
+  const SEM_COLDEFS = {
+    rs: {'BASKET':'A fixed group of stocks, equally weighted — every member counts the same, so NVDA does not drown out the rest. Membership frozen and dated.',
+         'N':'How many stocks are in the group.',
+         '5D vs SPY':"How far AHEAD of (or behind) SPY the group finished over 5 trading days (~1 week) — what holding the group instead of SPY earned. Negative = worse than the market. A comparison, not the group's own return.",
+         '21D vs SPY':'Same over 21 trading days (~1 month). −17% means it trailed SPY by 17 points, NOT that it fell 17%.',
+         '63D vs SPY':'Same over 63 trading days (~3 months) — the slowest of the three.',
+         '21D vs EW MKT':'The 1-month comparison against an EQUAL-WEIGHT average of our ~540-stock universe instead of SPY. SPY is dominated by a few giants, so comparing an equal-weight basket to SPY quietly mixes in a size effect. Agreement = a real sector story; divergence = partly big-vs-small.',
+         '>50DMA':'Share of the group above its own 50-day average price. THE BREADTH CHECK — 0% means every member is below trend, so weakness is broad, not one bad apple.',
+         '21D CORR':'How closely members moved together this month (0 = unrelated, 1 = lockstep). High while falling = the whole complex sold as a block; low = company-specific news.',
+         'PCTILE':"Where today's 1-month spread ranks vs this basket's own history. 0th = worst on record. Windows overlap heavily — a rank, not a probability."},
+    si: {'SLICE':'The group. Bold = hand-picked sector groups; faded = broad market sectors for context.',
+         'N':'How many stocks in the group.',
+         'SI % SO':"Short interest as a share of all the company's shares. Selling short bets the price falls. 3% = ~3 of every 100 shares. High is NOT automatically bearish — crowded shorts can squeeze upward violently.",
+         'Δ vs PRIOR':'Change since the previous reading, in percentage points. Published only TWICE A MONTH — a two-week change.',
+         'Z':"How unusual today's level is vs this group's own history. ~0 normal, 2 high, 3 very high. Blank = we refused to compute one.",
+         'vs MARKET':'THE COLUMN TO READ FIRST. Group z minus the whole market’s z. Short interest is elevated almost everywhere, so a big z can be entirely market-wide. Positive = more crowded than the market; negative = less.'},
+    pos: {'TICKER':'The individual stock.',
+          'NET GEX $BN':'Dealer GAMMA EXPOSURE. POSITIVE = market makers buy dips and sell rallies, DAMPING moves. NEGATIVE = they sell into weakness and buy into strength, AMPLIFYING moves. Negative gamma is why some days feel violent.',
+          'REGIME':'Plain-language version of the sign of Net GEX.',
+          'P/C OI':"Put vs call OPEN INTEREST for this one stock — contracts outstanding, not today's volume.",
+          'IV RANK':"Where this stock's implied volatility sits vs its own past year (0–100). High = options expensive vs normal.",
+          'GAMMA FLIP':'Price at which dealer positioning would flip between damping and amplifying. A rough reference, not a trigger.'},
+    kl: {'TICKER':'The individual stock.','SPOT':'Most recent closing price.',
+         'ATR14':'AVERAGE TRUE RANGE — how much this stock typically moves in a day, in dollars. Everything is measured in ATR because $5 means something different for a $900 stock than a $30 one.',
+         'NEAREST ZONE':'What the level is and HOW IT WAS DERIVED — a prior swing low, the price where most volume traded, a volume-weighted average, a 52-week extreme.',
+         'DIST (ATR)':'How far the zone is from today’s price, in ATR. +1.0 ≈ one average trading day away. Read this first — comparable across every stock.',
+         'ZONE RANGE':'A price BAND, not a single number: showing "870.00" would imply precision the method does not have.'}
+  };
+  const semTh = (label, group) => {
+    const t = (SEM_COLDEFS[group] || {})[label];
+    return `<th class="num"${t ? ` title="${semEsc(t)}"` : ''}>${label}</th>`;
+  };
+  const semThL = (label, group) => {
+    const t = (SEM_COLDEFS[group] || {})[label];
+    return `<th${t ? ` title="${semEsc(t)}"` : ''}>${label}</th>`;
+  };
+  const SEM_CAV_LABEL = {
+    survivorship:'Survivorship', equal_weight:'Equal weight', spy_ew:'EW benchmark',
+    membership:'Membership', overlap:'Overlap', not_a_signal:'Not a signal',
+    descriptive_only:'Descriptive only', lag:'Data lag', small_slices:'Small slices',
+    equal_weight_size_bias:'Size bias', sector_map:'Sector labels', curated_groups:'Group choice',
+    excess_vs_aggregate:'Read this first', in_sample_endpoint:'In-sample',
+    gics_membership_floats:'Sector membership', z_magnitude_caveat:'How precise is the z?',
+    untested:'Untested', zones:'Zones not lines', distance:'Distance in ATR',
+    proximity:'What is shown', naming:'Naming', why_separate:'Why not one number',
+    putcall_scope:'Scope', cot_lag:'Freshness', gex_basis:'What GEX is',
+    no_timing_edge:'Read this first', raw_context:'They move together',
+    price_chart:'What the price chart shows',
+    why_not_excess:'Why not excess returns', primary_stat:'What is plotted',
+    percentile:'Percentile is a rank', trailing:'No lookahead',
+    adjustment:'Dividend basis', smh_source:'Why yfinance'
+  };
+  const SEM_CAV_KEY = ['not_a_signal','descriptive_only','untested','excess_vs_aggregate',
+                       'z_magnitude_caveat','no_timing_edge','raw_context','price_chart'];
+  function semCaveats(disc, order) {
+    const keys = (order || []).filter(k => disc[k])
+      .concat(Object.keys(disc).filter(k => (order || []).indexOf(k) < 0));
+    const items = keys.map(k => `<div class="sem-cav-item${SEM_CAV_KEY.includes(k) ? ' key' : ''}">
+        <span class="sem-cav-tag">${semEsc(SEM_CAV_LABEL[k] || k.replace(/_/g,' '))}</span>
+        <span class="sem-cav-txt">${semEsc(disc[k])}</span></div>`).join('');
+    return `<details class="sem-cav"><summary>Caveats &amp; limitations (${keys.length}) — worth reading once</summary>
+      <div class="sem-cav-list">${items}</div></details>`;
+  }
+
+  function semGuide(what, rows, eg) {
+    const dl = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+    return `<div class="sem-whatis"><b>What this answers:</b> ${what}</div>
+      <details class="sem-hrt"><summary>How to read this table</summary>
+        <dl>${dl}</dl>
+        <div class="sem-eg"><b>Worked example:</b> ${eg}</div></details>`;
+  }
+  const SEM_GUIDES = {
+    rs: () => semGuide(
+      'Is the semiconductor complex actually being sold off relative to the market — and is it the whole group, or one or two big names dragging the average?',
+      [['BASKET','A fixed, equally weighted group (every member counts the same, so NVDA does not drown out the rest). Membership frozen and dated.'],
+       ['N','How many stocks in the group.'],
+       ['5D / 21D / 63D vs SPY','How far AHEAD of (or behind) SPY the group finished over 5, 21 or 63 <i>trading days</i> (~1 week, 1 month, 3 months) — what holding the group instead of SPY earned. Negative = trailed the market. A comparison, not the group\'s own return: −17% means it lagged SPY by 17 points, not that it fell 17%.'],
+       ['21D vs EW MKT','Same month, but against an EQUAL-WEIGHT average of our ~540-stock universe. SPY is dominated by a few giants, so comparing an equal-weight basket to SPY quietly mixes in a company-size effect. Agreement = a real sector story; divergence = partly big-vs-small.'],
+       ['&gt;50DMA','Share of members above their own 50-day average price. THE BREADTH CHECK: 0% means every member is below trend, so weakness is broad, not one bad apple.'],
+       ['21D CORR','How closely members moved together over the month (0 = unrelated, 1 = lockstep). High correlation while falling = the whole complex sold as a block; low = company-specific news.'],
+       ['PCTILE','Where today\'s 1-month spread ranks against the basket\'s own history. 0th = worst on record; 50th = ordinary. Windows overlap heavily — read it as a rank, not a probability.']],
+      'Storage at −30% (21D vs SPY), 0% above 50dma, corr 0.84, 0th percentile: it trailed the market by ~30 points, EVERY member is below trend, they fell together rather than for separate reasons, and it is the worst stretch on record. Compare mega-cap tech the same day: +2.4% vs SPY but only 14% above 50dma — the group looks healthy only because one member is carrying it.'),
+    si: () => semGuide(
+      'Are traders betting AGAINST these stocks unusually heavily — and is that specific to this sector, or is the whole market crowded?',
+      [['SLICE','The group. Bold = hand-picked sector groups; faded = broad market sectors, for context.'],
+       ['SI % SO','Short interest as a share of all the company\'s shares. Selling short is a bet the price falls. 3% = about 3 of every 100 shares. High is not automatically bearish — crowded shorts can squeeze upward violently.'],
+       ['Δ vs PRIOR','Change since the previous reading, in percentage points. Published only TWICE A MONTH, so this is a two-week change.'],
+       ['Z','How unusual today\'s level is versus the group\'s own history. ~0 = normal, 2 = high, 3 = very high. Blank = we refused to compute one.'],
+       ['vs MARKET','THE COLUMN TO READ FIRST. Group z minus the whole market\'s z. Short interest is elevated almost everywhere right now, so a big z can be entirely market-wide. Positive = more crowded than the market; negative = less.'],
+       ['⚠ no z','We deliberately refused to publish a z — the group is too small or its history too short for one to mean anything. Hover for the reason.'],
+       ['thin','Few enough members that one company can swing the average. Treat with caution.']],
+      'Semis show z 1.57 — sounds high — but vs market −1.41. The market sits near a record level of short interest and semis are well BELOW it, so despite the price weakness traders are NOT unusually positioned against semis. Storage shows "no z" on purpose: with 4 companies any z would mostly reflect one of them.'),
+    pos: () => semGuide(
+      'What are options and futures traders positioned for? Three separate feeds, deliberately un-blended.',
+      [['PUT/CALL','Puts traded ÷ calls traded, market-wide. Puts profit when prices fall (or are bought as insurance). Above ~1.0 = defensive; below ~0.8 = complacent. Not semis-specific.'],
+       ['SPEC z','Speculative futures positioning in Nasdaq-100 / S&amp;P-500, as how unusual it is versus the past year. Negative = net bet on lower prices. Beyond ±2 is a real extreme, and extremes often precede sharp reversals because crowded positions unwind. Friday-published for Tuesday\'s snapshot.'],
+       ['NET GEX $BN','Dealer gamma exposure. Market makers hedge continuously: POSITIVE = they buy dips and sell rallies, DAMPING moves; NEGATIVE = they sell into weakness and buy into strength, AMPLIFYING moves. Negative gamma is why some days feel unusually violent.'],
+       ['REGIME','Plain-language version of the sign of Net GEX.'],
+       ['P/C OI','Put vs call OPEN INTEREST for that one stock — contracts outstanding, not today\'s trading.'],
+       ['IV RANK','Where the stock\'s implied volatility sits versus its own past year (0–100). High = options expensive vs normal.'],
+       ['GAMMA FLIP','Price at which dealer positioning would flip between damping and amplifying. A rough reference, not a trigger.']],
+      'Today: put/call 0.94 (mildly defensive), Nasdaq futures z −2.27 (a real extreme — speculators heavily positioned for declines), 14 of 18 semis in negative gamma (hedging is amplifying moves, not cushioning them). These three often disagree — that is why they are shown separately rather than combined.'),
+    kl: () => semGuide(
+      'Which prices near the current price are worth being aware of, and how far away are they in the stock\'s own terms?',
+      [['SPOT','Most recent closing price.'],
+       ['ATR14','Average True Range — how much this stock typically moves in a day, in dollars. Everything here is measured in ATR because $5 means something different for a $900 stock than a $30 one.'],
+       ['NEAREST ZONE','What the level is and HOW IT WAS DERIVED — a prior swing low, the price where most volume traded, a volume-weighted average, a 52-week extreme. The name describes its origin only.'],
+       ['DIST (ATR)','How far the zone is from today\'s price, in ATR. +1.0 ≈ one average trading day away. Read this first — it is comparable across every stock.'],
+       ['ZONE RANGE','A price BAND, not a single number, deliberately: showing "870.00" would imply precision the method does not have.']],
+      'NVDA spot 196.51, ATR 8.03, nearest zone a prior swing low at +0.18 ATR (band 193.95–201.99) — price is sitting essentially ON a level where it previously turned, less than a fifth of a typical day away. ⚠ Whether price reacts at these levels more often than chance is UNTESTED. Reference points for attention, not predictions.'),
+  };
+
+
+  // ── P-A: relative performance vs the market (twin of semiconductor.html) ────────────────────
+  // Construction settled by measurement after the two reviewers disagreed: the RATIO (compounded
+  // relative return), displayed as "% ahead/behind" so the reference sits at 0 rather than an
+  // unexplained 100. On live data the difference-of-cumulatives diverges up to 4.70pp mid-window
+  // on storage, so the difference form is not acceptable for a chart people will read off.
+  // 2026-07-29: compute_sector_rs.py now emits the SAME ratio construction, so the chart and the
+  // table agree exactly — the old "~1 point" reconciliation note has been removed from both
+  // surfaces. Do NOT reintroduce a difference form on either side.
+  // Palette: the dataviz-validated 4-hue dark set, NOT OC_CHART.COLORS — the terminal's own
+  // categorical order fails colorblind separation at slots 3/4 (#A78BFA vs #60A5FA: ΔE 0.3
+  // deutan, 10.2 normal-vision, both below the hard floor). Documented divergence.
+  const PA_COLORS = { semis: '#3987e5', storage: '#d95926', hardware: '#199e70', mag7: '#c98500' };
+  const PA_ORDER = ['semis', 'storage', 'hardware', 'mag7'];
+
+  function semRelPerfPanel(d) {
+    if (!d || !d.baskets || !window.OC_CHART) return '';
+    const ref = d.baskets[PA_ORDER[0]] && d.baskets[PA_ORDER[0]].rs_line;
+    if (!ref || !ref.dates || ref.dates.length < 2) return '';
+    const series = PA_ORDER.map(k => {
+      const b = d.baskets[k]; if (!b || !b.rs_line) return null;
+      const rl = b.rs_line, bc = rl.basket_cum_pct, bm = rl.spy_cum_pct;
+      // No rebasing here (unlike the web twin) — values are plotted absolute, so the endpoint has
+      // always equalled spreads.spy.63d. What was WRONG was the caption: it claimed every line
+      // starts at 0, which was false without an anchor (first points were −2.50 / −3.39 / …).
+      // 2026-07-29: compute_sector_rs.py emits a leading anchor bar pinned to 0.0, so the claim is
+      // now true here by construction. ⛔ Do not add a rebase to "match" the web twin — that is
+      // exactly what made the web chart drop a session and disagree with the table by up to 4.29pp.
+      // Guard: a basket whose membership completed mid-window starts THERE, never zero-filled.
+      let startIdx = rl.dates.findIndex(dt => !b.members_complete_from || dt >= b.members_complete_from);
+      if (startIdx < 0) startIdx = 0;
+      const values = rl.dates.map((dt, i) =>
+        (i < startIdx || bc[i] == null || bm[i] == null)
+          ? null : ((1 + bc[i] / 100) / (1 + bm[i] / 100) - 1) * 100);
+      return { name: SEM_LABEL[k] || k, values, color: PA_COLORS[k], dashed: k === 'mag7' };
+    }).filter(Boolean);
+    if (!series.length) return '';
+
+    const svg = OC_CHART.lineAbs(series, {
+      w: 900, h: 200, padL: 46, padB: 24, gridY: 4,
+      yFmt: v => (v > 0 ? '+' : '') + v.toFixed(0) + '%',
+      xLabels: ref.dates.map(dt => dt.slice(5)),
+    });
+    // dataviz: identity is never colour-alone — legend always present for >=2 series.
+    const legend = series.map(s =>
+      `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px">
+         <span style="width:10px;height:2px;background:${s.color};display:inline-block;
+                      ${s.dashed ? 'border-top:2px dashed ' + s.color + ';background:none;height:0' : ''}"></span>
+         <span style="color:var(--fg-dim);font-size:10px">${semEsc(s.name)}${s.dashed ? ' (context)' : ''}</span>
+       </span>`).join('');
+
+    return `<div class="mod-panel"><div class="mod-panel-title">RELATIVE PERFORMANCE vs SPY
+        <span class="mod-panel-sub">compounded relative return · rolling ${ref.dates.length}d · as of ${semEsc(d.as_of)}</span></div>
+      <div style="padding:6px 10px">${svg}</div>
+      <div style="padding:0 10px 6px">${legend}</div>
+      <div class="chart-legend"><span class="chart-note" style="display:block">
+        Each line is a basket's compounded return relative to SPY. The heavy line at <b>0%</b> is
+        <b>matching the market</b> — above it the group is beating SPY, below it the group is losing.
+        Rolling ${ref.dates.length}-day window, so every line starts at 0: it answers "who won the
+        last quarter", not "since inception". Mega-cap tech is dashed — context, not part of the
+        semiconductor complex.<br><br>
+        <b>This line and the table's 63-day column now agree exactly</b> — same maths, same window.
+        Where the chart ends is what the table prints.
+        <b>The chart is a 63-day window</b>, so a group can be ahead here while the
+        table's 21-day column shows it losing — a group that ran up and then reversed.
+      </span></div></div>`;
+  }
+
+  async function semDivergencePanel() {
+    let d;
+    try { d = await fetchJSON(`${BASE}/sector-rs.json`); }
+    catch (e) { return `<div class="mod-panel"><div class="mod-panel-title">SECTOR DIVERGENCE</div>
+      <div class="mod-panel-sub small">unavailable</div></div>`; }
+    const rows = ['semis','storage','hardware','mag7'].map(k => {
+      const b = d.baskets[k]; if (!b) return '';
+      const sp = b.spreads || {}, br = b.breadth || {}, dp = b.dispersion || {};
+      const pc = (b.percentiles || {}).spy || {};
+      const corr = dp.mean_pairwise_corr_21d;
+      return `<tr><td class="pat"><b>${semEsc(SEM_LABEL[k] || k)}</b></td>
+        <td class="num">${b.n}</td>
+        <td class="num">${semPct((sp.spy||{})['5d'])}</td>
+        <td class="num">${semPct((sp.spy||{})['21d'])}</td>
+        <td class="num">${semPct((sp.spy||{})['63d'])}</td>
+        <td class="num">${semPct((sp.spy_ew||{})['21d'])}</td>
+        <td class="num">${br.pct_above_50dma == null ? '—' : br.pct_above_50dma.toFixed(0)+'%'}</td>
+        <td class="num">${corr == null ? '—' : Number(corr).toFixed(2) +
+          (dp.low_n_warning ? ' <span class="sig-tinyn" title="only '+dp.pairs+' pairs — noisy at this basket size">⚠</span>' : '')}</td>
+        <td class="num">${pc.pctile_21d_spread == null ? '—' :
+          Number(pc.pctile_21d_spread).toFixed(0)+'<span class="sig-dim" title="'+semEsc(pc.basis||'')+
+          ' — '+pc.n_obs_overlapping+' overlapping windows, ~'+pc.effective_n_approx+' independent">th</span>'}</td></tr>`;
+    }).join('');
+    const dis = d.disclosures || {};
+    return `<div class="mod-panel"><div class="mod-panel-title">SECTOR DIVERGENCE
+        <span class="mod-panel-sub">equal-weight baskets vs the index · as of ${semEsc(d.as_of)}</span></div>
+      <div class="tbl-wrap" style="padding:6px 10px"><table class="tbl-dense"><thead><tr>
+        ${semThL('BASKET','rs')}${semTh('N','rs')}${semTh('5D vs SPY','rs')}${semTh('21D vs SPY','rs')}
+        ${semTh('63D vs SPY','rs')}${semTh('21D vs EW MKT','rs')}${semTh('>50DMA','rs')}
+        ${semTh('21D CORR','rs')}${semTh('PCTILE','rs')}</tr></thead><tbody>${rows}</tbody></table></div>
+      ${SEM_GUIDES.rs()}
+      ${semCaveats(dis, ['equal_weight','survivorship','spy_ew','membership','overlap','not_a_signal'])}</div>`;
+  }
+
+
+  // ── Defensives ↔ semis rotation (twin of the semiconductor.html panel) ──────────────────────
+  // PRIMARY stat is the market-model RESIDUAL correlation. A naive excess-return correlation
+  // (asset minus SPY) is negative BY CONSTRUCTION when betas straddle 1 — both 2026-07-29 plan
+  // reviewers derived it and measurement put the artifact at ~half the naive value. The raw
+  // correlation is drawn beside it at equal weight so the honest headline stays visible.
+  // ⛔ Do not collapse these into a single 0-100 gauge (fenced composite-gauge pattern).
+  async function semRotationDefensivesPanel() {
+    let d;
+    try { d = await fetchJSON(`${BASE}/sector-rs.json`); } catch (e) { return ''; }
+    const rd = d && d.rotation_defensives;
+    // Producer drops the block on a failed/bad fetch — render nothing rather than an empty frame.
+    if (!rd || !rd.dates || rd.dates.length < 2 || !window.OC_CHART) return '';
+    const C = { JNJ: '#a78bfa', DEF: '#fb923c', XLV: '#4ade80', XLP: '#fbbf24', XLU: '#60a5fa',
+                SMH: '#f87171', SPY: '#8b949e' };
+    const LBL = { JNJ: 'JNJ', DEF: 'Defensive composite', XLV: 'XLV', XLP: 'XLP', XLU: 'XLU',
+                  SMH: 'SMH (semis)', SPY: 'SPY (market)' };
+    const pairs = rd.pairs || {}, dis = rd.disclosures || {};
+    const xl = rd.dates.map(dt => dt.slice(5));
+
+    // 1. The two-price view (2026-07-30) — FIRST, ahead of the ratio. The ratio chart was being
+    // read as a price chart, but both its lines carry SMH in the numerator so neither is a price
+    // and "JNJ peaks while SMH troughs" cannot appear on it. This is the literal SMH-vs-JNJ
+    // chart, and its job is to show honestly that BOTH rise. Twin of semiconductor.html.
+    // ⛔ Do not drop it for space — without it the ratio chart gets misread the same way.
+    const price = rd.price_rebased_100 || {};
+    const pSeries = [rd.semis, 'JNJ', 'DEF', rd.benchmark]
+      .filter(k => (price[k] || []).length)
+      .map(k => ({ name: LBL[k] || k, values: price[k], color: C[k] || '#8b949e',
+                   dashed: k === rd.benchmark }));       // SPY is context, not a subject
+    const priceSvg = pSeries.length ? OC_CHART.lineAbs(pSeries, {
+      w: 900, h: 190, padL: 46, padB: 24, gridY: 4,
+      yFmt: v => v.toFixed(0), xLabels: xl,
+    }) : '';
+    const priceLegend = pSeries.map(s =>
+      `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px">
+         <span style="width:10px;height:2px;background:${s.color};display:inline-block;
+                      ${s.dashed ? 'border-top:2px dashed ' + s.color + ';background:none;height:0' : ''}"></span>
+         <span style="color:var(--fg-dim);font-size:10px">${semEsc(s.name)}</span></span>`).join('');
+    const priceEnd = pSeries.filter(s => !s.dashed).map(s => {
+      const v = s.values[s.values.length - 1];
+      return `${semEsc(s.name)} ${v >= 100 ? '+' : ''}${(v - 100).toFixed(0)}%`;
+    }).join(' · ');
+
+    // 2. Table. The ratio chart and the rolling-correlation chart lived here until 2026-07-30,
+    // when Tony asked for the price chart alone. Their statistics are NOT lost — current raw AND
+    // residual correlation, the full-sample median, percentile and % time negative all remain in
+    // the table below, and every disclosure still renders. The producer keeps publishing both
+    // series, so restoring either chart is frontend-only work. Twin of semiconductor.html.
+    const order = ['JNJ', 'DEF'].concat(rd.composite_members || []);
+    const rows = order.filter(k => pairs[k]).map(k => {
+      const p = pairs[k];
+      const f = v => v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(3);
+      return `<tr><td class="pat"><b>${semEsc(LBL[k])}</b></td>
+        <td class="num">${p.beta_full == null ? '—' : Number(p.beta_full).toFixed(2)}</td>
+        <td class="num">${f(p.current_raw)}</td>
+        <td class="num">${f(p.current_residual)}</td>
+        <td class="num">${f(p.median_residual_full)}</td>
+        <td class="num">${p.residual_pctile_full == null ? '—' : Number(p.residual_pctile_full).toFixed(0) + 'th'}</td>
+        <td class="num">${p.pct_time_residual_negative == null ? '—' : p.pct_time_residual_negative + '%'}</td></tr>`;
+    }).join('');
+
+    return `<div class="mod-panel"><div class="mod-panel-title">DEFENSIVES ↔ SEMIS ROTATION
+        <span class="mod-panel-sub">${semEsc(rd.semis)} vs JNJ + EW ${semEsc((rd.composite_members||[]).join('/'))} · ${rd.window}d windows · as of ${semEsc(rd.as_of)}</span></div>
+      <div style="padding:6px 10px">${priceSvg}</div>
+      <div style="padding:0 10px 4px">${priceLegend}</div>
+      <div class="chart-legend" style="padding:0 10px 6px"><span class="chart-note" style="display:block">
+        <b>Plain prices</b>, each rebased to <b>100</b> at the left edge (${semEsc(rd.benchmark)}
+        dashed, for context). Over this window: ${priceEnd}. <b>They all rise — JNJ does not bottom
+        when ${semEsc(rd.semis)} tops.</b> The rotation is a difference in <i>speed</i>, not
+        direction — the gap widens without either leg falling. The table below measures how much
+        of that gap survives once the shared market move is removed.</span></div>
+      <!-- The failed-timing-test line must be VISIBLE, not collapsed inside the caveats
+           <details> — it is the disclosure that stops the panel reading as an endorsement of the
+           claim the data rejected. Caught by ath_rotdef_smoke.mjs as a web/terminal parity gap. -->
+      <div class="sem-whatis" style="border-left-color:#fbbf24;background:rgba(251,191,36,0.07)">
+        <b>Descriptive, not predictive.</b> ${semEsc(dis.no_timing_edge || '')}
+        ${dis.raw_context ? '<br><b>Note:</b> ' + semEsc(dis.raw_context) : ''}
+      </div>
+      <div class="tbl-wrap" style="padding:6px 10px"><table class="tbl-dense"><thead><tr>
+        ${semThL('PAIR vs ' + rd.semis, 'rot')}${semTh('BETA','rot')}${semTh('RAW NOW','rot')}
+        ${semTh('RESID NOW','rot')}${semTh('MED RESID','rot')}${semTh('PCTILE','rot')}
+        ${semTh('% TIME NEG','rot')}</tr></thead><tbody>${rows}</tbody></table></div>
+      ${semCaveats(dis, ['no_timing_edge','price_chart','raw_context','why_not_excess',
+                         'primary_stat','percentile','trailing','adjustment','smh_source'])}</div>`;
+  }
+
+
+  // ── P-B (revised): short-interest LEVEL over time vs the market ─────────────────────────────
+  // Twin of semiconductor.html. Chosen over the planned excess-z BAR because slice z per
+  // settlement is NOT stored — a z line would need a client-side detrend and could disagree with
+  // the published number. The LEVEL needs no recomputation, and every slice has one even when the
+  // RQ1 gate suppresses its z, so this chart shows storage and hardware that the table must
+  // silence. Market = neutral grey + dashed: a reference, not a fourth sector.
+  async function semCrowdingHistoryPanel() {
+    const [d, agg] = await Promise.all([
+      fetchJSON(`${BASE}/short-interest-sectors.json`).catch(() => null),
+      fetchJSON(`${BASE}/short-interest.json`).catch(() => null),
+    ]);
+    if (!d || !agg || !window.OC_CHART) return '';
+    const axis = (agg.history || []).map(h => h.date);
+    if (axis.length < 2) return '';
+    const aggMap = {}; (agg.history || []).forEach(h => { aggMap[h.date] = h.ewsi * 100; });
+    const CUR = [['semis', '#3987e5'], ['storage', '#d95926'], ['hardware', '#199e70']];
+    const series = CUR.map(([k, color]) => {
+      const sl = d.slices[k]; if (!sl) return null;
+      const m = {}; sl.history.forEach(h => { m[h.date] = h.ewsi * 100; });
+      // Guard: a slice starts where its data starts; storage genuinely begins 2025 and is never
+      // back-filled. lineAbs skips non-numeric entries, so nulls leave a real gap.
+      return { name: SEM_LABEL[k] || k, color, values: axis.map(dt => m[dt] != null ? m[dt] : null) };
+    }).filter(Boolean);
+    series.push({ name: 'Whole market', color: '#9aa4ad', dashed: true,
+                  values: axis.map(dt => aggMap[dt] != null ? aggMap[dt] : null) });
+
+    const svg = OC_CHART.lineAbs(series, {
+      w: 900, h: 190, padL: 44, padB: 22, gridY: 4,
+      yFmt: v => v.toFixed(1) + '%',
+      xLabels: axis.map(dt => dt.slice(2, 7)),
+    });
+    const legend = series.map(x =>
+      `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px">
+         <span style="width:12px;height:0;border-top:${x.dashed ? '2px dashed' : '2px solid'} ${x.color};
+                      display:inline-block"></span>
+         <span style="color:var(--fg-dim);font-size:10px">${semEsc(x.name)}</span></span>`).join('');
+    const st = d.staleness || {};
+    return `<div class="mod-panel"><div class="mod-panel-title">SHORT INTEREST vs THE MARKET
+        <span class="mod-panel-sub">% of shares sold short, every settlement since ${semEsc(axis[0])}</span></div>
+      <div style="padding:6px 10px">${svg}</div>
+      <div style="padding:0 10px 6px">${legend}</div>
+      <div class="chart-legend"><span class="chart-note" style="display:block">
+        How heavily each group is <b>sold short</b>, as a share of all its shares. The
+        <b>dashed grey line is the whole market</b> — above it a group is more heavily shorted than
+        the market, below it less. <b>Storage starts in 2025</b> because one of its four members
+        only listed then; the gap is real, not missing data. This chart deliberately shows storage
+        and hardware even though the table cannot give them a z-score — a level is an honest fact
+        at any group size, a z-score is not. Readings are
+        ${st.days_since_settlement != null ? st.days_since_settlement + ' days' : 'up to 23 days'}
+        old: short interest publishes twice a month, well after the fact.
+      </span></div></div>`;
+  }
+
+  async function semCrowdingPanel() {
+    let d;
+    try { d = await fetchJSON(`${BASE}/short-interest-sectors.json`); }
+    catch (e) { return `<div class="mod-panel"><div class="mod-panel-title">SHORT CROWDING</div>
+      <div class="mod-panel-sub small">unavailable</div></div>`; }
+    const order = ['semis','storage','hardware'].concat(
+      Object.keys(d.slices).filter(k => !['semis','storage','hardware'].includes(k)));
+    const rows = order.map(k => {
+      const s = d.slices[k]; if (!s) return '';
+      const cur = s.kind === 'curated';
+      const zTxt = s.z == null
+        ? `<span class="sig-tinyn" title="${semEsc(s.z_suppressed_reason||'')}">⚠ no z</span>`
+        : Number(s.z).toFixed(2) + (s.thin_slice ? ' <span class="sig-tinyn" title="10–25 names">thin</span>' : '');
+      const ex = s.z_excess_vs_aggregate;
+      const exTxt = ex == null ? '<span class="sig-dim">—</span>'
+        : `<span class="${ex > 0.3 ? 'num-dn' : ex < -0.3 ? 'num-up' : ''}" title="slice z minus the market-wide aggregate z on the same settlement">${ex > 0 ? '+' : ''}${Number(ex).toFixed(2)}</span>`;
+      return `<tr${cur ? '' : ' style="opacity:0.72"'}><td class="pat">${cur ? '<b>' : ''}${semEsc(SEM_LABEL[k]||k)}${cur ? '</b>' : ''}</td>
+        <td class="num">${s.n_names_latest}</td>
+        <td class="num">${s.level_pct_shares_out == null ? '—' : s.level_pct_shares_out.toFixed(2)+'%'}</td>
+        <td class="num">${s.delta_pp_vs_prior == null ? '—' : (s.delta_pp_vs_prior > 0 ? '+' : '')+s.delta_pp_vs_prior.toFixed(3)+'pp'}</td>
+        <td class="num">${zTxt}</td><td class="num">${exTxt}</td></tr>`;
+    }).join('');
+    const st = d.staleness || {}, dd = d.disclosures || {};
+    return `<div class="mod-panel"><div class="mod-panel-title">SHORT-INTEREST CROWDING
+        <span class="mod-panel-sub">settlement ${semEsc(st.settlement_date)} · ${st.days_since_settlement}d old · next ${semEsc(st.next_settlement_expected||'—')}</span></div>
+      <div class="tbl-wrap" style="padding:6px 10px"><table class="tbl-dense"><thead><tr>
+        ${semThL('SLICE','si')}${semTh('N','si')}${semTh('SI % SO','si')}${semTh('Δ vs PRIOR','si')}
+        ${semTh('Z','si')}${semTh('vs MARKET','si')}</tr></thead><tbody>${rows}</tbody></table></div>
+      ${SEM_GUIDES.si()}
+      ${semCaveats(dd, ['excess_vs_aggregate','small_slices','z_magnitude_caveat','lag','survivorship','equal_weight_size_bias','descriptive_only'])}</div>`;
+  }
+
+
+
+  // ── P-C.1 + P-C.3 (twins of semiconductor.html) ─────────────────────────────────────────────
+  // ⚠ OC_CHART.rankBars is NOT used for the GEX bar: it grows every bar rightward from a left
+  // edge and encodes sign by COLOUR ALONE. The review requires sign to ride on bar DIRECTION
+  // (primary channel) with colour as redundant reinforcement, so this is a hand-rolled diverging
+  // bar about a centre zero line — same semantics as the web surface.
+  function semCotPanel(cot) {
+    if (!cot || !cot.instruments) return '';
+    const want = cot.instruments.filter(i => /Nasdaq 100|S&P 500/i.test(i.name));
+    if (!want.length) return '';
+    const charts = want.map(inst => {
+      const h = inst.history || {};
+      const v = h.netSpec || [], dts = h.dates || [];
+      if (v.length < 4) return '';
+      const mean = v.reduce((a, b) => a + b, 0) / v.length;
+      const sd = Math.sqrt(v.reduce((a, b) => a + (b - mean) * (b - mean), 0) / v.length);
+      // STATIC full-window band — a rolling band would silently diverge from the published z,
+      // which is defined on exactly these points. Neutral grey only: no semantic colour.
+      const hi = mean + 2 * sd, lo = mean - 2 * sd;
+      const svg = OC_CHART.lineAbs([
+        { name: 'upper', values: dts.map(() => hi), color: 'rgba(154,164,173,0.55)', dashed: true },
+        { name: 'lower', values: dts.map(() => lo), color: 'rgba(154,164,173,0.55)', dashed: true },
+        { name: inst.name, values: v, color: '#3987e5' },
+      ], { w: 430, h: 150, padL: 44, padB: 20, gridY: 3,
+           yFmt: x => (x / 1000).toFixed(0) + 'k',
+           xLabels: dts.map(d => d.slice(5)) });
+      return `<div style="flex:1;min-width:0">
+        <div class="mod-panel-sub small" style="padding:0 0 2px 6px">${semEsc(inst.name)} · spec z ${inst.zScoreSpec}</div>
+        ${svg}</div>`;
+    }).join('');
+    const asOf = want[0].asOf;
+    return `<div class="mod-panel"><div class="mod-panel-title">FUTURES POSITIONING
+        <span class="mod-panel-sub">speculative net position · trailing 52 weeks · as of ${semEsc(asOf)}</span></div>
+      <div style="display:flex;gap:10px;padding:6px 10px">${charts}</div>
+      <div class="chart-legend"><span class="chart-note" style="display:block">
+        <b>Who is betting which way in the futures market.</b> The blue line is how many contracts
+        speculative traders hold net long (above zero) or net short (below). The grey band is the
+        <b>trailing 52-week ±2σ reference — not a fair-value range and not a forecast</b>.
+        <b>Roughly 1 week in 20 sits outside such a band even when nothing unusual is happening</b>,
+        so an excursion is a prompt to look, not a signal. Positioning is a Tuesday snapshot
+        published the following Friday, so it is several days old.
+      </span></div></div>`;
+  }
+
+  function semGexBarPanel(gex) {
+    if (!gex || !gex.stocks) return '';
+    const W = ['NVDA','AMD','AVGO','MU','WDC','STX','SNDK','INTC','QCOM','TXN',
+               'LRCX','AMAT','KLAC','ADI','MCHP','ON','NXPI','MRVL'];
+    const by = {}; gex.stocks.forEach(x => { by[x.ticker] = x; });
+    const rows = W.map(t => by[t]).filter(Boolean)
+                  .sort((a, b) => (a.net_gex_bn || 0) - (b.net_gex_bn || 0));
+    if (!rows.length) return '';
+    const maxMag = Math.max(...rows.map(r => Math.abs(r.net_gex_bn || 0)), 0.001);
+    const CW = 880, LAB = 62, ROW = 17, MID = LAB + (CW - LAB - 20) / 2, HALF = (CW - LAB - 20) / 2;
+    const H = rows.length * ROW + 26;
+    const bars = rows.map((r, i) => {
+      const v = r.net_gex_bn || 0, y = 8 + i * ROW;
+      const w = (Math.abs(v) / maxMag) * HALF * 0.94;
+      const x = v < 0 ? MID - w : MID;
+      const col = v < 0 ? '#d95926' : '#199e70';
+      return `<g><title>${semEsc(r.ticker)} · ${v < 0 ? 'amplifying' : 'damping'} · ${v.toFixed(3)} $bn · ${semEsc(r.regime || '')}</title>
+        <text x="${LAB - 6}" y="${y + 9}" text-anchor="end" font-size="9.5" class="tk"
+          fill="var(--accent)">${semEsc(r.ticker)}</text>
+        <rect x="${x.toFixed(1)}" y="${y + 2}" width="${Math.max(1.5, w).toFixed(1)}" height="${ROW - 6}"
+          fill="${col}" opacity="0.8"/></g>`;
+    }).join('');
+    const neg = rows.filter(r => r.net_gex_bn < 0).length;
+    return `<div class="mod-panel"><div class="mod-panel-title">DEALER GAMMA BY NAME
+        <span class="mod-panel-sub">left of centre = amplifying moves · as of ${semEsc(gex.updated || '—')}</span></div>
+      <div style="padding:6px 10px;overflow-x:auto"><svg viewBox="0 0 ${CW} ${H}" width="100%" height="${H}"
+        role="img" aria-label="Dealer net gamma by name">
+        <line x1="${MID}" y1="2" x2="${MID}" y2="${H - 18}" stroke="rgba(220,220,230,0.6)" stroke-width="2"/>
+        ${bars}
+        <text x="${MID - HALF / 2}" y="${H - 5}" text-anchor="middle" font-size="9"
+          fill="var(--fg-faint)">amplifying</text>
+        <text x="${MID + HALF / 2}" y="${H - 5}" text-anchor="middle" font-size="9"
+          fill="var(--fg-faint)">damping</text>
+      </svg></div>
+      <div class="chart-legend"><span class="chart-note" style="display:block">
+        <b>How option dealers must trade to stay hedged.</b> Bars <b>left of the centre line</b>
+        mean dealers have to sell as prices fall and buy as they rise — that <b>amplifies</b>
+        whatever the market is already doing, and is why some days feel unusually violent. Bars to
+        the right mean the opposite: dealers lean against moves and <b>damp</b> them. Today
+        <b>${neg} of ${rows.length}</b> watchlist names sit on the amplifying side.
+        Direction is shown by which side of the centre a bar falls on; the colour only repeats it.
+        This is an end-of-day estimate built from options open interest — not observed trading, and
+        not a signal.
+      </span></div></div>`;
+  }
+
+  async function semPositioningPanel() {
+    // Third lens: options & positioning. Three INDEPENDENT feeds, deliberately NOT blended into
+    // a score (fence A15 — one number hides the disagreement that makes this useful).
+    const WATCH = ['NVDA','AMD','AVGO','MU','WDC','STX','SNDK','INTC','QCOM','TXN',
+                   'LRCX','AMAT','KLAC','ADI','MCHP','ON','NXPI','MRVL'];
+    const [pc, cot, gex] = await Promise.all([
+      fetchJSON(`${BASE}/putcall.json`).catch(() => null),
+      fetchJSON(`${BASE}/cot.json`).catch(() => null),
+      fetchJSON(`${BASE}/gex_index.json`).catch(() => null),
+    ]);
+    const card = (n, v, m, cls) => `<div class="acct-card"><div class="acct-name">${n}</div>
+      <div class="acct-val"><span class="mono ${cls || ''}">${v}</span></div>
+      <div class="acct-meta"><span class="small">${semEsc(m)}</span></div></div>`;
+    let cards = '';
+    if (pc && pc.history && pc.history.length) {
+      const l = pc.history[pc.history.length - 1];
+      const ctx = (pc.context || {}).total || {};
+      cards += card('PUT/CALL TOTAL', Number(l.total).toFixed(2),
+        `${l.date}${ctx.now_pctile != null ? ' · ' + ctx.now_pctile.toFixed(0) + 'th pctile' : ''}`,
+        l.total > 1.05 ? 'num-up' : l.total < 0.80 ? 'num-dn' : '');
+      cards += card('EQUITY P/C', Number(l.equity).toFixed(2), 'equity-only leg', '');
+    }
+    if (cot && cot.instruments) {
+      cot.instruments.filter(i => /Nasdaq|S&P 500/i.test(i.name)).forEach(i => {
+        const z = i.zScoreSpec;
+        cards += card(semEsc(i.name) + ' SPEC z', (z > 0 ? '+' : '') + Number(z).toFixed(2),
+          `as of ${i.asOf} · 52wk window`, Math.abs(z) >= 2 ? (z < 0 ? 'num-dn' : 'num-up') : '');
+      });
+    }
+    let rows = '', sub = '';
+    if (gex && gex.stocks) {
+      const by = {}; gex.stocks.forEach(g => { by[g.ticker] = g; });
+      const hit = WATCH.map(t => by[t]).filter(Boolean).sort((a, b) => (a.net_gex_bn||0) - (b.net_gex_bn||0));
+      const negN = hit.filter(g => g.net_gex_bn < 0).length;
+      sub = `dealer GEX covers ${hit.length}/${WATCH.length} watchlist names · ${negN} in negative gamma · as of ${semEsc(gex.updated || '—')}`;
+      rows = hit.map(g => `<tr><td class="tk">${semEsc(g.ticker)}</td>
+        <td class="num ${g.net_gex_bn < 0 ? 'num-dn' : 'num-up'}">${g.net_gex_bn == null ? '—' : (g.net_gex_bn > 0 ? '+' : '') + Number(g.net_gex_bn).toFixed(3)}</td>
+        <td class="num">${semEsc(g.regime || '—')}</td>
+        <td class="num">${g.put_call_ratio == null ? '—' : Number(g.put_call_ratio).toFixed(2)}</td>
+        <td class="num">${g.iv_rank == null ? '—' : Number(g.iv_rank).toFixed(0)}</td>
+        <td class="num">${g.gamma_flip == null ? '—' : Number(g.gamma_flip).toFixed(2)}</td></tr>`).join('');
+    }
+    return `<div class="mod-panel"><div class="mod-panel-title">OPTIONS &amp; POSITIONING
+        <span class="mod-panel-sub">${sub}</span></div>
+      <div class="acct-strip" style="grid-template-columns:repeat(4,1fr)">${cards}</div>
+      <div class="tbl-wrap" style="padding:6px 10px"><table class="tbl-dense"><thead><tr>
+        ${semThL('TICKER','pos')}${semTh('NET GEX $BN','pos')}${semTh('REGIME','pos')}
+        ${semTh('P/C OI','pos')}${semTh('IV RANK','pos')}${semTh('GAMMA FLIP','pos')}
+      </tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">no coverage</td></tr>'}</tbody></table></div>
+      ${SEM_GUIDES.pos()}
+      ${semCaveats({
+        not_a_signal:'None of this is a signal, and none of it measures the intraday "large short flow" that circulating posts claim to detect — no public data source does.',
+        why_separate:'These three feeds measure different things on different clocks and will often disagree. That disagreement is the point, and is why they are not blended into a single gauge.',
+        putcall_scope:'CBOE put/call is MARKET-WIDE, not semis-specific — backdrop, not a read on these stocks.',
+        cot_lag:'CFTC COT is a Tuesday snapshot published on Friday, so it is several days stale; its z is fitted on a rolling 52-week window.',
+        gex_basis:'Dealer GEX is an end-of-day ESTIMATE derived from open interest — not observed order flow.'
+      }, ['not_a_signal','why_separate','putcall_scope','cot_lag','gex_basis'])}</div>`;
+  }
+
+
+
+  // ── P-D ATR ladder (twin of semiconductor.html) ─────────────────────────────────────────────
+  // Every RQ6 + review mitigation is structural: bands not lines · ATR axis with price hover-only
+  // · UNTESTED disclosure ABOVE the svg · kind carries a LETTER GLYPH as well as hue · one
+  // sub-lane per kind so overlaps cannot merge · constant alpha · chevrons for zones clipped by
+  // the frame · dist_atr taken FROM the JSON, never recomputed.
+  // Reworked 2026-07-28 after the comprehension review: glyphs DELETED (a third redundant decode
+  // step), names in plain language, rows anchored to a real price, axis in days not ATR.
+  const KL_KIND = {
+    swing:  { color:'#3987e5', name:'past swing area' },
+    volume: { color:'#d95926', name:'heaviest-traded price' },
+    vwap:   { color:'#199e70', name:'average traded price' },
+    range:  { color:'#c98500', name:'52-week extreme' }
+  };
+  const KL_TICK = {'-2':'2 days below','-1':'1 day below','0':'today','1':'1 day above','2':'2 days above'};
+  const KL_ORDER = ['swing','volume','vwap','range'];
+
+  function semLadderPanel(d) {
+    if (!d || !d.tickers) return '';
+    const tickers = Object.keys(d.tickers);
+    if (!tickers.length) return '';
+    const MAXA = d.params.max_atr_away, W = 900, PADL = 118, PADR = 48, ROW = 28, TOP = 32;
+    const H = TOP + tickers.length * ROW + 24;
+    const x = a => PADL + ((a + MAXA) / (2 * MAXA)) * (W - PADL - PADR);
+    const laneH = 4, laneGap = 1;
+    const out = [`<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" role="img"
+                   aria-label="Key level zones by distance in ATR">`];
+    [-2,-1,0,1,2].forEach(a => {
+      const z = a === 0;
+      out.push(`<line x1="${x(a).toFixed(1)}" y1="${TOP-10}" x2="${x(a).toFixed(1)}" y2="${H-20}"
+        stroke="${z ? 'rgba(220,220,230,0.7)' : 'rgba(139,148,158,0.16)'}" stroke-width="${z?2:1}"/>`);
+      out.push(`<text x="${x(a).toFixed(1)}" y="${H-6}" text-anchor="middle" font-size="9"
+        fill="${z?'var(--fg-dim)':'var(--fg-faint)'}"${z?' font-weight="700"':''}>${KL_TICK[String(a)]}</text>`);
+    });
+    out.push(`<text x="${W-PADR}" y="${TOP-18}" text-anchor="end" font-size="9"
+      fill="var(--fg-faint)">prices as of ${semEsc(d.as_of)}</text>`);
+    tickers.forEach((t, ri) => {
+      const row = d.tickers[t], yTop = TOP + ri * ROW;
+      out.push(`<text x="6" y="${yTop+ROW/2+3}" font-size="10" font-weight="700"
+        fill="var(--accent)">${semEsc(t)}</text>`);
+      out.push(`<text x="${PADL-8}" y="${yTop+ROW/2+3}" text-anchor="end" font-size="9.5"
+        fill="var(--fg-dim)">$${row.spot.toFixed(2)}</text>`);
+      if (!row.levels.length) {
+        out.push(`<text x="${x(0)}" y="${yTop+ROW/2+3}" font-size="9" fill="var(--fg-faint)"
+          text-anchor="middle">no past price area within two days' move</text>`); return;
+      }
+      KL_ORDER.forEach((kind, li) => {
+        row.levels.filter(l => l.kind === kind).forEach(l => {
+          const k = KL_KIND[kind] || KL_KIND.swing;
+          const lo = (l.zone_low - row.spot) / row.atr14, hi = (l.zone_high - row.spot) / row.atr14;
+          const xl = x(Math.max(lo, -MAXA)), xr = x(Math.min(hi, MAXA));
+          const y = yTop + 4 + li * (laneH + laneGap);
+          const tip = `${t} · ${l.label} · $${l.zone_low}–$${l.zone_high} · ${Math.abs(l.dist_atr).toFixed(1)} days' move ${l.side} · ${l.derivation}`;
+          out.push(`<g><title>${semEsc(tip)}</title>
+            <rect x="${xl.toFixed(1)}" y="${y}" width="${Math.max(2,xr-xl).toFixed(1)}"
+              height="${laneH}" fill="${k.color}" opacity="0.42"/>
+            ${lo < -MAXA ? `<text x="${PADL-2}" y="${y+laneH}" font-size="8" fill="${k.color}" text-anchor="end">◂</text>` : ''}
+            ${hi >  MAXA ? `<text x="${W-PADR+2}" y="${y+laneH}" font-size="8" fill="${k.color}">▸</text>` : ''}
+          </g>`);
+        });
+      });
+    });
+    out.push('</svg>');
+    const legend = KL_ORDER.map(k => {
+      const m = KL_KIND[k];
+      return `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px">
+        <span style="display:inline-block;width:16px;height:5px;background:${m.color};opacity:0.42"></span>
+        <span style="color:var(--fg-dim);font-size:10px">${m.name}</span></span>`;
+    }).join('');
+    const eg = (() => {
+      const first = tickers[0], fr = d.tickers[first];
+      if (!fr || !fr.levels.length) return '';
+      const l0 = fr.levels[0];
+      return `<b>Reading one row:</b> ${semEsc(first)} is trading at <b>$${fr.spot.toFixed(2)}</b>.
+        Its ${semEsc((KL_KIND[l0.kind]||{}).name || l0.label)} sits at
+        <b>$${l0.zone_low}–$${l0.zone_high}</b>, about
+        <b>${Math.abs(l0.dist_atr).toFixed(1)} of a typical day's move ${semEsc(l0.side)}</b>
+        where it trades now.`;
+    })();
+    return `<div class="mod-panel"><div class="mod-panel-title">PAST PRICE AREAS
+        <span class="mod-panel-sub">distance from today, in typical daily moves · ${semEsc(d.as_of)}</span></div>
+      <div class="sem-whatis" style="border-left-color:#f59e0b;background:rgba(245,158,11,0.10)">
+        <b>⚠ ${semEsc((d.disclosures||{}).untested || '')}</b></div>
+      <div style="padding:4px 10px;overflow-x:auto">${out.join('')}</div>
+      <div style="padding:0 10px 6px">${legend}</div>
+      <div class="chart-legend"><span class="chart-note" style="display:block">
+        <b>Each row is one stock.</b> The thick line down the middle is where it trades today; the
+        coloured bands are <b>price areas from its own past</b>, placed by how far they sit from
+        today — measured in that stock's own typical daily move, so the scale means the same thing
+        for a $1,000 stock and a $30 one.<br><br>${eg}<br><br>
+        <span style="color:var(--fg-faint)">A blank row means nothing within two days' move — not
+        that the stock has no history. ◂▸ marks a band continuing past the edge. Hover any band, or
+        read exact prices in the table below.</span>
+      </span></div></div>`;
+  }
+
+  async function semKeyLevelsPanel() {
+    // D3 key levels. RQ6's seven conditions are enforced in the COMPUTE; this renderer must not
+    // undo them — no support/resistance wording, zones not lines, distance-in-ATR first.
+    // ⚠ DELIBERATE DENSITY DIVERGENCE from semiconductor.html: the web page lists every zone
+    // within 2 ATR (72 rows); the terminal shows the NEAREST zone per ticker (18 rows) because a
+    // 72-row table defeats the terminal's density. Same data, same compute, same filter — a
+    // display choice, documented so a future session does not "fix" it as drift.
+    let d;
+    try { d = await fetchJSON(`${BASE}/key-levels.json`); }
+    catch (e) { return `<div class="mod-panel"><div class="mod-panel-title">KEY LEVELS</div>
+      <div class="mod-panel-sub small">unavailable</div></div>`; }
+    const rows = Object.keys(d.tickers).map(t => {
+      const x = d.tickers[t], l = (x.levels || [])[0];
+      if (!l) return `<tr><td class="tk">${semEsc(t)}</td><td class="num">${x.spot.toFixed(2)}</td>
+        <td class="num">${x.atr14.toFixed(2)}</td><td colspan="3" class="empty">no zone within ${d.params.max_atr_away} ATR</td></tr>`;
+      return `<tr><td class="tk">${semEsc(t)}</td>
+        <td class="num">${x.spot.toFixed(2)}</td>
+        <td class="num">${x.atr14.toFixed(2)}</td>
+        <td>${semEsc(l.label)}</td>
+        <td class="num" style="font-weight:600">${l.dist_atr > 0 ? '+' : ''}${l.dist_atr.toFixed(2)} <span class="sig-dim">${semEsc(l.side)}</span></td>
+        <td class="num sig-dim">${l.zone_low.toFixed(2)}–${l.zone_high.toFixed(2)}</td></tr>`;
+    }).join('');
+    const k = d.disclosures || {};
+    return `<div class="mod-panel"><div class="mod-panel-title">KEY LEVELS
+        <span class="mod-panel-sub">nearest reference zone per name · as of ${semEsc(d.as_of)} · only zones within ${d.params.max_atr_away} ATR</span></div>
+      <div class="tbl-wrap" style="padding:6px 10px"><table class="tbl-dense"><thead><tr>
+        ${semThL('TICKER','kl')}${semTh('SPOT','kl')}${semTh('ATR14','kl')}${semThL('NEAREST ZONE','kl')}
+        ${semTh('DIST (ATR)','kl')}${semTh('ZONE RANGE','kl')}</tr></thead><tbody>${rows}</tbody></table></div>
+      ${SEM_GUIDES.kl()}
+      ${semCaveats(k, ['untested','zones','distance','proximity','naming','not_a_signal'])}</div>`;
+  }
+
+  async function renderGpu(body) {
+    body.innerHTML = '<div class="mod-loading">Loading Semiconductor Hub…</div>';
+    try {
+      const d = await fetchJSON(`${BASE}/gpu-pricing.json`);
+      let hist = { series: [] };
+      try { hist = await fetchJSON(`${BASE}/gpu-pricing-history.json`); } catch (e) { /* optional */ }
+      const h = d.headline || {}, v = h.vast || {}, rp = h.runpod || {};
+
+      const disc = `<div class="mod-panel" style="padding:7px 12px;border-left:3px solid #E5B94C">
+        <div class="small" style="line-height:1.5"><span class="num-warn" style="font-weight:700">⚠ Reference rates, not a market-wide index.</span> ${d.disclaimer || ''}</div></div>`;
+
+      const card = (name, val, meta) => `<div class="acct-card"><div class="acct-name">${name}</div>
+        <div class="acct-val"><span class="mono">${val}</span></div>
+        <div class="acct-meta"><span class="small">${meta}</span></div></div>`;
+      const kpis = `<div class="acct-strip" style="grid-template-columns:repeat(4,1fr)">
+        ${card('H100 SXM · FLOOR', px(h.floor), (v.offers ? v.offers + ' Vast offers' : 'RunPod only'))}
+        ${card('RUNPOD SECURE', px(rp.secure), 'managed cloud')}
+        ${card('RUNPOD COMMUNITY', px(rp.community), 'marketplace')}
+        ${card('VAST MEDIAN', px(v.median), 'marketplace median')}
+      </div>`;
+
+      const bars = `<div class="mod-panel"><div class="mod-panel-title">Marketplace floor by GPU ($/GPU-hr)</div>
+        <div class="mod-panel-sub small">Lowest available rate across sources. Lower = looser compute supply.</div>
+        ${barChartSVG(d.skus)}</div>`;
+
+      const rows = (d.skus || []).map((s) => {
+        const r = s.runpod || {}, vv = s.vast || {};
+        return `<tr><td class="mono" style="font-weight:700">${s.label}</td>
+          <td class="mono small">${s.vram_gb ? s.vram_gb + 'G' : '—'}</td>
+          <td class="mono num">${px(r.secure)}</td><td class="mono num">${px(r.community)}</td>
+          <td class="mono num">${px(vv.min)}</td><td class="mono num">${px(vv.median)}</td>
+          <td class="mono num small">${vv.offers || '—'}</td>
+          <td class="mono num num-up" style="font-weight:700">${px(s.floor)}</td></tr>`;
+      }).join('');
+      const table = `<div class="mod-panel"><div class="mod-panel-title">All SKUs</div>
+        <div class="tbl-wrap"><table class="tbl-dense" style="width:100%">
+        <thead><tr><th>GPU</th><th class="num">VRAM</th><th class="num">RP Secure</th><th class="num">RP Comm</th>
+        <th class="num">Vast Min</th><th class="num">Vast Med</th><th class="num">Off</th><th class="num">Floor</th></tr></thead>
+        <tbody>${rows}</tbody></table></div></div>`;
+
+      const days = (hist.series || []).length;
+      const note = `<div class="mod-panel-sub small" style="margin-top:8px;line-height:1.5">
+        History: ${days} day${days === 1 ? '' : 's'} (accrues daily). ${d.methodology || ''}<br>
+        Sources: RunPod GraphQL + Vast.ai marketplace. SemiAnalysis's 63-provider aggregate is paywalled with no API. Snapshot ${d.generated_at || ''}.</div>`;
+
+      // Two-surface parity (D2): the new panels lead, GPU pricing becomes one lens of the hub.
+      const [divPanel, rotPanel, crowdPanel, posPanel, klPanel] = await Promise.all(
+        [semDivergencePanel(), semRotationDefensivesPanel(), semCrowdingPanel(),
+         semPositioningPanel(), semKeyLevelsPanel()]);
+      const guideCss = `<style>
+          /* "How to read this" guides (2026-07-28) — twin of semiconductor.html's .hrt/.whatis */
+          [data-mod-panel="sem"] .sem-whatis, .mod-panel .sem-whatis {
+            font-size:11px; line-height:1.6; margin:6px 10px 4px; padding:5px 9px;
+            border-left:3px solid var(--num-up,#4ade80); background:rgba(74,222,128,0.06);
+            border-radius:3px; color:var(--fg,#c9d1d9);
+          }
+          .mod-panel .sem-hrt { margin:0 10px 8px; font-size:11px; line-height:1.6; }
+          .mod-panel .sem-hrt > summary {
+            cursor:pointer; color:var(--accent,#FF6B35); font-weight:700; list-style:none;
+            padding:3px 0; user-select:none; letter-spacing:0.3px;
+          }
+          .mod-panel .sem-hrt > summary::-webkit-details-marker { display:none; }
+          .mod-panel .sem-hrt > summary::before { content:'▸  '; }
+          .mod-panel .sem-hrt[open] > summary::before { content:'▾  '; }
+          .mod-panel .sem-hrt dl {
+            margin:4px 0 0; display:grid; grid-template-columns:max-content 1fr; gap:3px 12px;
+          }
+          .mod-panel .sem-hrt dt { font-weight:700; color:var(--fg,#c9d1d9); white-space:nowrap; }
+          .mod-panel .sem-hrt dd { margin:0; color:var(--fg-dim,#8b949e); }
+          .mod-panel .sem-cav { margin:0 10px 8px; font-size:11px; line-height:1.6; }
+          .mod-panel .sem-cav > summary {
+            cursor:pointer; color:var(--fg-dim,#8b949e); font-weight:700; list-style:none;
+            padding:3px 0; user-select:none;
+          }
+          .mod-panel .sem-cav > summary::-webkit-details-marker { display:none; }
+          .mod-panel .sem-cav > summary::before { content:'▸  '; }
+          .mod-panel .sem-cav[open] > summary::before { content:'▾  '; }
+          .mod-panel .sem-cav-list { display:grid; gap:4px; margin-top:5px; }
+          .mod-panel .sem-cav-item {
+            display:grid; grid-template-columns:max-content 1fr; gap:10px; padding:4px 8px;
+            border-radius:3px; background:rgba(139,148,158,0.07);
+            border-left:3px solid rgba(139,148,158,0.4);
+          }
+          .mod-panel .sem-cav-item.key {
+            background:rgba(255,107,53,0.09); border-left-color:var(--accent,#FF6B35);
+          }
+          .mod-panel .sem-cav-tag {
+            font-weight:700; font-size:10px; letter-spacing:0.04em; text-transform:uppercase;
+            color:var(--fg,#c9d1d9); white-space:nowrap; padding-top:1px;
+          }
+          .mod-panel .sem-cav-item.key .sem-cav-tag { color:var(--accent,#FF6B35); }
+          .mod-panel .sem-cav-txt { color:var(--fg-dim,#8b949e); }
+          .mod-panel th[title] { cursor:help; border-bottom:1px dotted rgba(139,148,158,0.55); }
+          .mod-panel .sem-eg {
+            margin-top:7px; padding:5px 9px; border-left:3px solid var(--accent,#FF6B35);
+            background:rgba(255,107,53,0.07); border-radius:3px; color:var(--fg,#c9d1d9);
+          }
+</style>`;
+      const klData = await fetchJSON(`${BASE}/key-levels.json`).catch(()=>null);
+      const crowdHistPanel = await semCrowdingHistoryPanel();
+      const [cotData, gexData] = await Promise.all([
+        fetchJSON(`${BASE}/cot.json`).catch(() => null),
+        fetchJSON(`${BASE}/gex_index.json`).catch(() => null)]);
+      body.innerHTML = guideCss + semRelPerfPanel(await fetchJSON(`${BASE}/sector-rs.json`).catch(()=>null)) + divPanel + rotPanel + crowdPanel + crowdHistPanel + posPanel + semCotPanel(cotData) + semGexBarPanel(gexData) + semLadderPanel(klData) + klPanel + disc + kpis + bars + table + note;
+    } catch (e) {
+      body.innerHTML = `<div class="mod-err">GPU module error: ${(e && e.message) || e}</div>`;
+    }
+  }
+
+  window.OC_MODULES = window.OC_MODULES || {};
+  // 2026-07-28 rebrand: this module is now 'sem' (Semiconductor Hub). The legacy 'gpu' key
+  // is kept registered so any cached page, bookmark or deep-link that still asks for the
+  // old id renders instead of showing an empty panel.
+  window.OC_MODULES['sem'] = { render: renderGpu };
+  window.OC_MODULES['gpu'] = { render: renderGpu };
+})();
