@@ -506,11 +506,40 @@
     });
   }
 
+  /* ── Holders prefetch (M3 option C, 2026-08-01) ──────────────
+     Warm the server-side cache for /holders as soon as the module opens, so that by the
+     time the user clicks the 13F Holders tab the response is ~0.04s instead of ~3.7s and
+     the "Fetching 13F holders…" state is never seen.
+
+     Three properties this MUST keep:
+       · once per ticker per session — a tab switch or re-render must not re-request;
+       · FIRE AND FORGET — the result is deliberately discarded and every failure is
+         swallowed. Summary renders fine without this, so a prefetch problem must never
+         surface to the user or block anything;
+       · it does NOT replace renderHolders()'s own fetch. The "Fetching…" state stays as
+         the fallback for a cold click that beats the prefetch. ⛔ Don't delete it. */
+  const _holdersPrefetched = new Set();
+  function prefetchHolders(sym) {
+    if (!sym || _holdersPrefetched.has(sym)) return;
+    _holdersPrefetched.add(sym);
+    try {
+      fetch(holdersUrl(sym), { credentials: 'omit' }).catch(() => {});
+    } catch (e) { /* never let a prefetch surface */ }
+  }
+
   /* ── Shell ───────────────────────────────────────────────── */
   async function loadAndRender(body, ticker, market, initialTab) {
     const sym = (ticker || 'AAPL').toUpperCase();
     market = market || 'US';
+    // ⛔ 2026-08-01 (M3, option C): do NOT default this to 'holders'. The 13F Holders pane
+    // IS the denser view (100 rows / ~6,306 chars vs Summary's 6 / ~3,034), but it is lazily
+    // fetched from 13f.info and costs ~3.7s COLD per ticker (~0.04s once the server cache is
+    // warm). Landing on it would put that cold wait on every first-visit ticker. Instead we
+    // keep Summary as the instant landing tab and warm the cache in the background — see
+    // prefetchHolders() below. Options A (holders default) and B (denser summary grid) were
+    // considered and declined; see the M3 row in roadmaps/ui-review-open-items.md.
     const tab = initialTab || 'summary';
+    prefetchHolders(sym);
     if (window.OC_UPDATE_PANE_PARAMS) window.OC_UPDATE_PANE_PARAMS({ ticker: sym, market });
 
     body.innerHTML = `

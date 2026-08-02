@@ -10,8 +10,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/css/theme.css">
-<link rel="stylesheet" href="/css/shell.css?v=20260731b">
-<link rel="stylesheet" href="/css/modules.css?v=20260801a">
+<link rel="stylesheet" href="/css/shell.css?v=20260801b">
+<link rel="stylesheet" href="/css/modules.css?v=20260801b">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css" />
 </head>
 <body>
@@ -32,6 +32,18 @@
       <div class="tape-inner" id="tape"></div>
     </div>
     <div class="topbar-right">
+      <!-- CANONICAL CROSS-SITE NAV (X3, 2026-08-01). The terminal had NO link to any
+           sibling dashboard — it embeds stocks pages as modules, but there was no way
+           to reach the full stocks/news/trumpsocial sites from here.
+           ⚠ Duplicated by design in 4 codebases under 3 unix owners — grep
+           `CANONICAL CROSS-SITE NAV` and change all four together. Order and labels
+           must match stocks js/nav.js. -->
+      <nav class="sitenav" aria-label="Other dashboards">
+        <a href="https://stocks.clawmo.tech/" target="_blank" rel="noopener">Value Investor&nbsp;↗</a>
+        <a href="https://news.clawmo.tech/" target="_blank" rel="noopener">News Intel&nbsp;↗</a>
+        <a href="https://trumpsocial.clawmo.tech/" target="_blank" rel="noopener">Trump&nbsp;Social&nbsp;↗</a>
+        <span class="sitenav-here" aria-current="page">◢&nbsp;Terminal</span>
+      </nav>
       <div class="regime" id="regimePill" data-regime="unknown">
         <span class="regime-dot"></span>
         <span class="regime-label">———</span>
@@ -57,6 +69,14 @@
     <span class="sb-item" id="sbSpy">SPY ———</span>
     <span class="sb-item sb-sep">·</span>
     <span class="sb-item" id="sbUpdate">update: ———</span>
+    <!-- Phone fallback for the topbar .sitenav, which is hidden below 768px. Shown ONLY
+         there, so the two never appear at once. Same order/labels as the topbar copy. -->
+    <span class="sb-item sb-sep sb-sitenav">·</span>
+    <span class="sb-item sb-sitenav">
+      <a href="https://stocks.clawmo.tech/" target="_blank" rel="noopener">Value Investor&nbsp;↗</a>
+      <a href="https://news.clawmo.tech/" target="_blank" rel="noopener">News Intel&nbsp;↗</a>
+      <a href="https://trumpsocial.clawmo.tech/" target="_blank" rel="noopener">Trump&nbsp;Social&nbsp;↗</a>
+    </span>
 <span class="sb-spacer"></span>
     <span class="sb-item" style="font-size:11px;opacity:0.7">Research use only · Not investment advice · Third-party data</span>
     <span class="sb-item sb-sep">·</span>
@@ -106,7 +126,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
 <script src="/js/data.js"></script>
-<script src="/js/i18n.js"></script>
+<script src="/js/i18n.js?v=20260801a"></script>
 <script src="/js/charts.js"></script>
 <script src="/js/fastgraph-core.js"></script>
 <script src="/js/glossary.js"></script>
@@ -114,13 +134,13 @@
 <script src="/js/health-checks.js"></script>
 <script src="/js/dcf-core.js"></script>
 <script src="/js/notable-traders.js"></script>
-<script src="/js/app.js?v=20260731a"></script>
+<script src="/js/app.js?v=20260801a"></script>
 <script src="/js/modules/financials.js"></script>
-<script src="/js/modules/holdings.js?v=20260801a"></script>
+<script src="/js/modules/holdings.js?v=20260801d"></script>
 <script src="/js/modules/signals.js?v=20260731a"></script>
 <script src="/js/modules/breadth.js?v=20260731d"></script>
 <script src="/js/modules/portfolio.js?v=20260731c"></script>
-<script src="/js/modules/stock.js?v=20260717a"></script>
+<script src="/js/modules/stock.js?v=20260801a"></script>
 <script src="/js/modules/tables.js?v=20260801a"></script>
 <script src="/js/modules/macro.js?v=20260714a"></script>
 <script src="/js/modules/sem.js?v=20260730e"></script>
@@ -130,8 +150,8 @@
 <script src="/js/modules/calendar.js"></script>
 <script src="/js/modules/external.js?v=20260731a"></script>
 <script src="/js/modules/polymarket.js?v=20260731a"></script>
-<script src="/js/modules/geo.js?v=20260727a"></script>
+<script src="/js/modules/geo.js?v=20260801a"></script>
 <script src="/js/modules/cycles.js"></script>
-<script src="/js/site-alert.js?v=20260623" defer></script>
+<script src="/js/site-alert.js?v=20260801a" defer></script>
 </body>
 </html>
