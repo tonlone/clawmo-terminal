@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/css/theme.css">
-<link rel="stylesheet" href="/css/shell.css?v=20260801b">
+<link rel="stylesheet" href="/css/shell.css?v=20260801c">
 <link rel="stylesheet" href="/css/modules.css?v=20260801b">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css" />
 </head>
@@ -32,18 +32,14 @@
       <div class="tape-inner" id="tape"></div>
     </div>
     <div class="topbar-right">
-      <!-- CANONICAL CROSS-SITE NAV (X3, 2026-08-01). The terminal had NO link to any
-           sibling dashboard — it embeds stocks pages as modules, but there was no way
-           to reach the full stocks/news/trumpsocial sites from here.
-           ⚠ Duplicated by design in 4 codebases under 3 unix owners — grep
-           `CANONICAL CROSS-SITE NAV` and change all four together. Order and labels
-           must match stocks js/nav.js. -->
-      <nav class="sitenav" aria-label="Other dashboards">
-        <a href="https://stocks.clawmo.tech/" target="_blank" rel="noopener">Value Investor&nbsp;↗</a>
-        <a href="https://news.clawmo.tech/" target="_blank" rel="noopener">News Intel&nbsp;↗</a>
-        <a href="https://trumpsocial.clawmo.tech/" target="_blank" rel="noopener">Trump&nbsp;Social&nbsp;↗</a>
-        <span class="sitenav-here" aria-current="page">◢&nbsp;Terminal</span>
-      </nav>
+      <!-- ⛔ NO OUTBOUND CROSS-SITE NAV HERE — DELIBERATE (Tony, 2026-08-01).
+           The terminal is intentionally SEGREGATED: it must not offer links out to
+           stocks / news / trumpsocial. The reverse direction is fine and is still in
+           place — those three sites each link TO the terminal.
+           A `.sitenav` block was added here earlier that day under X3 ("every site
+           reaches all three siblings") and was REMOVED on this instruction.
+           ⛔ Do not re-add it, and do not treat the terminal's absence from the
+           cross-site set as an X3 regression — it is the requested behaviour. -->
       <div class="regime" id="regimePill" data-regime="unknown">
         <span class="regime-dot"></span>
         <span class="regime-label">———</span>
@@ -69,14 +65,9 @@
     <span class="sb-item" id="sbSpy">SPY ———</span>
     <span class="sb-item sb-sep">·</span>
     <span class="sb-item" id="sbUpdate">update: ———</span>
-    <!-- Phone fallback for the topbar .sitenav, which is hidden below 768px. Shown ONLY
-         there, so the two never appear at once. Same order/labels as the topbar copy. -->
-    <span class="sb-item sb-sep sb-sitenav">·</span>
-    <span class="sb-item sb-sitenav">
-      <a href="https://stocks.clawmo.tech/" target="_blank" rel="noopener">Value Investor&nbsp;↗</a>
-      <a href="https://news.clawmo.tech/" target="_blank" rel="noopener">News Intel&nbsp;↗</a>
-      <a href="https://trumpsocial.clawmo.tech/" target="_blank" rel="noopener">Trump&nbsp;Social&nbsp;↗</a>
-    </span>
+    <!-- ⛔ The phone fallback for the topbar cross-site nav was removed here too
+         (Tony, 2026-08-01) — see the note in the topbar. Removing only the topbar copy
+         would have left the links live on every screen under 768px. -->
 <span class="sb-spacer"></span>
     <span class="sb-item" style="font-size:11px;opacity:0.7">Research use only · Not investment advice · Third-party data</span>
     <span class="sb-item sb-sep">·</span>

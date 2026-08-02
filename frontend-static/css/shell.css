@@ -138,6 +138,12 @@ html, body {
   flex-shrink: 0;
 }
 
+/* ⛔ The .sitenav / .sb-sitenav rules were REMOVED 2026-08-01 along with their markup.
+   The terminal is deliberately segregated and must not link out to stocks / news /
+   trumpsocial; the reverse direction (those three linking here) is unchanged.
+   Dead CSS was deleted rather than left behind, so re-adding markup cannot silently
+   pick up styling and look intentional. */
+
 .regime {
   display: inline-flex;
   align-items: center;
