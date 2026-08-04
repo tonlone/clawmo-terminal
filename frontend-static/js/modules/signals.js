@@ -842,6 +842,10 @@
       ` : '';
 
       // ── Stop-out auto-throttle card (SL-weighted; see lib/kill_switch) ──
+      // M4: these counters are ONE TRADING DAY, not a rolling window — kill_switch.py
+      // groups the ledger BY exit_date and picks the most recent day with a meaningful
+      // sample (>= STOP_CLUSTER_MIN_CLOSES), which is NOT necessarily today. Unlabelled,
+      // "6 SL / 32 closes" reads as a period. The date is now printed for that reason.
       const scl = ks.stop_cluster || {};
       const th = ks.throttle || {};
       const thTier = th.tier || scl.tier || 'NONE';
@@ -852,7 +856,7 @@
         <div class="sig-macro" title="${escSig(th.active ? (th.reason || '') : 'Stop-outs within normal range — full signal generation. Trailing stops are profit-taking (stop ratcheted up, locking ~+1R since the 2026-07-07 staged-stop lock), weighted 0.15x vs 1.0x for hard SL — a trail-heavy day does not trip this throttle.')}">
           <div class="sig-macro-lbl">Stop-Out Throttle</div>
           <div class="sig-macro-val mono ${thColorMap[thTier] || ''}">${thLabelMap[thTier] || 'Normal'}</div>
-          <div class="sig-macro-sub mono">${scl.sl_count || 0} SL / ${scl.total_closes || 0} closes · ${slRatePct}% SL${scl.trail_count ? ' · ' + scl.trail_count + ' trail (profit)' : ''}${th.active && th.allowed_grades ? ' · ' + th.allowed_grades.join('/') + ' only' : ''}</div>
+          <div class="sig-macro-sub mono">${scl.sl_count || 0} SL / ${scl.total_closes || 0} closes · ${slRatePct}% SL${scl.window_date ? ' · closes on ' + escSig(scl.window_date) : ''}${scl.trail_count ? ' · ' + scl.trail_count + ' trail (profit)' : ''}${th.active && th.allowed_grades ? ' · ' + th.allowed_grades.join('/') + ' only' : ''}</div>
         </div>
       ` : '';
 
