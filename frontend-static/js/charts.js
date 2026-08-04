@@ -481,6 +481,15 @@
     return obs;
   }
 
+  /* Public hook so a module's BESPOKE chart builder can join the generic wiring pass
+     without duplicating crosshair code. Returns the id to stamp as data-occh. */
+  function registerChart(geom) {
+    const id = _regNext++;
+    _reg.set(id, geom);
+    if (_reg.size > 300) { const k = _reg.keys().next().value; _reg.delete(k); }
+    return id;
+  }
+
   window.OC_CROSSHAIR = crosshair;
-  window.OC_CHART = { overlayNorm, lineAbs, wireCrosshairs, autoWireCrosshairs, sparkline, rankBars, smoothPath, groupedBars, COLORS };
+  window.OC_CHART = { overlayNorm, lineAbs, wireCrosshairs, autoWireCrosshairs, registerChart, sparkline, rankBars, smoothPath, groupedBars, COLORS };
 })();
