@@ -94,6 +94,11 @@
     min -= yPad; max += yPad;
     const sx = (i) => padL + (i / (n - 1)) * (W - padL - padR);
     const sy = (v) => padT + (1 - (v - min) / (max - min)) * (H - padT - padB);
+    // Publish the geometry so OC_CROSSHAIR can be attached to a lineAbs chart without the
+    // caller re-deriving padL/padR/min/max — re-deriving is how a crosshair silently drifts
+    // off its own line. Read it IMMEDIATELY after the lineAbs() call that produced it.
+    lineAbs.lastGeom = { n: n, xScale: sx, yScale: sy, min: min, max: max,
+                         padL: padL, padR: padR, W: W, H: H };
 
     // grid
     const gridY = opts.gridY || 4;
@@ -271,5 +276,150 @@
     return `<svg class="oc-chart fin-grouped-bars" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${parts.join('')}</svg>`;
   }
 
+
+  /* ── OC_CROSSHAIR — shared hover crosshair + readout for SVG time-series ──────────
+     WHY THIS EXISTS: an audit of 29 modules / 89 plots found 5 interactive and 64
+     time-series charts with no hover at all. The capability existed — it was hand-rolled
+     five separate times (stock.js, breadth.js, signals.js, geo.js, cycles.js) — but
+     "hand-write 5 SVG nodes per chart" had a ~7% adoption rate. So this helper INJECTS
+     its own scaffolding; a design that keeps per-chart markup would reproduce the gap.
+
+     SCOPE: SVG line/area/bar charts with index-addressable x. ⛔ Not canvas (CYC) — that
+     needs a different hit path; only the index math would be shared. ⛔ Not gauges/sparklines.
+
+     CONTRACT — attach AFTER every render, on the fresh node:
+         el.innerHTML = renderChart(d);
+         OC_CROSSHAIR(el.querySelector('svg'), optsFor(d));
+     Re-attaching on the same element auto-detaches the previous one (see _attached), so a
+     double-attach cannot stack listeners. Because the tooltip lives inside the caller's
+     container, an innerHTML rebuild takes it with the chart — a stale tooltip quoting an
+     old series is structurally impossible rather than merely unlikely.
+
+     Reviewed 2026-08-03 (peer review, APPROVE-WITH-CHANGES); all blocking items applied. */
+  const _attached = new WeakMap();
+
+  function crosshair(svg, opts) {
+    if (!svg || !opts) return function () {};
+    const prev = _attached.get(svg);
+    if (prev) prev();                        // idempotent per element
+
+    const n = opts.n | 0;
+    // A single point (or none) has no x-axis to scrub. Bail rather than divide by zero.
+    if (n <= 1) return function () {};
+
+    const vb = svg.viewBox && svg.viewBox.baseVal;
+    const W = vb && vb.width ? vb.width : (svg.width && svg.width.baseVal.value);
+    const H = vb && vb.height ? vb.height : (svg.height && svg.height.baseVal.value);
+    if (!W || !H) {
+      console.error('[OC_CROSSHAIR] svg has neither a viewBox nor width/height; refusing to guess', svg);
+      return function () {};
+    }
+
+    const pad = opts.pad == null ? 22 : opts.pad;
+    const plotW = W - 2 * pad;
+    const xScale = opts.xScale || function (i) { return pad + (i / (n - 1)) * plotW; };
+    const series = opts.series || [];
+    const DOT_R = 3;                          // px, before viewport scaling
+
+    const NS = 'http://www.w3.org/2000/svg';
+    const mk = (t, a) => { const e = document.createElementNS(NS, t);
+      for (const k in a) e.setAttribute(k, a[k]); return e; };
+
+    // Scaffold appended LAST so nothing drawn later can cover the hit rect.
+    const line = mk('line', { class: 'occh-x', x1: 0, y1: pad, x2: 0, y2: H - pad,
+      stroke: 'var(--fg-faint, #6e7681)', 'stroke-width': 1, 'stroke-dasharray': '3 3',
+      'vector-effect': 'non-scaling-stroke', opacity: 0, 'pointer-events': 'none' });
+    // ⚠ <ellipse>, not <circle>: these charts use preserveAspectRatio="none", so a circle
+    // is scaled non-uniformly into an ellipse whose eccentricity CHANGES on resize.
+    // rx/ry are recomputed from the live CTM per move (two divisions — cheaper than a
+    // ResizeObserver and always correct).
+    const dots = series.map(s => mk('ellipse', { class: 'occh-dot', rx: DOT_R, ry: DOT_R,
+      fill: s.color || 'var(--accent, #FF6B35)', opacity: 0, 'pointer-events': 'none' }));
+    const hit = mk('rect', { class: 'occh-hit', x: pad, y: pad,
+      width: plotW, height: H - 2 * pad, fill: 'transparent',
+      style: 'cursor:crosshair;pointer-events:all;touch-action:none' });
+
+    svg.appendChild(line);
+    dots.forEach(d => svg.appendChild(d));
+    svg.appendChild(hit);
+
+    // Tooltip lives in the caller's container, NOT document.body — an innerHTML rebuild
+    // must dispose of it, or orphans accumulate on every range change.
+    let tip = opts.tooltip, madeTip = false;
+    if (!tip) {
+      const host = opts.tooltipContainer || svg.parentElement;
+      if (host) {
+        if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+        tip = document.createElement('div');
+        tip.className = 'occh-tip';
+        host.appendChild(tip); madeTip = true;
+      }
+    }
+
+    function onMove(ev) {
+      const ctm = svg.getScreenCTM();
+      if (!ctm) return;                       // detached mid-rebuild — no-op, don't throw
+      const pt = svg.createSVGPoint();
+      pt.x = ev.clientX; pt.y = ev.clientY;
+      const loc = pt.matrixTransform(ctm.inverse());
+      let i = Math.round(((loc.x - pad) / plotW) * (n - 1));
+      if (i < 0) i = 0; else if (i > n - 1) i = n - 1;
+      const x = xScale(i);
+
+      line.setAttribute('x1', x.toFixed(2));
+      line.setAttribute('x2', x.toFixed(2));
+      line.setAttribute('opacity', '0.55');
+
+      const rx = DOT_R / (ctm.a || 1), ry = DOT_R / (ctm.d || 1);
+      series.forEach((s, k) => {
+        const v = s.values ? s.values[i] : null;
+        const d = dots[k];
+        // A gap is information. Hide the dot; never draw it at 0 and never snap to a
+        // neighbour — both would invent a reading the series does not contain.
+        if (v == null || !isFinite(v)) { d.setAttribute('opacity', '0'); return; }
+        d.setAttribute('cx', x.toFixed(2));
+        d.setAttribute('cy', (s.yScale ? s.yScale(v) : 0).toFixed(2));
+        d.setAttribute('rx', rx.toFixed(2));
+        d.setAttribute('ry', ry.toFixed(2));
+        d.setAttribute('opacity', '1');
+      });
+
+      if (tip && opts.rows) {
+        const rows = opts.rows(i) || [];
+        tip.innerHTML = rows.map(r =>
+          '<div class="stk-tt-row"><span class="stk-tt-k">' + r.k + '</span>' +
+          '<span class="stk-tt-v mono ' + (r.cls || '') + '">' +
+          // Missing values render as an em-dash ROW rather than a dropped row: a vanishing
+          // row makes the tooltip jitter, and a missing metric reads as a bug, not a gap.
+          (r.v == null || r.v === '' ? '<span style="opacity:.5">—</span>' : r.v) +
+          '</span></div>').join('');
+        tip.style.opacity = '1';
+        const frac = plotW ? (x - pad) / plotW : 0;
+        tip.style.left = (frac * 100).toFixed(1) + '%';
+        tip.style.transform = frac > 0.6 ? 'translateX(-100%)' : 'translateX(8px)';
+      }
+    }
+    function onLeave() {
+      line.setAttribute('opacity', '0');
+      dots.forEach(d => d.setAttribute('opacity', '0'));
+      if (tip) tip.style.opacity = '0';
+    }
+
+    // pointer* rather than mouse*: free touch support, no desktop downside.
+    hit.addEventListener('pointermove', onMove);
+    hit.addEventListener('pointerleave', onLeave);
+
+    function detach() {
+      hit.removeEventListener('pointermove', onMove);
+      hit.removeEventListener('pointerleave', onLeave);
+      [line, hit].concat(dots).forEach(e => e.parentNode && e.parentNode.removeChild(e));
+      if (madeTip && tip && tip.parentNode) tip.parentNode.removeChild(tip);
+      _attached.delete(svg);
+    }
+    _attached.set(svg, detach);
+    return detach;
+  }
+
+  window.OC_CROSSHAIR = crosshair;
   window.OC_CHART = { overlayNorm, lineAbs, sparkline, rankBars, smoothPath, groupedBars, COLORS };
 })();

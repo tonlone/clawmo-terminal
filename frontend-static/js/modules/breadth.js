@@ -251,12 +251,17 @@
         <text class="ch-date" x="${W - pad}" y="${H - 4}" text-anchor="end">${(dates[dates.length - 1] || '').slice(5)}</text>
       </svg>
     `;
-    return { html, meta: { n: daily.length, first: dates[0], last: dates[dates.length - 1] } };
+    return { html, meta: { n: daily.length, first: dates[0], last: dates[dates.length - 1],
+      // Published for OC_CROSSHAIR: the exact series and scales this SVG was drawn with,
+      // so the hover can never disagree with the line it is tracking.
+      dates, daily, ma5, ma20, ma50, pad, sy } };
   }
 
+  const _indMeta = {};   // panel id -> meta, consumed by wireBrdCrosshairs() after render
   function indicatorPanel(id, title, fullDaily, fullDates, accent, start) {
     const res = indicatorChart(fullDaily, fullDates, accent, start);
     if (!res.html) return '';
+    _indMeta[id] = { meta: res.meta, accent };
     return `
         <div class="mod-panel" id="${id}">
           <div class="mod-panel-title">${title}</div>
@@ -336,6 +341,66 @@
      Snaps to the nearest day; drops a dot on each of the 3 series at that day;
      tooltip shows Date · SPY cum · SP500 breadth % · QQQ breadth % + a
      divergence pill when breadth and price are moving opposite ways. */
+
+  /* Attach the shared OC_CROSSHAIR to the three previously-inert BRD charts.
+     Kept in one place so the two indicator panels and the EWBD panel cannot drift apart. */
+  function wireBrdCrosshairs(body) {
+    if (!window.OC_CROSSHAIR || !body) return;
+    const fmt1 = v => (v == null || !isFinite(v)) ? null : v.toFixed(1) + '%';
+
+    ['brdIndSpy', 'brdIndQqq'].forEach(id => {
+      const entry = _indMeta[id];
+      const panel = body.querySelector('#' + id);
+      if (!entry || !entry.meta || !panel) return;
+      const svg = panel.querySelector('svg.brd-ind-chart');
+      if (!svg) return;
+      const m = entry.meta;
+      window.OC_CROSSHAIR(svg, {
+        n: m.n, pad: m.pad,
+        series: [
+          { values: m.daily, yScale: m.sy, color: 'var(--fg-dim)' },
+          { values: m.ma20,  yScale: m.sy, color: '#8b949e' },
+          { values: m.ma50,  yScale: m.sy, color: entry.accent }
+        ],
+        rows: i => [
+          { k: 'DATE',   v: m.dates[i] || null },
+          { k: 'daily',  v: fmt1(m.daily[i]) },
+          { k: '5d MA',  v: fmt1(m.ma5[i]) },
+          { k: '20d MA', v: fmt1(m.ma20[i]) },
+          { k: '50d MA', v: fmt1(m.ma50[i]) }
+        ]
+      });
+    });
+
+    if (_ewbdMeta && _ewbdMeta.geom) {
+      const g = _ewbdMeta.geom;
+      const svgs = [...body.querySelectorAll('.mod-panel')]
+        .filter(p => /EQUAL-WEIGHT BREADTH DIVERGENCE/i.test(p.textContent))
+        .map(p => p.querySelector('svg'))
+        .filter(Boolean);
+      if (svgs[0]) {
+        window.OC_CROSSHAIR(svgs[0], {
+          n: g.n, pad: g.padL, xScale: g.xScale,
+          series: [
+            { values: _ewbdMeta.rsp, yScale: g.yScale, color: '#A78BFA' },
+            { values: _ewbdMeta.spy, yScale: g.yScale, color: '#60A5FA' }
+          ],
+          rows: i => {
+            const r = _ewbdMeta.rsp[i], q = _ewbdMeta.spy[i];
+            const gap = (r != null && q != null) ? (r - q) : null;
+            return [
+              { k: 'DATE', v: _ewbdMeta.dates[i] || null },
+              { k: 'RSP',  v: fmt1(r) },
+              { k: 'SPY',  v: fmt1(q) },
+              { k: 'gap',  v: gap == null ? null : (gap > 0 ? '+' : '') + gap.toFixed(1) + 'pp',
+                cls: gap == null ? '' : (gap < 0 ? 'num-dn' : 'num-up') }
+            ];
+          }
+        });
+      }
+    }
+  }
+
   function attachBreadthCrosshair(svg, tooltip, meta) {
     if (!svg || !meta) return;
     const xLine = svg.querySelector('.brd-cross-x');
@@ -784,6 +849,12 @@
       wireHistoricalHeat(body, data, sectors, br.turning_points || {});
       wireIndustryTable(body, industries);
 
+      // F1 (2026-08-03): the three static BRD charts get the SHARED crosshair. These were
+      // Tony's "bad example" — the comparison chart below has had hover since June while
+      // these sat inert. ⛔ Must run AFTER innerHTML, on the fresh nodes (OC_CROSSHAIR
+      // auto-detaches any prior attachment on the same <svg>, so re-render is safe).
+      wireBrdCrosshairs(body);
+
       // Crosshair + tooltip on the divergence chart
       if (chartResult.meta) {
         const wrap = body.querySelector('.chart-wrap');
@@ -873,6 +944,7 @@
     if (/broad/.test(r))               return '#5BB77A';
     return 'var(--fg-dim)';
   }
+  let _ewbdMeta = null;
   function renderEwbdPanel(vr) {
     const bd = (vr && vr.breadth_divergence) || {};
     if (bd.gap == null || !bd.history || !bd.history.length) return '';
@@ -882,6 +954,10 @@
       { name: 'RSP (avg stock)', values: bd.history.map(r => r[1]), color: '#A78BFA' },
       { name: 'SPY (index)',     values: bd.history.map(r => r[2]), color: '#60A5FA' },
     ], { gridY: 3, xLabels: labels, yFmt: v => v.toFixed(0) + '%' }) : '';
+    // Read lastGeom IMMEDIATELY after the call that produced it (see charts.js note).
+    _ewbdMeta = (window.OC_CHART && window.OC_CHART.lineAbs.lastGeom)
+      ? { geom: window.OC_CHART.lineAbs.lastGeom, dates: bd.history.map(r => r[0]),
+          rsp: bd.history.map(r => r[1]), spy: bd.history.map(r => r[2]) } : null;
     return `<div class="mod-panel">
       <div class="mod-panel-title">EQUAL-WEIGHT BREADTH DIVERGENCE · RSP vs SPY · descriptive, not a signal</div>
       <div style="font-size:11px;margin-bottom:6px">
