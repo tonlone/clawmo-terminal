@@ -356,6 +356,9 @@
       if (pc) wirePutCallPanel(body, pc);
       if (fgm && (fgm.history || []).length) wireFGMarketPanel(body, fgm);
       if (preds && preds.categories) wirePredictionsPanel(body, preds);
+      // F1: wire the shared crosshair to every self-describing chart this module
+      // rendered. Placed at the END of the try block so it runs after ALL panels.
+      if (window.OC_CHART && window.OC_CHART.autoWireCrosshairs) window.OC_CHART.autoWireCrosshairs(body);
     } catch (e) { body.innerHTML = `<div class="mod-err">${e.message}</div>`; }
   }
 
@@ -1157,6 +1160,9 @@
           ` : ''}
         ` : ''}
       `;
+      // F1: wire the shared crosshair to every self-describing chart this module
+      // rendered. Placed at the END of the try block so it runs after ALL panels.
+      if (window.OC_CHART && window.OC_CHART.autoWireCrosshairs) window.OC_CHART.autoWireCrosshairs(body);
     } catch (e) { body.innerHTML = `<div class="mod-err">${e.message}</div>`; }
   }
 
@@ -1782,6 +1788,9 @@
         }));
         repaint();
       }
+      // F1: wire the shared crosshair to every self-describing chart this module
+      // rendered. Placed at the END of the try block so it runs after ALL panels.
+      if (window.OC_CHART && window.OC_CHART.autoWireCrosshairs) window.OC_CHART.autoWireCrosshairs(body);
     } catch (e) { body.innerHTML = `<div class="mod-err">${e.message}</div>`; }
   }
 
@@ -1943,6 +1952,8 @@
           <div class="mod-meta">${d.generated_at_et || ''} · FRED + prices.db</div>
         </div>
         ${regime}${kpis}${overlay}${compGrid}${howto}`;
+      // F1: wire crosshairs after all liquidity panels render.
+      if (window.OC_CHART && window.OC_CHART.autoWireCrosshairs) window.OC_CHART.autoWireCrosshairs(body);
     } catch (e) {
       body.innerHTML = `<div class="mod-err">Liquidity load failed: ${(e && e.message) || e}</div>`;
     }

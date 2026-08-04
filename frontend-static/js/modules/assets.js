@@ -619,6 +619,9 @@
           renderCrypto(body);
         });
       });
+      // F1: wire the shared crosshair to every self-describing chart this module
+      // rendered. End of the try block, so it runs after ALL panels.
+      if (window.OC_CHART && window.OC_CHART.autoWireCrosshairs) window.OC_CHART.autoWireCrosshairs(body);
     } catch (e) { body.innerHTML = `<div class="mod-err">${e.message}</div>`; }
   }
 
@@ -1262,6 +1265,9 @@
           if (inst && inst.history) cotWrap.innerHTML = buildCotHistoryChart(inst.history);
         });
       }
+      // F1: wire the shared crosshair to every self-describing chart this module
+      // rendered. End of the try block, so it runs after ALL panels.
+      if (window.OC_CHART && window.OC_CHART.autoWireCrosshairs) window.OC_CHART.autoWireCrosshairs(body);
     } catch (e) { body.innerHTML = `<div class="mod-err">${e.message}</div>`; }
   }
 
@@ -1833,6 +1839,9 @@
           if (t && window.OC_OPEN_MODULE) window.OC_OPEN_MODULE('stock-analysis', { ticker: t });
         });
       });
+      // F1: wire the shared crosshair to every self-describing chart this module
+      // rendered. End of the try block, so it runs after ALL panels.
+      if (window.OC_CHART && window.OC_CHART.autoWireCrosshairs) window.OC_CHART.autoWireCrosshairs(body);
     } catch (e) { body.innerHTML = `<div class="mod-err">${e.message}</div>`; }
   }
 

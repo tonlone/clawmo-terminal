@@ -150,7 +150,17 @@
       return `<path d="${d}" ${pathAttr}></path>${dots}`;
     }).join('');
 
-    return `<svg class="oc-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${grid.join('')}${zeroLine}${paths}${xLabels}</svg>`;
+    // Self-describing chart: stash everything a crosshair needs and stamp the id on the
+    // SVG, so ONE generic wireCrosshairs(root) pass can wire every chart on a surface.
+    // The audit's root cause was adoption — 61 hand-wirings would reproduce it, so the
+    // charts advertise themselves instead of each caller remembering to opt in.
+    const _id = _regNext++;
+    _reg.set(_id, { n, xScale: sx, yScale: sy,
+      series: cleanSeries.map(c => ({ name: c.name, values: c.values, color: c.color })),
+      xLabels: opts.xLabels || null, yFmt: opts.yFmt || null, padL });
+    // Bounded: a chart that is rendered but never wired would otherwise leak its entry.
+    if (_reg.size > 300) { const k = _reg.keys().next().value; _reg.delete(k); }
+    return `<svg class="oc-chart" data-occh="${_id}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${grid.join('')}${zeroLine}${paths}${xLabels}</svg>`;
   }
 
   /* Simple inline sparkline (values only) */
@@ -420,6 +430,57 @@
     return detach;
   }
 
+  /* Registry of self-describing lineAbs charts (see the stamp in lineAbs). */
+  const _reg = new Map();
+  let _regNext = 1;
+
+  /* Attach OC_CROSSHAIR to every self-describing chart under `root`.
+     Call once after each render: `OC_CHART.wireCrosshairs(body)`.
+     Safe to call repeatedly — OC_CROSSHAIR auto-detaches per element. */
+  function wireCrosshairs(root) {
+    if (!root || !window.OC_CROSSHAIR) return 0;
+    let wired = 0;
+    root.querySelectorAll('svg.oc-chart[data-occh]').forEach(svg => {
+      const g = _reg.get(Number(svg.getAttribute('data-occh')));
+      if (!g || !g.n) return;
+      const fmt = g.yFmt || (v => (typeof v === 'number' ? v.toFixed(2) : v));
+      window.OC_CROSSHAIR(svg, {
+        n: g.n, pad: g.padL, xScale: g.xScale,
+        series: g.series.map(c => ({ values: c.values, yScale: g.yScale, color: c.color })),
+        rows: i => [{ k: 'X', v: g.xLabels ? (g.xLabels[i] || null) : String(i) }].concat(
+          g.series.map(c => ({
+            k: c.name,
+            // null stays null — OC_CROSSHAIR renders it as a muted em-dash rather than
+            // dropping the row or inventing a number.
+            v: (c.values[i] == null || !isFinite(c.values[i])) ? null : fmt(c.values[i])
+          })))
+      });
+      wired++;
+    });
+    return wired;
+  }
+
+  /* Modules render panels ASYNCHRONOUSLY — several fetch their own data and inject charts
+     after the initial innerHTML. A one-shot wire therefore misses them (measured: SEN
+     rendered 4 stamped charts and wired 0, while a late manual pass wired all 4).
+     Rather than guess a delay, watch the subtree and wire whatever appears. Idempotent:
+     OC_CROSSHAIR auto-detaches per element, so re-wiring an already-wired chart is a no-op. */
+  function autoWireCrosshairs(root) {
+    if (!root || typeof MutationObserver === 'undefined') return wireCrosshairs(root);
+    wireCrosshairs(root);
+    let pending = null;
+    const obs = new MutationObserver(() => {
+      if (pending) return;                       // debounce a burst of injections
+      pending = setTimeout(() => { pending = null; wireCrosshairs(root); }, 60);
+    });
+    obs.observe(root, { childList: true, subtree: true });
+    // Stop when the module's body is detached, so a closed pane doesn't keep an observer.
+    const stop = setInterval(() => {
+      if (!root.isConnected) { obs.disconnect(); clearInterval(stop); }
+    }, 5000);
+    return obs;
+  }
+
   window.OC_CROSSHAIR = crosshair;
-  window.OC_CHART = { overlayNorm, lineAbs, sparkline, rankBars, smoothPath, groupedBars, COLORS };
+  window.OC_CHART = { overlayNorm, lineAbs, wireCrosshairs, autoWireCrosshairs, sparkline, rankBars, smoothPath, groupedBars, COLORS };
 })();

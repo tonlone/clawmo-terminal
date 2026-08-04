@@ -822,7 +822,9 @@
       const [cotData, gexData] = await Promise.all([
         fetchJSON(`${BASE}/cot.json`).catch(() => null),
         fetchJSON(`${BASE}/gex_index.json`).catch(() => null)]);
+      // F1: wire the shared crosshair after this module's panels render.
       body.innerHTML = guideCss + semRelPerfPanel(await fetchJSON(`${BASE}/sector-rs.json`).catch(()=>null)) + divPanel + rotPanel + crowdPanel + crowdHistPanel + posPanel + semCotPanel(cotData) + semGexBarPanel(gexData) + semLadderPanel(klData) + klPanel + disc + kpis + bars + table + note;
+      if (window.OC_CHART && window.OC_CHART.autoWireCrosshairs) window.OC_CHART.autoWireCrosshairs(body);
     } catch (e) {
       body.innerHTML = `<div class="mod-err">GPU module error: ${(e && e.message) || e}</div>`;
     }
