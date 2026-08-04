@@ -840,3 +840,13 @@ html, body {
 .rail::-webkit-scrollbar { width: 6px; }
 .rail::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 .rail::-webkit-scrollbar-track { background: transparent; }
+
+/* X4 (2026-08-04): global keyboard-focus ring. Baseline only — components with their own
+   :focus-visible rule are more specific and still win. `:focus-visible` (not `:focus`) so a
+   mouse click never draws it; keyboard/AT navigation always does. Previously most controls
+   had NO visible focus at all, making the site unusable without a pointer. */
+:focus-visible {
+  outline: 2px solid var(--focus-ring, var(--accent, #FF6B35));
+  outline-offset: 2px;
+  border-radius: 2px;
+}
