@@ -279,8 +279,14 @@
           [data-mod-panel="nws"] .nws-search-link:hover { opacity:1; }
         </style>
 
+      // P1a (2026-08-04): the title was OC_TITLE('news') + a literal ' · NEWS INTEL'.
+      // OC_TITLE('news') already resolves to the module label "News Intel", so it
+      // rendered "NEWS INTEL · NEWS INTEL". The '· SUFFIX' convention is for suffixes
+      // that ADD information (bonds '· FIXED INCOME', metals '· PRECIOUS METALS');
+      // where the label is self-describing, siblings omit it (crypto). NOTE: do not put
+      // a dollar-brace example inside the template literal below - it interpolates.
         <div class="mod-head" data-mod-panel="nws">
-          <div class="mod-title">${window.OC_TITLE('news')} · NEWS INTEL</div>
+          <div class="mod-title">${window.OC_TITLE('news')}</div>
           <div class="mod-meta">
             <span class="chip chip-dim">${escNws(d.generated_at_et || fmt.ago(d.generated_at))}</span>
           </div>
