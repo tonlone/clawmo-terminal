@@ -895,6 +895,45 @@
       const accounts = xs.accounts || [];
       const accountsByHandle = Object.fromEntries(accounts.map(a => [a.handle, a]));
 
+      /* S2 TWIN (2026-08-06, roadmaps/serenity-x-signal-monitor-2026-08-06.md).
+         PARITY, not decoration. The producer routes category="supply-chain" accounts OUT of
+         `xs.signals` (a 30-slot recency-sorted slice) so a high-volume research account cannot
+         evict the newswires. Without the block below, this module would still render that
+         account's SCOREBOARD CARD while none of its posts appeared anywhere in the terminal —
+         an account you can see but whose content you cannot reach, which is worse than absent.
+         ⛔ Do NOT "fix" this by merging supply_chain back into `signals` — that re-creates on
+            the terminal the exact eviction the producer split prevents.
+         Absent key (older payload) ⇒ empty string ⇒ this renders exactly as before. */
+      const sc = xs.supply_chain || null;
+      const scPanel = (!sc || !sc.total) ? '' : (() => {
+        const scTrunc = sc.total ? Math.round(100 * (sc.truncated_count || 0) / sc.total) : 0;
+        const chips = (sc.tickers || []).slice(0, 12)
+          .map(t => `<span class="twt-sc-tk">$${escNws(t.ticker)}<span class="twt-sc-tkn">${t.count}</span></span>`)
+          .join('');
+        const rows = (sc.signals || []).slice(0, 20).map(s => {
+          const tk = s.tickers || [];
+          // The permalink is the primary affordance: X clips long posts in the timeline DOM, so
+          // for the truncated share the remainder exists nowhere in this payload (N2b).
+          const link = /^https?:\/\//i.test(s.url || '')
+            ? `<a class="twt-sc-link" href="${escNws(s.url)}" target="_blank" rel="noopener">view →</a>` : '';
+          const tags = tk.length
+            ? tk.map(t => `<span class="twt-sc-tk">$${escNws(t)}</span>`).join('')
+            : '<span class="twt-sc-notag">no ticker</span>';
+          const cut = (s.text || '').length >= 280 ? '<span class="twt-sc-cut"> …</span>' : '';
+          return `<div class="twt-sc-item">
+            <div class="twt-sc-text">${escNws((s.text || '').trim())}${cut}</div>
+            <div class="twt-sc-meta">${link}<span>${tags}</span></div>
+          </div>`;
+        }).join('');
+        return `
+          <div class="mod-panel">
+            <div class="mod-panel-title">SUPPLY-CHAIN RESEARCH · ${sc.total} posts (24h) · ${(sc.handles || []).map(h => '@' + escNws(h)).join(' ')}</div>
+            <div class="chart-legend"><span class="chart-note">One analyst's opinion, surfaced for attention routing only — not a measured signal, not an input to any grade or position. Self-reported track records for accounts like this are unverified.${scTrunc >= 10 ? ` ~${scTrunc}% of these posts are longer than shown (X truncates them); use view → for the full text.` : ''}${sc.ungrouped_count ? ` ${sc.ungrouped_count} post(s) carry no cashtag and are tagged "no ticker" — nothing is filtered out.` : ''}</span></div>
+            ${chips ? `<div class="twt-sc-chips">${chips}</div>` : ''}
+            <div class="twt-sc-feed">${rows}</div>
+          </div>`;
+      })();
+
       // Compute available filter values
       const cats = [...new Set(signals.map(s => s.category).filter(Boolean))].sort();
       // A persisted category that no longer exists in the feed would silently
@@ -990,6 +1029,19 @@
           [data-mod-panel="twt"] .twt-filter-btn:hover { color:var(--fg); border-color:#555; }
           [data-mod-panel="twt"] .twt-filter-btn.active { background:var(--accent); color:#0d1117; border-color:var(--accent); }
           [data-mod-panel="twt"] .twt-feed-count { color:var(--fg-dim); font-family:var(--font-mono); font-size:10px; margin-left:auto; }
+          /* S2 supply-chain research block — deliberately quieter than the signal feed above:
+             it is commentary, not a wire. */
+          [data-mod-panel="twt"] .twt-sc-chips { display:flex; flex-wrap:wrap; gap:4px; margin:6px 0 8px; }
+          [data-mod-panel="twt"] .twt-sc-tk { font-family:var(--font-mono); font-size:10px; color:var(--accent); border:1px solid var(--border); border-radius:2px; padding:0 5px; margin-right:3px; }
+          [data-mod-panel="twt"] .twt-sc-tkn { color:var(--fg-dim); margin-left:4px; }
+          [data-mod-panel="twt"] .twt-sc-notag { font-family:var(--font-mono); font-size:9px; color:var(--fg-dim); border:1px dashed var(--border); border-radius:2px; padding:0 4px; }
+          [data-mod-panel="twt"] .twt-sc-item { border-bottom:1px solid var(--border); padding:6px 0; }
+          [data-mod-panel="twt"] .twt-sc-item:last-child { border-bottom:none; }
+          [data-mod-panel="twt"] .twt-sc-text { font-size:11px; line-height:1.5; color:var(--fg); }
+          [data-mod-panel="twt"] .twt-sc-cut { color:var(--fg-dim); }
+          [data-mod-panel="twt"] .twt-sc-meta { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:3px; }
+          [data-mod-panel="twt"] .twt-sc-link { font-family:var(--font-mono); font-size:10px; color:var(--accent); text-decoration:none; border:1px solid var(--border); border-radius:2px; padding:0 5px; }
+          [data-mod-panel="twt"] .twt-sc-link:hover { border-color:var(--accent); }
 
           [data-mod-panel="twt"] .twt-sig {
             padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.06);
@@ -1117,6 +1169,7 @@
             <div class="twt-feed-wrap"></div>
           </div>
 
+          ${scPanel}
         </div>
       `;
 
