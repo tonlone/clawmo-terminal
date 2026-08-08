@@ -1509,91 +1509,11 @@
           </tr>
         `;
       }).join('');
-      // Generic label transform mangles acronyms ("spx_gold" -> "Spx / Gold"), so
-      // known keys get an explicit label. Keep in sync with the stocks-side
-      // renderRatios() item list (precious-metals.html).
-      const RATIO_LABELS = { spx_gold: 'S&P 500 / Gold' };
       const ratioRows = Object.entries(ratios).map(([k, v]) => {
         if (typeof v !== 'number') return '';
-        const label = RATIO_LABELS[k] || k.replace(/_/g, ' / ').replace(/\b\w/g, c => c.toUpperCase());
+        const label = k.replace(/_/g, ' / ').replace(/\b\w/g, c => c.toUpperCase());
         return `<tr><td class="pat">${label}</td><td class="mono">${fmt.num(v, 2)}</td></tr>`;
       }).join('');
-
-      // ── §1a Copper/gold regime context (twin of precious-metals.html #cgPanel) ──
-      // DESCRIPTIVE ONLY, zero signals coupling. The forward-return table is frozen
-      // probe output served in the JSON (signals/backtests/copper_gold_macro_probe_
-      // results.txt, 2026-08-05) — this renders, it never derives. Parity with the
-      // stocks surface: same orange (#FB923C) for the ratio line/marker, same
-      // Episodes-column-first framing. Hand-rolled SVG (terminal has no Chart.js).
-      const mr = d.macro_ratios || null;
-      let cgPanel = '';
-      if (mr && mr.copper_gold) {
-        const cg = mr.copper_gold, sg = mr.spx_gold || {};
-        const pctv = cg.pct5y == null ? null : cg.pct5y * 100;
-        const h = cg.history || [];
-        let spark = '';
-        if (h.length > 1) {
-          const vals = h.map(p => p.value);
-          const lo = Math.min(...vals), hi = Math.max(...vals), span = (hi - lo) || 1;
-          const W = 300, H = 54;
-          const pts = h.map((p, i) => {
-            const x = (i / (h.length - 1)) * (W - 2) + 1;
-            const y = H - 1 - ((p.value - lo) / span) * (H - 2);
-            return x.toFixed(1) + ',' + y.toFixed(1);
-          }).join(' ');
-          const lastY = H - 1 - ((vals[vals.length - 1] - lo) / span) * (H - 2);
-          spark = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none">
-              <polyline fill="none" stroke="#FB923C" stroke-width="1.5" points="${pts}"/>
-              <circle cx="${W - 1}" cy="${lastY.toFixed(1)}" r="2.5" fill="#FB923C"/>
-            </svg>`;
-        }
-        const ctxRows = (mr.context || []).map(c => {
-          const on = c.bucket === cg.bucket;
-          return `<tr${on ? ' style="background:rgba(251,146,60,0.10);font-weight:700"' : ''}>
-            <td class="pat">${on ? '▸ ' : ''}Q${c.bucket}</td>
-            <td class="mono">${escape(c.range)}</td>
-            <td class="mono ${c.fwd12m_mean_pct >= 0 ? 'num-up' : 'num-dn'}">${c.fwd12m_mean_pct > 0 ? '+' : ''}${c.fwd12m_mean_pct.toFixed(1)}%</td>
-            <td class="mono">${c.pos_pct.toFixed(1)}%</td>
-            <td class="mono" style="color:var(--fg-faint)">${c.episodes}</td>
-          </tr>`;
-        }).join('');
-        const all = mr.context_all_days || {};
-        cgPanel = `
-          <div class="mod-panel">
-            <div class="mod-panel-title">INDUSTRIAL vs SAFE-HAVEN · COPPER / GOLD</div>
-            <div class="mod-grid-2">
-              <div>
-                <div class="mono" style="font-size:26px;color:#FB923C;line-height:1.1">${cg.value != null ? cg.value.toFixed(5) : '—'}</div>
-                <div style="font-size:11px;color:var(--fg-dim);margin-top:3px">copper/gold · ${cg.gold_copper != null ? fmt.num(cg.gold_copper, 0) + ' lbs copper per oz gold' : '—'}</div>
-                <!-- Neutral track on purpose (twin of .cg-meter): a green-to-red gradient
-                     would encode a buy/sell verdict; this panel is descriptive-only. -->
-                <div style="position:relative;height:7px;margin:9px 0 4px;border-radius:4px;background:var(--border)">
-                  ${pctv == null ? '' : `<div style="position:absolute;top:-3px;left:${pctv.toFixed(1)}%;width:2px;height:13px;background:#FB923C;transform:translateX(-1px)"></div>`}
-                </div>
-                <div style="font-size:11px;color:var(--fg-dim)">${pctv == null ? 'percentile unavailable' : pctv.toFixed(1) + 'th percentile of its 5-year range — band Q' + cg.bucket}</div>
-                <div style="margin-top:10px">${spark}</div>
-                <div style="font-size:11px;color:var(--fg-faint)">5-year history · as of ${escape(cg.date || '—')}</div>
-                <div style="margin-top:9px;padding-top:7px;border-top:1px solid var(--border);font-size:11px;color:var(--fg-dim)">
-                  S&amp;P 500 / gold <b class="mono" style="color:var(--fg)">${sg.value != null ? sg.value.toFixed(3) : '—'}</b>${sg.pct5y != null ? ' · ' + (sg.pct5y * 100).toFixed(1) + 'th pctile of its 5-year range' : ''}
-                </div>
-              </div>
-              <div>
-                <div class="tbl-wrap"><table class="tbl-dense">
-                  <thead><tr><th>BAND</th><th>5Y PCTILE</th><th>FWD 12M S&amp;P</th><th>% POS</th><th>EPISODES</th></tr></thead>
-                  <tbody>${ctxRows}
-                    <tr style="color:var(--fg-faint)"><td class="pat">All</td><td class="mono">—</td><td class="mono">+${all.fwd12m_mean_pct != null ? all.fwd12m_mean_pct.toFixed(1) : '—'}%</td><td class="mono">${all.pos_pct != null ? all.pos_pct.toFixed(1) : '—'}%</td><td class="mono">—</td></tr>
-                  </tbody>
-                </table></div>
-                <div style="margin-top:8px;font-size:10.5px;line-height:1.55;color:var(--fg-dim)">
-                  <b style="color:var(--fg)">Descriptive regime context, not a forecast.</b> Read the EPISODES column first:
-                  each band is <b style="color:var(--fg)">7–12 independent regime episodes</b>, not ~1,250 daily observations.
-                  Panel 2005–2026. Survived drawdown, VIX, leg-decomposition and sub-period controls.
-                  <b style="color:var(--fg)">Not wired to signals, grades or sizing.</b>
-                </div>
-              </div>
-            </div>
-          </div>`;
-      }
 
       // ── §6 Gold technicals chart (close + SMA20/50/200 + RSI subpanel) ──
       const goldBars = (d.ohlc && d.ohlc.gold) || [];
@@ -1765,8 +1685,6 @@
               </div>
             </div>
           </div>
-
-          ${cgPanel}
 
           ${(goldChart || silverChart || gdxChart) ? `
             <div class="met-charts-3">

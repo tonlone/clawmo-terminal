@@ -59,38 +59,6 @@
 
   document.documentElement.dataset.lang = LANG;
 
-  /* Humanize backend enum values before display.
-     Raw snake_case tokens (weak_uptrend, cup_handle, pocket_pivot) leaked into panels
-     and read like log output. Wording for the trend values is copied from the stocks
-     app's dictionary so the two surfaces say the same thing about the same value.
-
-     Unknown tokens fall back to Title Case rather than being dropped — a new backend
-     enum should degrade to readable, never to blank. Anything without an underscore is
-     returned untouched, so tickers and already-formatted labels pass through. */
-  const HUMANIZE = {
-    strong_uptrend:   { en: 'Strong Uptrend',   cn: '強勁上升' },
-    weak_uptrend:     { en: 'Weak Uptrend',     cn: '弱勢上升' },
-    strong_downtrend: { en: 'Strong Downtrend', cn: '強勁下降' },
-    weak_downtrend:   { en: 'Weak Downtrend',   cn: '弱勢下降' },
-    negative_equity:      { en: 'Negative Equity',      cn: '負資產' },
-    dividend_trap:        { en: 'Dividend Trap',        cn: '股息陷阱' },
-    forward_pe_revision:  { en: 'Forward P/E Revision', cn: '預測市盈率下修' },
-    altman_z:             { en: 'Altman Z',             cn: 'Altman Z' },
-  };
-
-  function humanize(v) {
-    if (v == null) return '';
-    const key = String(v).trim();
-    if (!key) return '';
-    const hit = HUMANIZE[key.toLowerCase()];
-    if (hit) return LANG === 'CN' ? hit.cn : hit.en;
-    if (key.indexOf('_') === -1) return key;
-    return key.split('_')
-      .map(w => w ? w.charAt(0).toUpperCase() + w.slice(1) : w)
-      .join(' ');
-  }
-
-  window.OC_HUMANIZE = humanize;
   window.OC_T = t;
   window.OC_LANG = getLang;
   window.OC_SET_LANG = setLang;

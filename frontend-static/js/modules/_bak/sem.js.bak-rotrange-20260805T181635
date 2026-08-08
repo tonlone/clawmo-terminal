@@ -107,7 +107,7 @@
       .concat(Object.keys(disc).filter(k => (order || []).indexOf(k) < 0));
     const items = keys.map(k => `<div class="sem-cav-item${SEM_CAV_KEY.includes(k) ? ' key' : ''}">
         <span class="sem-cav-tag">${semEsc(SEM_CAV_LABEL[k] || k.replace(/_/g,' '))}</span>
-        <span class="sem-cav-txt" data-cav="${k}">${semEsc(disc[k])}</span></div>`).join('');
+        <span class="sem-cav-txt">${semEsc(disc[k])}</span></div>`).join('');
     return `<details class="sem-cav"><summary>Caveats &amp; limitations (${keys.length}) — worth reading once</summary>
       <div class="sem-cav-list">${items}</div></details>`;
   }
@@ -269,135 +269,6 @@
   // reviewers derived it and measurement put the artifact at ~half the naive value. The raw
   // correlation is drawn beside it at equal weight so the honest headline stays visible.
   // ⛔ Do not collapse these into a single 0-100 gauge (fenced composite-gauge pattern).
-  //
-  // Range selector (2026-08-05, Tony): the full published window compressed the recent months
-  // to unreadability. This module renders panels as HTML STRINGS with no click wiring, so the
-  // state the redraw needs is stashed here and semRotWire() is called by renderGpu AFTER the
-  // innerHTML assignment. Twin of semiconductor.html's #rotRangeBtns.
-  let SEM_ROT = null;
-
-  /* `price_rebased_100[k]` is P_i/P_0*100 against the FIRST published session. Dividing a
-     slice by its own first value gives (P_i/P_0)/(P_s/P_0) = P_i/P_s — the rebase is EXACT on
-     any slice because the common P_0 cancels.
-     ⛔ Never render a slice WITHOUT re-rebasing: the untouched values still carry the whole
-     published run-up (SMH ~180 vs JNJ ~105), so a 1M view spends its y-axis on the gap between
-     the lines and squashes the recent move the short window exists to show. */
-  function semRotRebase(arr, n) {
-    const s = Math.max(0, arr.length - n);
-    const base = arr[s];
-    if (base == null || !isFinite(base) || base === 0) return null;
-    return arr.slice(s).map(v => (v == null || !isFinite(v)) ? null : (v / base) * 100);
-  }
-  const semRotRows = (val, total) => val === 'all' ? total : (parseInt(val, 10) || 126);
-  const semRotOk = (val, total) => val === 'all' || semRotRows(val, total) <= total;
-
-  // Rebuild the SVG + the end-of-window note for one range. Everything it prints is derived
-  // from the REBASED SLICE — a figure carried over from the full window would simply be wrong
-  // beside a 1M chart.
-  function semRotApply(val) {
-    if (!SEM_ROT) return;
-    const { rd, price, order, LBL, C, dates } = SEM_ROT;
-    const n = Math.min(semRotRows(val, dates.length), dates.length);
-    const lbls = dates.slice(dates.length - n);
-    const vals = {};
-    order.forEach(k => { vals[k] = semRotRebase(price[k], n); });
-
-    const series = order.filter(k => vals[k]).map(k => ({
-      name: LBL[k] || k, values: vals[k], color: C[k] || '#8b949e',
-      dashed: k === rd.benchmark,                     // SPY is context, not a subject
-    }));
-    const svgEl = document.getElementById('semRotChart');
-    if (svgEl) {
-      svgEl.innerHTML = series.length ? OC_CHART.lineAbs(series, {
-        w: 900, h: 190, padL: 46, padB: 24, gridY: 4,
-        yFmt: v => v.toFixed(0), xLabels: lbls.map(dt => dt.slice(5)),
-      }) : '';
-    }
-    const spanEl = document.getElementById('semRotSpan');
-    if (spanEl) spanEl.textContent = `${lbls[0]} → ${lbls[lbls.length - 1]} · ${lbls.length} sessions`;
-
-    const ends = series.filter(s => !s.dashed)
-      .map(s => ({ name: s.name, v: s.values[s.values.length - 1] }))
-      .filter(e => e.v != null);
-    const priceEnd = ends.map(e =>
-      `${semEsc(e.name)} ${e.v >= 100 ? '+' : ''}${(e.v - 100).toFixed(0)}%`).join(' · ');
-
-    /* ⛔ "They all rise" is a claim about the DISPLAYED window and it is NOT true on every
-       window — over 1M a leg can fall. It must be derived from the rendered values; hardcoding
-       it (as this note did while the chart was fixed at the full series) publishes a false
-       statement the moment a range is picked. The full-sample finding is attributed separately. */
-    const fallers = ends.filter(e => e.v < 100);
-    const claim = fallers.length === 0
-      ? `<b>They all rise — JNJ does not bottom when ${semEsc(rd.semis)} tops.</b> The rotation
-         is a difference in <i>speed</i>, not direction — the gap widens without either leg falling.`
-      : `<b>Over this window they do not all rise</b> — ${fallers.map(e => semEsc(e.name)).join(' and ')}
-         ended below where it started. Over the full published series every leg rises; the
-         "difference in <i>speed</i>, not direction" finding is measured on the whole history,
-         not on this slice.`;
-
-    const noteEl = document.getElementById('semRotNote');
-    if (noteEl) {
-      noteEl.innerHTML = `<b>Plain prices</b>, each rebased to <b>100 at the start of the
-        selected range</b> (${semEsc(rd.benchmark)} dashed, for context). <b>XLP is drawn
-        separately although it is also one third of the composite</b> — it is the strongest
-        anti-correlate in the group, and showing it beside the aggregate reveals dispersion the
-        average hides. Over this window (${lbls[0]} → ${lbls[lbls.length - 1]}): ${priceEnd}.
-        ${claim} The table below measures how much of that gap survives once the shared market
-        move is removed.`;
-    }
-
-    /* The producer's `price_chart` caveat asserts "Both rise: JNJ does NOT trough while SMH
-       peaks" — TRUE of the full published series, FALSE on short windows (on 2026-08-05 the 1M
-       view has SMH, JNJ and the composite all below their window start). With a range-selectable
-       chart that caveat could sit under a chart refuting it.
-       ⛔ Do NOT rewrite the producer's string — append a SCOPE clause so the sentence keeps its
-       meaning and gains the window it applies to. Twin of semiconductor.html #rotDiscScope. */
-    const cav = document.querySelector('#semRotCav [data-cav="price_chart"]');
-    if (cav) {
-      let sc = cav.querySelector('.sem-rot-scope');
-      if (!sc) { sc = document.createElement('span'); sc.className = 'sem-rot-scope'; cav.appendChild(sc); }
-      sc.innerHTML = (n === dates.length) ? '' :
-        ` <b>[Scope:</b> that describes the full published series (${dates[0]} → ${dates[dates.length - 1]},
-          ${dates.length} sessions). The chart above is showing ${lbls.length} sessions
-          (${lbls[0]} → ${lbls[lbls.length - 1]}), where it need not hold — and today it does not
-          on every window.<b>]</b>`;
-    }
-  }
-
-  // Called by renderGpu after innerHTML. Truthful per-button spans + disabling copied from the
-  // breadth selector (2026-07-30): a COMPUTED date span beats a static label on every setting.
-  function semRotWire(body) {
-    if (!SEM_ROT) return;
-    const total = SEM_ROT.dates.length;
-    const btns = body.querySelectorAll('#semRotBtns .sem-rot-btn');
-    if (!btns.length) return;
-    btns.forEach(btn => {
-      const val = btn.dataset.range, ok = semRotOk(val, total);
-      btn.disabled = !ok;
-      if (!ok) {
-        // Disable, never clamp: a "1Y" button drawing the identical chart to "Max" is a lie
-        // about span — the mislabel class the breadth selector was built to eliminate.
-        btn.title = `Only ${total} sessions published — this window is not available`;
-      } else {
-        const n = Math.min(semRotRows(val, total), total);
-        btn.title = `${SEM_ROT.dates[total - n]} → ${SEM_ROT.dates[total - 1]} · ${n} sessions`;
-      }
-      btn.addEventListener('click', () => {
-        if (btn.disabled) return;
-        btns.forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        semRotApply(btn.dataset.range);
-      });
-    });
-    let init = body.querySelector('#semRotBtns .sem-rot-btn.active');
-    if (!init || init.disabled) {
-      init = body.querySelector('#semRotBtns .sem-rot-btn:not(:disabled)');
-      btns.forEach(b => b.classList.remove('active'));
-      if (init) init.classList.add('active');
-    }
-    semRotApply(init ? init.dataset.range : 'all');
-  }
-
   async function semRotationDefensivesPanel() {
     let d;
     try { d = await fetchJSON(`${BASE}/sector-rs.json`); } catch (e) { return ''; }
@@ -410,8 +281,8 @@
                 SMH: '#f87171', SPY: '#8b949e' };
     const LBL = { JNJ: 'JNJ', DEF: 'Defensive composite', XLV: 'XLV', XLU: 'XLU',
                   XLP: 'XLP (staples)', SMH: 'SMH (semis)', SPY: 'SPY (market)' };
-    // x labels are now built per-range inside semRotApply(), not once for the full series.
     const pairs = rd.pairs || {}, dis = rd.disclosures || {};
+    const xl = rd.dates.map(dt => dt.slice(5));
 
     // 1. The two-price view (2026-07-30) — FIRST, ahead of the ratio. The ratio chart was being
     // read as a price chart, but both its lines carry SMH in the numerator so neither is a price
@@ -419,38 +290,23 @@
     // chart, and its job is to show honestly that BOTH rise. Twin of semiconductor.html.
     // ⛔ Do not drop it for space — without it the ratio chart gets misread the same way.
     const price = rd.price_rebased_100 || {};
-    const pOrder = [rd.semis, 'JNJ', 'XLP', 'DEF', rd.benchmark]
-      .filter(k => (price[k] || []).length);
-    // Stash what the redraw needs; the SVG and the end-of-window note are produced by
-    // semRotApply() once the markup is in the DOM, not baked into this string.
-    SEM_ROT = { rd, price, order: pOrder, LBL, C, dates: rd.dates };
-    const priceLegend = pOrder.map(k => {
-      const color = C[k] || '#8b949e', dashed = (k === rd.benchmark);
-      return `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px">
-         <span style="width:10px;height:2px;background:${color};display:inline-block;
-                      ${dashed ? 'border-top:2px dashed ' + color + ';background:none;height:0' : ''}"></span>
-         <span style="color:var(--fg-dim);font-size:10px">${semEsc(LBL[k] || k)}</span></span>`;
-    }).join('');
-    // Default 6M: Max stays one click away, but the full window was compressing the recent
-    // months into unreadability, which is the complaint this selector answers.
-    const rangeBtns = `<div class="sem-rot-range" id="semRotBtns">
-        <span class="sem-rot-lbl">CHART RANGE</span>
-        <button class="sem-rot-btn" data-range="21">1M</button>
-        <button class="sem-rot-btn" data-range="63">3M</button>
-        <button class="sem-rot-btn active" data-range="126">6M</button>
-        <button class="sem-rot-btn" data-range="252">1Y</button>
-        <button class="sem-rot-btn" data-range="all">MAX</button>
-        <span class="sem-rot-span" id="semRotSpan"></span>
-      </div>`;
-    /* Load-bearing: the buttons re-slice the CHART only. Every column in the table below is
-       computed by the producer over the full sample and does not move when a range is picked.
-       Stating that beside the buttons is what stops "1M" being read as "these correlations are
-       the last month's". Twin of semiconductor.html #rotRangeScope. */
-    const rangeScope = `<div class="chart-note" style="padding:0 10px 4px;display:block">
-        <b>Range affects the chart only.</b> The correlations, beta, median, percentile and
-        % time negative in the table below are computed on the full ${rd.n_full_sample}-session
-        sample since ${semEsc(rd.history_start)} (${rd.window}-session trailing windows) and do
-        not change with this selector.</div>`;
+    const pSeries = [rd.semis, 'JNJ', 'XLP', 'DEF', rd.benchmark]
+      .filter(k => (price[k] || []).length)
+      .map(k => ({ name: LBL[k] || k, values: price[k], color: C[k] || '#8b949e',
+                   dashed: k === rd.benchmark }));       // SPY is context, not a subject
+    const priceSvg = pSeries.length ? OC_CHART.lineAbs(pSeries, {
+      w: 900, h: 190, padL: 46, padB: 24, gridY: 4,
+      yFmt: v => v.toFixed(0), xLabels: xl,
+    }) : '';
+    const priceLegend = pSeries.map(s =>
+      `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px">
+         <span style="width:10px;height:2px;background:${s.color};display:inline-block;
+                      ${s.dashed ? 'border-top:2px dashed ' + s.color + ';background:none;height:0' : ''}"></span>
+         <span style="color:var(--fg-dim);font-size:10px">${semEsc(s.name)}</span></span>`).join('');
+    const priceEnd = pSeries.filter(s => !s.dashed).map(s => {
+      const v = s.values[s.values.length - 1];
+      return `${semEsc(s.name)} ${v >= 100 ? '+' : ''}${(v - 100).toFixed(0)}%`;
+    }).join(' · ');
 
     // 2. Table. The ratio chart and the rolling-correlation chart lived here until 2026-07-30,
     // when Tony asked for the price chart alone. Their statistics are NOT lost — current raw AND
@@ -472,12 +328,17 @@
 
     return `<div class="mod-panel"><div class="mod-panel-title">DEFENSIVES ↔ SEMIS ROTATION
         <span class="mod-panel-sub">${semEsc(rd.semis)} vs JNJ + EW ${semEsc((rd.composite_members||[]).join('/'))} · ${rd.window}d windows · as of ${semEsc(rd.as_of)}</span></div>
-      <div style="padding:4px 10px 0">${rangeBtns}</div>
-      ${rangeScope}
-      <div style="padding:2px 10px" id="semRotChart"></div>
+      <div style="padding:6px 10px">${priceSvg}</div>
       <div style="padding:0 10px 4px">${priceLegend}</div>
-      <div class="chart-legend" style="padding:0 10px 6px"><span class="chart-note"
-           style="display:block" id="semRotNote"></span></div>
+      <div class="chart-legend" style="padding:0 10px 6px"><span class="chart-note" style="display:block">
+        <b>Plain prices</b>, each rebased to <b>100</b> at the left edge (${semEsc(rd.benchmark)}
+        dashed, for context). <b>XLP is drawn separately although it is also one third of the
+        composite</b> — it is the strongest anti-correlate in the group, and showing it beside the
+        aggregate reveals dispersion the average hides.
+        Over this window: ${priceEnd}. <b>They all rise — JNJ does not bottom
+        when ${semEsc(rd.semis)} tops.</b> The rotation is a difference in <i>speed</i>, not
+        direction — the gap widens without either leg falling. The table below measures how much
+        of that gap survives once the shared market move is removed.</span></div>
       <!-- The failed-timing-test line must be VISIBLE, not collapsed inside the caveats
            <details> — it is the disclosure that stops the panel reading as an endorsement of the
            claim the data rejected. Caught by ath_rotdef_smoke.mjs as a web/terminal parity gap. -->
@@ -489,8 +350,8 @@
         ${semThL('PAIR vs ' + rd.semis, 'rot')}${semTh('BETA','rot')}${semTh('RAW NOW','rot')}
         ${semTh('RESID NOW','rot')}${semTh('MED RESID','rot')}${semTh('PCTILE','rot')}
         ${semTh('% TIME NEG','rot')}</tr></thead><tbody>${rows}</tbody></table></div>
-      <div id="semRotCav">${semCaveats(dis, ['no_timing_edge','price_chart','raw_context','why_not_excess',
-                         'primary_stat','composite','percentile','trailing','adjustment','smh_source'])}</div></div>`;
+      ${semCaveats(dis, ['no_timing_edge','price_chart','raw_context','why_not_excess',
+                         'primary_stat','composite','percentile','trailing','adjustment','smh_source'])}</div>`;
   }
 
 
@@ -955,32 +816,6 @@
             margin-top:7px; padding:5px 9px; border-left:3px solid var(--accent,#FF6B35);
             background:rgba(255,107,53,0.07); border-radius:3px; color:var(--fg,#c9d1d9);
           }
-          /* Rotation chart range selector (2026-08-05) — twin of semiconductor.html .rot-range* */
-          .mod-panel .sem-rot-range { display:flex; align-items:center; gap:2px; flex-wrap:wrap; }
-          .mod-panel .sem-rot-lbl {
-            font-size:10px; letter-spacing:0.05em; color:var(--fg-dim,#8b949e); margin-right:6px;
-          }
-          .mod-panel .sem-rot-btn {
-            background:transparent; color:var(--fg-dim,#8b949e);
-            border:1px solid rgba(139,148,158,0.4); padding:2px 8px;
-            font-size:10px; font-family:inherit; cursor:pointer; letter-spacing:0.04em;
-          }
-          .mod-panel .sem-rot-btn:first-of-type { border-radius:3px 0 0 3px; }
-          .mod-panel .sem-rot-btn:last-of-type { border-radius:0 3px 3px 0; }
-          .mod-panel .sem-rot-btn + .sem-rot-btn { border-left:none; }
-          .mod-panel .sem-rot-btn.active {
-            background:var(--accent,#FF6B35); color:#0d1117; border-color:var(--accent,#FF6B35);
-            font-weight:700;
-          }
-          .mod-panel .sem-rot-btn:hover:not(.active):not(:disabled) { color:var(--fg,#c9d1d9); }
-          /* Disabled, never clamped — a window the file cannot honour must not silently draw
-             the same chart as MAX under a different label. */
-          .mod-panel .sem-rot-btn:disabled {
-            opacity:0.35; cursor:not-allowed; text-decoration:line-through;
-          }
-          .mod-panel .sem-rot-span {
-            font-size:10px; color:var(--fg-dim,#8b949e); margin-left:8px;
-          }
 </style>`;
       const klData = await fetchJSON(`${BASE}/key-levels.json`).catch(()=>null);
       const crowdHistPanel = await semCrowdingHistoryPanel();
@@ -989,10 +824,6 @@
         fetchJSON(`${BASE}/gex_index.json`).catch(() => null)]);
       // F1: wire the shared crosshair after this module's panels render.
       body.innerHTML = guideCss + semRelPerfPanel(await fetchJSON(`${BASE}/sector-rs.json`).catch(()=>null)) + divPanel + rotPanel + crowdPanel + crowdHistPanel + posPanel + semCotPanel(cotData) + semGexBarPanel(gexData) + semLadderPanel(klData) + klPanel + disc + kpis + bars + table + note;
-      // Wire the rotation range buttons BEFORE the crosshair pass: semRotWire() injects the
-      // initial SVG, so running it first lets the first wiring pass see the chart. Later
-      // redraws are picked up by autoWireCrosshairs' MutationObserver.
-      semRotWire(body);
       if (window.OC_CHART && window.OC_CHART.autoWireCrosshairs) window.OC_CHART.autoWireCrosshairs(body);
     } catch (e) {
       body.innerHTML = `<div class="mod-err">GPU module error: ${(e && e.message) || e}</div>`;

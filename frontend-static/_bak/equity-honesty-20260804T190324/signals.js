@@ -649,50 +649,6 @@
   }
   // Match stocks.clawmo.tech/signals.html buildDollarCurve: 0.1% per realized trade.
   const EXEC_COST_PCT = 0.001;
-
-  // Peak concurrent exposure implied by the dollar curve. Twin of computeExposure() in
-  // stocks.clawmo.tech/signals.html — keep in lockstep.
-  // WHY (2026-08-04 audit): the dollar curve sizes every trade off the full account and sums
-  // the P&L with no cash or buying-power state, so it silently assumes unlimited capital. At
-  // $100k/2% it needed 360 concurrent positions and $13.7M deployed = 136.7x the account.
-  // Entry date is reconstructed as exit_date - holding_days; verified exact on 1914/1914 rows
-  // against prediction_ledger.signal_date. Computed, never hardcoded, so it cannot go stale.
-  function computeExposure(closed, sizer, gradeFor, regName, patternStatsFor) {
-    if (!closed || !closed.length) return null;
-    const DAY = 86400000, evts = [];
-    let minD = null, maxD = null;
-    for (const t of closed) {
-      if (t.holding_days == null || !t.exit_date) continue;
-      const ps = computeSize({ sizer, entry: t.entry_price, stop: t.stop_loss, regime: regName,
-        patternStats: patternStatsFor(t.signal_type), returnPct: t.return_pct,
-        grade: gradeFor(t.signal_type, t.direction)?.grade });
-      if (!ps || !ps.shares || !isFinite(ps.positionValue) || ps.positionValue <= 0) continue;
-      const xd = Date.parse(t.exit_date + 'T00:00:00Z');
-      if (isNaN(xd)) continue;
-      const en = xd - t.holding_days * DAY;
-      evts.push({ t: en, n: ps.positionValue, c: 1 });
-      evts.push({ t: xd + DAY, n: -ps.positionValue, c: -1 });
-      if (minD === null || en < minD) minD = en;
-      if (maxD === null || xd > maxD) maxD = xd;
-    }
-    if (!evts.length) return null;
-    evts.sort((a, b) => a.t - b.t || a.c - b.c);
-    let cap = 0, cnt = 0, peakCap = 0, peakCnt = 0, daysOver = 0, daysTotal = 0, prev = null;
-    for (const e of evts) {
-      if (prev !== null && e.t > prev) {
-        const span = Math.round((e.t - prev) / DAY);
-        daysTotal += span;
-        if (cap > sizer.account) daysOver += span;
-      }
-      cap += e.n; cnt += e.c; prev = e.t;
-      if (cap > peakCap) peakCap = cap;
-      if (cnt > peakCnt) peakCnt = cnt;
-    }
-    const iso = (ms) => new Date(ms).toISOString().slice(0, 10);
-    return { peakCapital: peakCap, peakPositions: peakCnt, daysOver, daysTotal,
-             dateFrom: iso(minD), dateTo: iso(maxD),
-             leverage: sizer.account > 0 ? peakCap / sizer.account : null };
-  }
   // Compute position size for a single trade. Returns { shares, dollarRisk, positionValue, dollarPnL, gradeMult }.
   // - entry: entry price · stop: stop loss · regime: BULL/CAUTION/BEAR (for regime_scaled)
   // - patternStats: { win_rate, avg_win, avg_loss } (for half_kelly) — from playbook/adaptive_grades
@@ -780,86 +736,6 @@
       return sign + abs.toFixed(0);
     }
     return sign + abs.toLocaleString('en-US', { maximumFractionDigits: 0 });
-  }
-
-  // ── SIM-100K twin ──────────────────────────────────────────────────────────
-  // ⛔ TWIN PARITY: this must say the same things as the stocks panel, including the
-  // BURN-IN state. A number that appears validated on one surface and provisional on the
-  // other is worse than either alone.
-  const SIM100K_URL = 'https://stocks.clawmo.tech/data/sim-portfolio.json';
-
-  async function renderSim100kTerm(body) {
-    const host = body.querySelector('#sim100k-term');
-    if (!host) return;
-    let d;
-    try {
-      const r = await fetch(SIM100K_URL + '?v=' + Date.now());
-      if (!r.ok) return;                       // fetch does NOT reject on 4xx/5xx
-      d = await r.json();
-    } catch (e) { return; }
-    if (!d || !d.journal_verified) return;     // no provenance, no panel
-
-    const s = d.summary || {}, curve = d.equity_curve || [], burn = d.status === 'burn_in';
-    const cap = d.capacity || {};
-    const capTotal = Object.keys(cap).reduce((a, k) => a + cap[k], 0);
-    const LABEL = {
-      no_cash: 'no cash free', already_closed: 'already resolved when funded',
-      shorts_disabled: 'short (cash account)', lot_too_big: 'one lot breached the risk budget',
-      below_min_ticket: 'below minimum ticket', already_held: 'ticker already held',
-      no_price_estimate: 'no price to size from', incomplete_row: 'incomplete signal',
-      day_cap: 'daily entry cap', zero_stop_distance: 'zero stop distance'
-    };
-    const ret = parseFloat(s.return_pct || 0);
-    const col = ret > 0 ? 'var(--up,#3fb950)' : ret < 0 ? 'var(--down,#f85149)' : 'var(--fg)';
-    const need = s.min_trades_for_stats || 15;
-    const money = v => '$' + Math.round(parseFloat(v || 0)).toLocaleString();
-
-    const stat = (l, v, c) => `<div style="flex:1;min-width:96px">
-        <div style="font-size:9px;letter-spacing:.06em;color:var(--muted);text-transform:uppercase">${l}</div>
-        <div style="font-size:15px;font-weight:700;color:${c || 'var(--fg)'}">${v}</div></div>`;
-
-    const capLine = capTotal ? `<div style="margin-top:8px;padding-top:7px;border-top:1px solid var(--border);font-size:10px;color:var(--muted);line-height:1.7">
-        <b style="color:var(--fg)">Signals this account could NOT take: ${capTotal.toLocaleString()}</b>
-        &nbsp;${Object.keys(cap).sort((a, b) => cap[b] - cap[a])
-          .map(k => `<span style="white-space:nowrap"><b style="color:var(--fg)">${cap[k].toLocaleString()}</b> ${LABEL[k] || k.replace(/_/g, ' ')}</span>`)
-          .join(' &nbsp;·&nbsp; ')}
-        <br>An unconstrained curve takes every one of these. ⛔ Do not read the gap between the two curves as &ldquo;what the cash limit cost&rdquo; — different units, different denominators, and the curve below has no cash semantics to subtract from.</div>` : '';
-
-    // Twin of the web books line. Closed counts are split by book because a win rate spanning
-    // both books published beside a funded-only return is the +705% mistake in miniature —
-    // and without this the header reads "0 closed" while paper closes have plainly happened.
-    const bk = d.books || {};
-    const pPnl = parseFloat(bk.paper_realized_pnl || 0);
-    const bookLine = (bk.funded_closed_trades || bk.paper_closed_trades || bk.open_paper)
-      ? `<div style="margin-top:8px;padding-top:7px;border-top:1px solid var(--border);font-size:10px;color:var(--muted);line-height:1.7">
-        Holding <b style="color:var(--fg)">${bk.open_funded || 0}</b> with real capital and <b style="color:var(--fg)">${bk.open_paper || 0}</b> on paper.
-        Closed so far: <b style="color:var(--fg)">${bk.funded_closed_trades || 0}</b> funded &middot; <b>${bk.paper_closed_trades || 0}</b> paper (${pPnl >= 0 ? '+' : '−'}$${Math.abs(Math.round(pPnl)).toLocaleString()} shadow P&amp;L).
-        Win rate and return above count <b>funded closes only</b>; the paper book never touches equity.</div>`
-      : '';
-
-    host.style.display = '';
-    host.innerHTML = `
-      <div class="mod-panel" style="margin-bottom:10px">
-        <div class="mod-panel-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <span>SIMULATED $100K ACCOUNT · CASH-CONSTRAINED</span>
-          <span style="font-size:9px;font-weight:700;letter-spacing:.05em;padding:1px 5px;border-radius:2px;background:${burn ? 'rgba(229,185,76,.18)' : 'rgba(63,185,80,.18)'};color:${burn ? '#e5b94c' : '#3fb950'}">${burn ? 'UNVALIDATED' : 'VALIDATED'}</span>
-          <span style="margin-left:auto;font-size:10px;color:var(--muted)">as of ${d.as_of || '—'} · ${s.days || 0} sessions · ${s.closed_trades || 0} closed</span>
-        </div>
-        ${burn ? `<div style="margin:0 0 8px;padding:6px 9px;border-left:2px solid #e5b94c;background:rgba(229,185,76,.08);font-size:10px;line-height:1.6;color:var(--fg)">
-          <b>Simulated account — not real money, and not independently checked.</b> The arithmetic adds up: every figure is recomputed from the event log. But <b>no day of this history has been reconciled against an outside price source</b>, so these numbers can still be wrong in ways an internal consistency check cannot see. The Cumulative P&amp;L curve below previously implied 136x this account's cash; this panel exists to correct that, and its own numbers are not yet proven.</div>` : ''}
-        <div style="font-size:10px;color:var(--muted);line-height:1.6;margin-bottom:9px">
-          One $100,000 account that actually <b>spends its cash</b>: each signal is funded at the next session's open, and one it cannot afford is <b>skipped and counted</b> rather than taken. The Cumulative P&amp;L curve below assumes unlimited capital and answers a different question.
-        </div>
-        ${curve.length ? `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px">
-          ${stat('Equity', money(s.equity), col)}${burn ? '' : ''}
-          ${stat('Return', (ret > 0 ? '+' : '') + ret.toFixed(2) + '%', col)}
-          ${stat('Max DD', '-' + parseFloat(s.max_drawdown_pct || 0).toFixed(2) + '%', 'var(--down,#f85149)')}
-          ${stat('Win rate', s.win_rate_pct === null ? `<span style="font-size:10px;font-weight:400;color:var(--muted)">withheld &lt;${need}</span>` : parseFloat(s.win_rate_pct).toFixed(1) + '%')}
-          ${stat('Cash free', money(s.cash))}
-        </div>` : `<div style="padding:14px;text-align:center;font-size:11px;color:var(--muted)">Account opened ${d.as_of || ''} with $100,000. No sessions recorded yet.</div>`}
-        ${capLine}
-        ${bookLine}
-      </div>`;
   }
 
   async function render(body) {
@@ -1631,18 +1507,8 @@
       // Crosshair state cached on closure — bindClicks() wires after innerHTML.
       let _eqPoints = [];
       let _eqSx = null, _eqW = 820;
-      // D5 (2026-08-05): the `dollar` mode is RETIRED. It summed per-trade P&L with no
-      // cash state, implying 136.7x this account's capital, and it was the DEFAULT view here.
-      // Final snapshot archived at stocks _bak/dollar-mode-retired-20260805T161906/.
-      // ⛔ Do not reintroduce it: the capital-constrained answer is the SIM-100K panel above.
-      let _eqMode = 'alpha';
+      let _eqMode = window._sigEqMode || 'dollar';  // 'dollar' or 'alpha'
       function buildEquityCurveChart(curve, closed) {
-        // ⛔ PLOT CLEARED 2026-08-05 (owner): the simulated account restarts at $100,000, and
-        // a 1,914-trade cumulative history plotted beside it invites exactly the conflation
-        // this project exists to end. The per-trade AVERAGE is kept in the panel title.
-        // ⛔ Do not restore a cumulative-sum curve — its height grows with trade count and is
-        // not a return. Archived at stocks _bak/signal-quality-plot-cleared-*/.
-        return '';
         // Two modes:
         //  - 'alpha'  : Σ of return_pct (no sizing). Uses pre-computed equity_curve
         //               for per-trade resolution (one point per trade, not per day).
@@ -1662,11 +1528,8 @@
         const isAlpha = _eqMode === 'alpha';
 
         // Seed point (start of curve)
-        // 2026-08-04 HONESTY FIX: plot CUMULATIVE P&L (from 0), not an account balance.
-        // This curve has no cash/buying-power state — see the exposure note below — so a
-        // y-axis reading "$819,442" asserted an account value that never existed.
         const seedDate = (isAlpha && curve && curve.length ? curve[0].date : sortedClosed[0].exit_date);
-        let points = [{ date: seedDate, dollar: 0, alpha: 0, ret: 0, tradePnl: 0, ticker: '', signal_type: '', isSeed: true }];
+        const points = [{ date: seedDate, dollar: acct, alpha: 0, ret: 0, tradePnl: 0, ticker: '', signal_type: '', isSeed: true }];
 
         if (isAlpha && curve && curve.length) {
           // Use scorecard's pre-computed equity_curve: cumulative α per trade
@@ -1694,7 +1557,7 @@
             running += dollarPnL;
             points.push({
               date:        t.exit_date     || '—',
-              dollar:      running - acct,
+              dollar:      running,
               alpha:       0,
               ret:         ((running - acct) / acct) * 100,
               tradePnl:    t.return_pct   || 0,
@@ -1709,19 +1572,9 @@
         _eqW = W;
 
         const yField   = isAlpha ? 'alpha' : 'dollar';
-        // ⛔ 2026-08-05: plot the RUNNING AVERAGE per trade, not the cumulative sum.
-        // The sum's height was announced as "+2000.81%" on the axis and the last-value pill,
-        // which reads as a 2000% return and is not one — summing percentages across
-        // overlapping trades is not compounding, and the total GROWS WITH TRADE COUNT, so it
-        // measured how long the engine had run as much as how well it had done. Dividing by
-        // the trade count gives a level that MEANS something (the average trade) and cannot
-        // drift with volume, while the shape still shows whether the edge is steady.
-        if (isAlpha) {
-          points = points.map((p, i) => ({ ...p, alpha: p.alpha / (i + 1) }));
-        }
-        const baseline = 0;  // both modes are now cumulative-from-zero, not a balance
+        const baseline = isAlpha ? 0 : acct;
         const yFmt     = isAlpha
-          ? (v) => (v >= 0 ? '+' : '') + v.toFixed(2) + '% avg'
+          ? (v) => (v >= 0 ? '+' : '') + v.toFixed(1) + '%'
           : (v) => fmtUsd(v, true);
         const vals = points.map(p => p[yField]);
         let lo = Math.min(baseline, ...vals), hi = Math.max(baseline, ...vals);
@@ -1784,19 +1637,15 @@
 
         // Baseline label — rendered last (on top of fill) with background rect so
         // the curve never blocks it; sits below the dashed line, not above it.
-        // Baseline is 0 in BOTH modes now (cumulative-from-zero, not an account balance).
-        const baseLbl = isAlpha ? 'baseline 0%' : 'break-even $0';
+        const baseLbl = isAlpha ? 'baseline 0%' : 'starting account ' + fmtUsd(acct, true);
         const blW = baseLbl.length * 5.8 + 8, blH = 13, blX = padL + 4, blY = yBase + 4;
         svg += `<rect x="${blX - 2}" y="${blY}" width="${blW}" height="${blH}" rx="2" fill="rgba(0,0,0,0.55)"/>`;
         svg += `<text x="${blX + blW / 2}" y="${blY + blH - 3}" fill="#8b949e" font-size="9" text-anchor="middle" font-family="var(--font-mono)">${baseLbl}</text>`;
 
         // Last-value pill
-        // NB: no "% of account" here. lastP.ret is P&L/account, which reads as account growth
-        // — but this curve assumes unlimited capital, so that percentage asserts a return the
-        // account never earned (it was the +719.44% the 2026-08-04 audit removed).
         const lbl = isAlpha
           ? (lastP.alpha >= 0 ? '+' : '') + lastP.alpha.toFixed(2) + '%'
-          : `${lastP.dollar >= 0 ? '+' : '−'}${fmtUsd(Math.abs(lastP.dollar))} P&L`;
+          : `${fmtUsd(lastP.dollar)} (${lastP.ret >= 0 ? '+' : ''}${lastP.ret.toFixed(2)}%)`;
         const charW = 6.6, padX = 6, bh = 17;
         const bw = Math.max(80, lbl.length * charW + padX * 2);
         const bx = W - padR - bw, by = padT;
@@ -1866,9 +1715,8 @@
           const cumCls = isAlphaMode
             ? ((p.alpha || 0) >= 0 ? 'num-up' : 'num-dn')
             : ((p.ret   || 0) >= 0 ? 'num-up' : 'num-dn');
-          // p.dollar is CUMULATIVE P&L (from 0), not an account balance — see the 2026-08-04
-          // honesty fix. Do not re-derive a balance by adding sizer.account back.
-          const cumPnlCls = (p.dollar || 0) >= 0 ? 'num-up' : 'num-dn';
+          const fromAcct = p.dollar - sizer.account;
+          const fromCls  = fromAcct >= 0 ? 'num-up' : 'num-dn';
           tt.innerHTML = `
             <div class="sig-tt-row"><span class="sig-tt-k">DATE</span><span class="sig-tt-v mono">${escSig(p.date || '—')}</span></div>
             ${p.isSeed ? '' : `
@@ -1878,7 +1726,8 @@
             `}
             ${isAlphaMode
               ? `<div class="sig-tt-row"><span class="sig-tt-k">CUM α %</span><span class="sig-tt-v mono ${cumCls}">${(p.alpha || 0) >= 0 ? '+' : ''}${(p.alpha || 0).toFixed(2)}%</span></div>`
-              : `<div class="sig-tt-row"><span class="sig-tt-k">CUM P&L</span><span class="sig-tt-v mono ${cumPnlCls}">${p.dollar >= 0 ? '+' : '−'}${fmtUsd(Math.abs(p.dollar))}</span></div>`
+              : `<div class="sig-tt-row"><span class="sig-tt-k">EQUITY</span><span class="sig-tt-v mono">${fmtUsd(p.dollar)}</span></div>
+                 <div class="sig-tt-row"><span class="sig-tt-k">TOTAL P&L</span><span class="sig-tt-v mono ${fromCls}">${fromAcct >= 0 ? '+' : ''}${fmtUsd(fromAcct, true)} (${(p.ret || 0) >= 0 ? '+' : ''}${(p.ret || 0).toFixed(2)}%)</span></div>`
             }
           `;
           tt.style.display = 'block';
@@ -2037,30 +1886,22 @@
         </tr>`;
       }).join('');
       const liveContent = `
-        <div id="sim100k-term" data-sim100k style="display:none"></div>
         <div style="margin:0 0 8px 0;padding:6px 10px;background:rgba(229,185,76,0.12);border:1px solid rgba(229,185,76,0.4);border-radius:3px;font-size:11px;color:var(--fg);line-height:1.5">
           <b style="color:#fbbf24">SIMULATION ONLY</b> &middot; No real money &middot; Paper trades automatically opened/closed from signal triggers using the Position Sizer settings above. Equity curve and P&amp;L are hypothetical.
         </div>
         <div class="mod-panel">
           <div class="mod-panel-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-            <span>SIGNAL QUALITY · average ${closedTrades.length ? ((closedTrades.reduce((a, t) => a + (parseFloat(t.return_pct) || 0), 0) / closedTrades.length) >= 0 ? '+' : '') + (closedTrades.reduce((a, t) => a + (parseFloat(t.return_pct) || 0), 0) / closedTrades.length).toFixed(2) + '%' : '—'} per trade · ${closedTrades.length} closed</span>
+            <span>EQUITY CURVE · ${_eqMode === 'alpha' ? 'Strategy α (sum of return %)' : 'Portfolio $ (sized + compounded)'} · ${closedTrades.length} closed trades</span>
             <span style="margin-left:auto;display:inline-flex;gap:4px">
+              <button class="sig-eq-mode-btn${_eqMode === 'dollar' ? ' active' : ''}" data-eq-mode="dollar" type="button">Portfolio $</button>
+              <button class="sig-eq-mode-btn${_eqMode === 'alpha' ? ' active' : ''}" data-eq-mode="alpha" type="button">Strategy α %</button>
             </span>
           </div>
           <div class="chart-wrap">${buildEquityCurveChart(equityCurve, closedTrades)}</div>
-          ${(() => {
-            const ex = computeExposure(closedTrades.filter(t => !t.is_paper), sizer, gradeFor, regName, patternStatsFor);
-            if (!ex || !ex.leverage) return '';
-            return `<div style="margin:6px 0 0 0;padding:6px 10px;border-left:3px solid #fbbf24;background:rgba(229,185,76,0.10);font-size:11px;line-height:1.5;color:var(--fg-dim)">
-              <b style="color:#fbbf24">⚠ Not an account balance.</b> This line assumes <b>unlimited capital</b> — every trade is sized off the full account with no cash or buying-power check.
-              At these settings it needed a peak of <b>${ex.peakPositions.toLocaleString()} positions open at once</b> and <b>${fmtUsd(ex.peakCapital)}</b> deployed = <b>${ex.leverage.toFixed(1)}× the ${fmtUsd(sizer.account)} account</b>, exceeding the account on <b>${ex.daysOver} of ${ex.daysTotal}</b> days (${ex.dateFrom} → ${ex.dateTo}).
-              A funded account could not have taken most of these trades. Stop-outs are also booked <b>at the stop price</b>, so gaps beyond the stop are not charged.
-            </div>`;
-          })()}
           <div class="chart-legend"><span class="chart-note" style="display:block">${
             _eqMode === 'alpha'
-              ? `<b>Signal quality</b> — the line is the running total of each closed trade&rsquo;s return %, equal allocation per signal, no position sizing. Read its <b>shape</b> (is the edge steady, or a few trades?), <b>not its height</b>. ⛔ The total is <b>not a return</b>: summing percentages across overlapping trades is not compounding, and the figure <b>grows with every trade taken</b> — so it reflects how long the engine has been running as much as how well it has done. For what an account would actually have made, use the simulated account above.`
-              : `<b>Cumulative P&L $ mode</b> — sizes each trade using your position sizer (account: <b>${fmtUsd(sizer.account)}</b> · method: <b>${escSig(sizer.method.replace(/_/g, ' '))}</b> · risk: <b>${sizer.riskPct}%/trade</b>${sizer.gradeTier && sizer.method !== 'half_kelly' ? ' · <b>grade tier on</b> (A 1.25× / B 1.0× / C 0.75× / D 0.5×)' : ''}) and sums the P&L. Sizing is off the <b>fixed</b> account, so this does not compound.`
+              ? `<b>Strategy α mode</b> — sums each closed trade&rsquo;s return % assuming equal allocation per signal, ignoring position sizing. Shows the raw edge of the strategy, not what your account actually earned. Switch to <b>Portfolio $</b> to see real account impact.`
+              : `<b>Portfolio $ mode</b> — sizes each trade using your position sizer (account: <b>${fmtUsd(sizer.account)}</b> · method: <b>${escSig(sizer.method.replace(/_/g, ' '))}</b> · risk: <b>${sizer.riskPct}%/trade</b>${sizer.gradeTier && sizer.method !== 'half_kelly' ? ' · <b>grade tier on</b> (A 1.25× / B 1.0× / C 0.75× / D 0.5×)' : ''}) then compounds chronologically through all closed trades. Significantly smaller than Strategy α because Half Kelly allocates only ~2–3% per trade.`
           }<span style="display:block;margin-top:0.35rem;padding-top:0.35rem;border-top:1px solid var(--border);color:var(--fg-dim)"><b style="color:var(--fg)">Drawdown context (2026-05-20):</b> The latest peak-to-trough drawdown was <b>-$35,588</b> at $100K × 2% × grade-tier sizing. 19 A-grade breakouts contributed -$31,767 of that, hitting SL during a 4-day risk-off cluster — regime-driven, not signal-quality-driven. <b>Patch F (ships 2026-05-26)</b> halves base risk 2% → 1%; the same drawdown at the new sizing would have been ~-$12.7k. To preview now: drop Risk% to 1% in the sizer bar above. Patch E also stops BULL+short bos same-cycle pollution from showing up as -0.1% to -0.5% regime_exit dots going forward.</span></span></div>
         </div>
         <div class="mod-panel">
@@ -2482,7 +2323,6 @@
           selectRow(body, setupList, 0);
         }
         if (state.tab === 'live') {
-          renderSim100kTerm(body);
           wireEquityCurve(body);
           // α / $ mode toggle — must trigger a full re-render because
           // liveContent is a string built once in render(); repaint() alone

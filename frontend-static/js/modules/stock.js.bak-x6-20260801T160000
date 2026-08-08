@@ -503,7 +503,7 @@
               <span>BB upper</span><span class="mono">${fmt.num(t.bollinger_upper, 2)}</span>
               <span>BB mid</span><span class="mono">${fmt.num(t.bollinger_middle, 2)}</span>
               <span>BB lower</span><span class="mono">${fmt.num(t.bollinger_lower, 2)}</span>
-              <span>Trend</span><span class="tk-inline">${window.OC_HUMANIZE ? (window.OC_HUMANIZE(t.trend) || '—') : (t.trend || '—')}</span>
+              <span>Trend</span><span class="tk-inline">${t.trend || '—'}</span>
               <span>Signal</span><span class="tk-inline">${t.signal || '—'}</span>
               <span>Vol ratio</span><span class="mono">${fmt.num(t.volume_ratio, 2)}</span>
             </div>

@@ -40,21 +40,12 @@
     const content = body.querySelector('.recap-content');
     const btns = body.querySelectorAll('.recap-toggle .lt-btn');
     if (!content || !btns.length) return;
-    // The one-line verdict sits OUTSIDE .recap-content, so the toggle has to move it
-    // too. Its EN/粵 text is carried on the node itself (data-en / data-yue) so this
-    // helper stays stateless. No 粵 verdict (translate soft-failed) -> stay on EN
-    // rather than blanking the line.
-    const vnode = body.querySelector('.verdict-content');
     btns.forEach(btn => {
       btn.addEventListener('click', () => {
         const lang = btn.getAttribute('data-lang');
         if (btn.disabled || (lang === 'yue' && !hasYue)) return;
         setBriefLang(lang);
         content.innerHTML = renderBody(lang);
-        if (vnode) {
-          const yv = vnode.getAttribute('data-yue') || '';
-          vnode.textContent = (lang === 'yue' && yv) ? yv : (vnode.getAttribute('data-en') || vnode.textContent);
-        }
         btns.forEach(b2 => {
           const isOn = b2.getAttribute('data-lang') === lang;
           b2.style.background = isOn ? '#60a5fa' : 'transparent';
@@ -3234,15 +3225,6 @@
         <span style="color:var(--fg-dim);margin-left:8px">${escapeGex(b.as_of)} close · ${escapeGex(etStamp(b.generated_at))}</span>
       </div>`;
 
-    // One-line verdict (daily post-close). Twin of the period pane above.
-    if (b.verdict) {
-      H += `<div style="margin:6px 0 2px;padding:7px 10px;border-left:3px solid #fb923c;background:rgba(251,146,60,0.07)">
-        <span style="font-size:9.5px;letter-spacing:0.16em;color:#fb923c;font-weight:700">THE ONE THING</span>
-        <div class="verdict-content" style="font-size:13px;line-height:1.4;font-weight:700;margin-top:3px"
-             data-en="${escapeGex(b.verdict)}" data-yue="${escapeGex(b.verdict_yue || '')}">${escapeGex(
-               (getBriefLang() === 'yue' && b.verdict_yue) ? b.verdict_yue : b.verdict)}</div>
-      </div>`;
-    }
     if (b.summary) {
       const SECTOR_RE_S = new RegExp('\\b(' + Object.keys(SECTORS).sort((a, b2) => b2.length - a.length).join('|') + ')\\b', 'g');
       const sectorizeS = (s) => String(s || '').replace(SECTOR_RE_S, m => `${SECTORS[m]} (${m})`);
@@ -3512,9 +3494,7 @@
     if (b.verdict) {
       H += `<div style="margin:6px 0 2px;padding:7px 10px;border-left:3px solid #fb923c;background:rgba(251,146,60,0.07)">
         <span style="font-size:9.5px;letter-spacing:0.16em;color:#fb923c;font-weight:700">THE ONE THING</span>
-        <div class="verdict-content" style="font-size:13px;line-height:1.4;font-weight:700;margin-top:3px"
-             data-en="${escapeGex(b.verdict)}" data-yue="${escapeGex(b.verdict_yue || '')}">${escapeGex(
-               (getBriefLang() === 'yue' && b.verdict_yue) ? b.verdict_yue : b.verdict)}</div>
+        <div style="font-size:13px;line-height:1.4;font-weight:700;margin-top:3px">${escapeGex(b.verdict)}</div>
       </div>`;
     }
     if (b.summary) {
@@ -3838,16 +3818,6 @@
     const w = d.window || {};
     let H = `<div class="mod-panel" style="padding:8px 12px"><span class="mono" style="font-size:15px;font-weight:700">📊 ${escapeGex((d.label || 'WEEKLY').toUpperCase())} REVIEW</span>`
       + `<span style="color:var(--fg-dim);margin-left:8px">${escapeGex(w.start)} → ${escapeGex(w.end)} · ${escapeGex(w.label)}</span></div>`;
-    // One-line verdict (weekly / monthly — one builder, one block). Twin of
-    // brief.html verdictBlock() and the premarket card's "THE ONE THING".
-    if (d.verdict) {
-      H += `<div style="margin:6px 0 2px;padding:7px 10px;border-left:3px solid #fb923c;background:rgba(251,146,60,0.07)">
-        <span style="font-size:9.5px;letter-spacing:0.16em;color:#fb923c;font-weight:700">THE ONE THING</span>
-        <div class="verdict-content" style="font-size:13px;line-height:1.4;font-weight:700;margin-top:3px"
-             data-en="${escapeGex(d.verdict)}" data-yue="${escapeGex(d.verdict_yue || '')}">${escapeGex(
-               (getBriefLang() === 'yue' && d.verdict_yue) ? d.verdict_yue : d.verdict)}</div>
-      </div>`;
-    }
     if (d.summary) {
       recapBody = (lang) => sblocks(lang === 'yue' ? d.summary_yue : d.summary, lang);
       recapHasYue = !!d.summary_yue;

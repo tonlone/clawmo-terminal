@@ -133,11 +133,7 @@
         display: inline-flex; align-items: center; gap: 4px;
         padding: 2px 8px; margin-right: 6px;
         font-family: var(--font-mono, monospace);
-        /* Was 0.68rem, which resolved to 8.84px against the terminal's 13px root and
-           made the tenor labels genuinely hard to read - a UI review misread "30Y" as
-           "3BY" off this chip. The tooltip already carries the full sentence; this just
-           makes the compact form legible. */
-        font-size: 0.78rem; font-weight: 600; line-height: 1.4;
+        font-size: 0.68rem; font-weight: 600; line-height: 1.4;
         border-radius: 3px;
         cursor: pointer;
       `;

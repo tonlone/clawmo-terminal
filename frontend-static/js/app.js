@@ -29,7 +29,6 @@
     { id: 'liquidity',      code: 'LIQ', fkey: null, label: 'Liquidity',      labelCN: '流動性',   group: 'Macro',    src: 'stocks.clawmo.tech/liquidity.html', pdfExportable: false, pdfNeedsTicker: false },
     { id: 'valuation-map',  code: 'VAL', fkey: null, label: 'Valuation Map',  labelCN: '估值地圖', group: 'Macro',    src: 'stocks.clawmo.tech/valuation-map.html', pdfExportable: true, pdfNeedsTicker: false },
     { id: 'sem',            code: 'SEM', fkey: null, label: 'Semiconductor',  labelCN: '半導體',    group: 'Macro',    src: 'stocks.clawmo.tech/semiconductor.html', pdfExportable: false, pdfNeedsTicker: false },
-    { id: 'research',       code: 'RAD', fkey: null, label: 'Research Radar', labelCN: '研究雷達', group: 'Research', src: 'stocks.clawmo.tech/research.html', pdfExportable: false, pdfNeedsTicker: false },
     { id: 'geo',            code: 'GEO', fkey: null, label: 'Geo Risk',       labelCN: '地緣風險', group: 'Macro',    src: 'stocks.clawmo.tech/data/hormuz.json' },
     { id: 'crypto',         code: 'CRY', fkey: null, label: 'Crypto',        labelCN: '加密貨幣', group: 'Assets',   src: 'stocks.clawmo.tech/crypto.html', pdfExportable: true, pdfNeedsTicker: false },
     { id: 'bonds',          code: 'BND', fkey: null, label: 'Bonds',         labelCN: '債券',     group: 'Assets',   src: 'stocks.clawmo.tech/bonds.html', pdfExportable: true, pdfNeedsTicker: false },
@@ -38,6 +37,7 @@
     { id: 'twitter',        code: 'TWT', fkey: null, label: 'X Signals',     labelCN: 'X信號',    group: 'External', src: 'news.clawmo.tech (x_signals)' },
     { id: 'trump',          code: 'TRP', fkey: null, label: 'Trump Monitor', labelCN: '川普監察', group: 'External', src: 'trumpsocial.clawmo.tech' },
     { id: 'polymarket',     code: 'POL', fkey: null, label: 'Polymarket',    labelCN: '預測市場', group: 'External', src: 'polymarket.com' },
+    { id: 'research',       code: 'RAD', fkey: null, label: 'Research Radar', labelCN: '研究雷達', group: 'Research', src: 'stocks.clawmo.tech/research.html', pdfExportable: false, pdfNeedsTicker: false },
     { id: 'cycles',         code: 'CYC', fkey: null, label: 'Geocosmic',     labelCN: '天體週期', group: 'Research', src: 'stocks.clawmo.tech/cycles.html' },
     { id: 'portfolio',      code: 'PTF', fkey: null, label: 'Portfolio',    labelCN: '投資組合', group: 'Private',  src: 'stocks.clawmo.tech/portfolio.html', hidden: true },
   ];
@@ -122,6 +122,16 @@
           rail.appendChild(sep);
         }
         currentGroup = m.group;
+        // Name each block. The separators alone told you a boundary existed but not
+        // what either side was, which is the part that makes a 29-item rail learnable.
+        // .rail-group-label was already styled and never emitted.
+        if (currentGroup) {
+          const lbl = document.createElement('div');
+          lbl.className = 'rail-group-label';
+          lbl.textContent = String(currentGroup).toUpperCase();
+          lbl.setAttribute('aria-hidden', 'true');
+          rail.appendChild(lbl);
+        }
       }
       const btn = document.createElement('button');
       btn.className = 'rail-btn';

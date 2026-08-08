@@ -439,12 +439,7 @@
       attributionControl: true,
     });
 
-    // CARTO Dark Matter, not Voyager. The light basemap was the single most jarring
-    // visual break in either app — a white map dropped into a dark terminal — and it
-    // also washed out the vessel markers, which are colour-coded by type.
-    // ⚠ This file is a DUPLICATED TWIN (terminal js/modules/geo.js and stocks
-    // js/geo/geo.js); both copies must carry this change or the surfaces diverge.
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
       subdomains: 'abcd',
       maxZoom: 18,
