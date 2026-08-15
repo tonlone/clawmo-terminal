@@ -837,6 +837,109 @@
         Win rate and return above count <b>funded closes only</b>; the paper book never touches equity.</div>`
       : '';
 
+    // Twin of the web funded-holdings table. ⛔ Added 2026-08-11: the panel could not answer
+    // "which ones am I actually in?". The signals table lists every signal the ENGINE fired
+    // (21 new on 11 Aug) while the account held 6 — both on screen, nothing tying them
+    // together, so the natural reading was that 21 positions were bought.
+    // ⛔ Paper positions are deliberately NOT listed: sized identically, they would look
+    // exactly like holdings, and the point of this table is that only these move the curve.
+    // Same formula as the web twin and the Open Trades table: signal_date + target_days
+    // (calendar). ⛔ Distances are measured from the CURRENT mark, not the entry — from entry
+    // they never move and say nothing about the position today.
+    const _lvl = (raw, mk, isTgt) => {
+      const v = parseFloat(raw);
+      if (!raw || !isFinite(v) || v <= 0) return '<td style="text-align:right;color:var(--muted)">—</td>';
+      const dd = mk ? (v / mk - 1) * 100 : 0;
+      const c = isTgt ? 'var(--up,#3fb950)' : 'var(--down,#f85149)';
+      return `<td style="text-align:right">$${v.toFixed(2)} <span style="color:${c};opacity:.85">${dd >= 0 ? '+' : ''}${dd.toFixed(1)}%</span></td>`;
+    };
+    const _asOf = d.as_of || new Date().toISOString().slice(0, 10);
+    const _days = (a, b) => a ? Math.round((new Date(b) - new Date(a)) / 86400000) : null;
+    const _exp = q => {
+      if (!q.signal_date || q.target_days == null) return '<td style="text-align:right;color:var(--muted)">—</td>';
+      const e = new Date(q.signal_date); e.setDate(e.getDate() + Number(q.target_days));
+      const iso = e.toISOString().slice(0, 10), left = _days(_asOf, iso);
+      const c = left <= 3 ? 'var(--down,#f85149)' : left <= 7 ? '#e5b94c' : 'var(--muted)';
+      return `<td style="text-align:right;color:${c}">${iso} <span style="opacity:.7">(${left}d)</span></td>`;
+    };
+
+    const funded = (d.open_positions || []).filter(p => (p.book || 'funded') === 'funded');
+    let grossHeld = 0;
+    const heldRows = funded.map(p => {
+      const sh = parseFloat(p.shares), ent = parseFloat(p.entry_fill);
+      const mk = p.mark == null ? ent : parseFloat(p.mark);
+      const val = sh * mk, pnl = (mk - ent) * sh, pct = ent ? (mk / ent - 1) * 100 : 0;
+      grossHeld += val;
+      const tone = pnl > 0 ? 'var(--up,#3fb950)' : pnl < 0 ? 'var(--down,#f85149)' : 'var(--muted)';
+      return `<tr>
+        <td style="font-weight:600">${p.ticker}${p.stale_mark ? ' <span title="stale mark" style="color:#e5b94c">&#9888;</span>' : ''}</td>
+        <td style="color:var(--muted)">${String(p.signal_type || '').replace(/_/g, ' ')}</td>
+        <td>${p.grade || '—'}</td>
+        <td style="color:var(--muted)">${p.entry_date || ''}</td>
+        <td style="text-align:right">${sh.toLocaleString()}</td>
+        <td style="text-align:right">$${ent.toFixed(2)}</td>
+        <td style="text-align:right">$${mk.toFixed(2)}</td>
+        ${_lvl(p.take_profit, mk, true)}${_lvl(p.stop, mk, false)}
+        <td style="text-align:right">$${Math.round(val).toLocaleString()}</td>
+        <td style="text-align:right;color:${tone}">${pnl >= 0 ? '+' : '−'}$${Math.abs(Math.round(pnl)).toLocaleString()} (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)</td>
+        <td style="text-align:right;color:var(--muted)">${_days(p.entry_date, _asOf) || 0}d</td>
+        ${_exp(p)}
+      </tr>`;
+    }).join('');
+    // Twin of the web "Not funded" table. ⛔ NOT called "paper" in the UI: the PAPER-TRACKED
+    // SIGNALS table in this same module means a pattern is under QUARANTINE and has nothing to
+    // do with cash. Two unrelated populations shared one word.
+    const unfunded = (d.open_positions || []).filter(p => p.book === 'paper');
+    let shadowPnl = 0;
+    unfunded.sort((a, b) => (b.entry_date || '').localeCompare(a.entry_date || ''));
+    const unfRows = unfunded.map(p => {
+      const sh = parseFloat(p.shares), ent = parseFloat(p.entry_fill);
+      const mk = p.mark == null ? ent : parseFloat(p.mark);
+      const pnl = (mk - ent) * sh, pct = ent ? (mk / ent - 1) * 100 : 0;
+      shadowPnl += pnl;
+      const tone = pnl > 0 ? 'var(--up,#3fb950)' : pnl < 0 ? 'var(--down,#f85149)' : 'var(--muted)';
+      return `<tr>
+        <td style="font-weight:600">${p.ticker}</td>
+        <td style="color:var(--muted)">${String(p.signal_type || '').replace(/_/g, ' ')}</td>
+        <td>${p.grade || '—'}</td>
+        <td style="color:var(--muted)">${p.entry_date || ''}</td>
+        <td style="text-align:right">$${ent.toFixed(2)}</td>
+        <td style="text-align:right">$${mk.toFixed(2)}</td>
+        ${_lvl(p.take_profit, mk, true)}${_lvl(p.stop, mk, false)}
+        <td style="text-align:right;color:${tone}">${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%</td>
+        ${_exp(p)}
+        <td style="color:var(--muted)">${String(p.paper_reason || 'no cash').replace(/_/g, ' ')}</td>
+      </tr>`;
+    }).join('');
+    const unfundedLine = unfunded.length ? `<details open style="margin-top:8px;padding-top:7px;border-top:1px solid var(--border)">
+        <summary style="cursor:pointer;font-size:10px;font-weight:700;color:var(--fg)">NOT FUNDED — THE ACCOUNT COULD NOT BUY THESE
+          <span style="font-weight:400;color:var(--muted)"> · ${unfunded.length} open, shadow P&amp;L ${shadowPnl >= 0 ? '+' : '−'}$${Math.abs(Math.round(shadowPnl)).toLocaleString()} · sized as if funded, cash never touched · <b>not the same as PAPER-TRACKED SIGNALS below</b>, which is about a quarantined pattern, not cash</span></summary>
+        <div style="max-height:260px;overflow-y:auto"><table style="width:100%;font-size:10px;border-collapse:collapse">
+          <thead><tr style="color:var(--muted);text-align:left">
+            <th>Ticker</th><th>Pattern</th><th>Gr</th><th>Would have entered</th>
+            <th style="text-align:right">Fill</th><th style="text-align:right">Mark</th>
+            <th style="text-align:right">Target</th><th style="text-align:right">Stop</th>
+            <th style="text-align:right">Shadow</th><th style="text-align:right">Expires</th>
+            <th>Why not</th></tr></thead>
+          <tbody>${unfRows}</tbody></table></div></details>` : '';
+
+    const heldLine = funded.length ? `<div style="margin-top:8px;padding-top:7px;border-top:1px solid var(--border)">
+        <div style="font-size:10px;font-weight:700;color:var(--fg);margin-bottom:4px">FUNDED HOLDINGS — THE ONLY POSITIONS IN THE CURVE ABOVE
+          <span style="font-weight:400;color:var(--muted)"> · ${funded.length} held. Every other signal listed below was not bought.</span></div>
+        <div style="overflow-x:auto"><table style="width:100%;font-size:10px;border-collapse:collapse">
+          <thead><tr style="color:var(--muted);text-align:left">
+            <th>Ticker</th><th>Pattern</th><th>Gr</th><th>Entered</th>
+            <th style="text-align:right">Shares</th><th style="text-align:right">Fill</th>
+            <th style="text-align:right">Mark</th><th style="text-align:right">Target</th>
+            <th style="text-align:right">Stop</th><th style="text-align:right">Value</th>
+            <th style="text-align:right">Unrealised</th><th style="text-align:right">Held</th>
+            <th style="text-align:right">Expires</th></tr></thead>
+          <tbody>${heldRows}</tbody>
+          <tfoot><tr style="border-top:1px solid var(--border);font-weight:600">
+            <td colspan="9" style="color:var(--muted);font-weight:400">gross ${money(grossHeld)} + cash ${money(s.cash)} = equity</td>
+            <td style="text-align:right">${money(s.equity)}</td><td colspan="3"></td></tr></tfoot>
+        </table></div></div>` : '';
+
     host.style.display = '';
     host.innerHTML = `
       <div class="mod-panel" style="margin-bottom:10px">
@@ -856,7 +959,10 @@
           ${stat('Max DD', '-' + parseFloat(s.max_drawdown_pct || 0).toFixed(2) + '%', 'var(--down,#f85149)')}
           ${stat('Win rate', s.win_rate_pct === null ? `<span style="font-size:10px;font-weight:400;color:var(--muted)">withheld &lt;${need}</span>` : parseFloat(s.win_rate_pct).toFixed(1) + '%')}
           ${stat('Cash free', money(s.cash))}
+          ${stat('Held', `${bk.open_funded || 0} funded` + ((bk.open_paper) ? ` · ${bk.open_paper} paper` : ''))}
         </div>` : `<div style="padding:14px;text-align:center;font-size:11px;color:var(--muted)">Account opened ${d.as_of || ''} with $100,000. No sessions recorded yet.</div>`}
+        ${heldLine}
+        ${unfundedLine}
         ${capLine}
         ${bookLine}
       </div>`;
@@ -2083,7 +2189,7 @@
         </div>
         <div class="mod-panel">
           <div class="mod-panel-title" title="Paper-tracked signals from quarantined / locked patterns. The system fires these as if they were real but does NOT allocate capital — pure paper-tracking so live PF can be measured and the pattern can be unlocked once it proves itself. Same TP/SL/early-exit/expire rules apply on paper.">
-            PAPER-TRACKED SIGNALS · ${paperTracked.length}${_sigPS ? ` of ${_allPaperTracked.length}` : ''} active · <span style="color:var(--muted);font-size:10px;font-weight:400">no capital · feeds adaptive grades</span> ${searchHTML('sig-paper-search', window._sigPaperSearch)}
+            PAPER-TRACKED SIGNALS (QUARANTINED PATTERN · NOT ABOUT CASH) · ${paperTracked.length}${_sigPS ? ` of ${_allPaperTracked.length}` : ''} active · <span style="color:var(--muted);font-size:10px;font-weight:400">no capital · feeds adaptive grades</span> ${searchHTML('sig-paper-search', window._sigPaperSearch)}
           </div>
           <div class="tbl-wrap">
             <table class="tbl-dense">

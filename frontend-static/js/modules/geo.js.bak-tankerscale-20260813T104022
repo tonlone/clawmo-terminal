@@ -274,20 +274,7 @@
   /* Hover state for the history chart — set by geoHistoryChart, consumed by initHistoryChart */
   let _histState = null;
 
-  /* ── History chart: tankers on their own scale (±1σ band) + a tanker-share sub-pane ──
-       WHY the tanker series owns the y-domain (2026-08-13): tankers and total shared ONE
-       linear domain, and total (~8x the tanker level) stretched it so far that the tanker
-       line rendered 2.8-15.2px of a 64px plot across all 7 tracked regions (Hormuz 4.3px,
-       Indian Ocean 2.8px) — and the ±1σ band rendered ~2.3px, thinner than the line drawn
-       on it, so the ABOVE/BELOW NORMAL badge was not visually verifiable from the chart
-       that printed it.
-       Total moved to its own pane below, as tanker SHARE of fleet: that is the documented
-       watch item ("tanker share of total vessels falling"), it is scale-free so the pane
-       reads the same across regions, and the raw count survives in the hover tooltip.
-       Deliberately NOT a second y-axis — the crossing points of two independently-scaled
-       lines carry no meaning.
-       Note the invariant: the domain always contains μ±1σ, so its span is ≥2σ and a
-       genuinely quiet stretch cannot be amplified into fake noise. ── */
+  /* ── History chart: tankers + total over time with ±1σ band ── */
   function geoHistoryChart(history) {
     if (!history || history.length < 2) {
       return `<div style="padding:8px 10px;font-size:11px;color:var(--fg-faint);font-style:italic">
@@ -300,66 +287,34 @@
     const daySpan = history.length >= 2
       ? Math.max(1, Math.round((new Date(history[history.length-1].ts) - new Date(history[0].ts)) / 86400000) + 1)
       : history.length;
-    /* Layout: tanker pane on top, slim share pane under it, x labels at the foot. */
-    const W = 520, padL = 30, padR = 8, padT = 6;
-    const MAIN_H = 88, SUB_GAP = 6, SUB_H = 22, padB = 16;
-    const H     = padT + MAIN_H + SUB_GAP + SUB_H + padB;  // 138
-    const mainB = padT + MAIN_H;    // tanker plot bottom
-    const subT  = mainB + SUB_GAP;  // share pane top
-    const subB  = subT + SUB_H;     // share pane bottom
+    const W = 520, H = 90, padL = 30, padR = 8, padT = 6, padB = 20;
 
     const tankers = chartData.map(h => h.tankers || 0);
-    /* Tanker-only domain — `total` no longer participates. Always spans at least ±1σ. */
+    const totals  = chartData.map(h => h.total   || 0);
     let yMin = Math.min(...tankers, ...(baseline ? [baseline.low_threshold] : []));
-    let yMax = Math.max(...tankers, ...(baseline ? [baseline.high_threshold]: []));
-    const yPad = Math.max(1, (yMax - yMin) * 0.12);   // the floor also covers a degenerate σ=0 domain
+    let yMax = Math.max(...totals,  ...(baseline ? [baseline.high_threshold]: []));
+    const yPad = Math.max(1, (yMax - yMin) * 0.12);
     yMin = Math.max(0, yMin - yPad); yMax += yPad;
 
     const sx = i => padL + (i / Math.max(1, n - 1)) * (W - padL - padR);
-    const sy = v => padT + (1 - (v - yMin) / (yMax - yMin)) * MAIN_H;
+    const sy = v => padT + (1 - (v - yMin) / (yMax - yMin)) * (H - padT - padB);
 
-    /* Share of fleet. null (⇒ a GAP, not a fabricated 0) when total is missing or zero —
-       this is a division, so the guard is load-bearing even though no snapshot has yet
-       carried a zero total. */
-    const shares = chartData.map(h => (h.total > 0 ? (h.tankers || 0) / h.total * 100 : null));
-    const shVals = shares.filter(v => v != null);
-    const shLo = shVals.length ? Math.min(...shVals) : 0;
-    const shHi = shVals.length ? Math.max(...shVals) : 0;
-    const shPad = Math.max(0.5, (shHi - shLo) * 0.15);
-    const shMin = Math.max(0, shLo - shPad), shMax = shHi + shPad;
-    const sySh = v => subB - ((v - shMin) / (shMax - shMin)) * SUB_H;
-
-    // ±1σ band (edges dashed so the band reads as a band, not as dirty background) + mean line
+    // ±1σ band + mean line
     let bandSvg = '';
     if (baseline) {
-      const bY1 = sy(baseline.high_threshold);
-      const bY2 = sy(baseline.low_threshold);
+      const bY1 = sy(baseline.high_threshold).toFixed(1);
+      const bY2 = sy(baseline.low_threshold).toFixed(1);
+      const bH  = (sy(baseline.low_threshold) - sy(baseline.high_threshold)).toFixed(1);
+      const bW  = W - padL - padR;
+      bandSvg = `<rect x="${padL}" y="${bY1}" width="${bW}" height="${bH}" fill="rgba(245,158,11,0.10)"/>`;
       const mY  = sy(baseline.mean).toFixed(1);
-      bandSvg = `<rect x="${padL}" y="${bY1.toFixed(1)}" width="${W - padL - padR}" height="${(bY2 - bY1).toFixed(1)}" fill="rgba(245,158,11,0.14)"/>`
-        + `<line x1="${padL}" y1="${bY1.toFixed(1)}" x2="${W - padR}" y2="${bY1.toFixed(1)}" stroke="rgba(245,158,11,0.30)" stroke-width="0.6" stroke-dasharray="2 3"/>`
-        + `<line x1="${padL}" y1="${bY2.toFixed(1)}" x2="${W - padR}" y2="${bY2.toFixed(1)}" stroke="rgba(245,158,11,0.30)" stroke-width="0.6" stroke-dasharray="2 3"/>`
-        + `<line x1="${padL}" y1="${mY}" x2="${W - padR}" y2="${mY}" stroke="rgba(245,158,11,0.35)" stroke-width="1" stroke-dasharray="3 3"/>`;
+      bandSvg += `<line x1="${padL}" y1="${mY}" x2="${W - padR}" y2="${mY}" stroke="rgba(245,158,11,0.35)" stroke-width="1" stroke-dasharray="3 3"/>`;
     }
 
     // Smooth paths
     const sp = OC_CHART.smoothPath;
+    const totalPath  = sp(totals.map((v,i)  => ({ x: sx(i), y: sy(v) })));
     const tankerPath = sp(tankers.map((v,i) => ({ x: sx(i), y: sy(v) })));
-
-    /* Share pane, drawn as contiguous runs so a null breaks the area rather than
-       dragging it to the floor. */
-    let sharePath = '', run = [];
-    const flushRun = () => {
-      if (run.length >= 2) {
-        const d = sp(run);
-        sharePath += `<path d="${d} L ${run[run.length - 1].x.toFixed(1)} ${subB} L ${run[0].x.toFixed(1)} ${subB} Z" fill="rgba(148,163,184,0.16)" stroke="none"/>`
-                   + `<path d="${d}" fill="none" stroke="rgba(148,163,184,0.55)" stroke-width="1"/>`;
-      } else if (run.length === 1) {
-        sharePath += `<circle cx="${run[0].x.toFixed(1)}" cy="${run[0].y.toFixed(1)}" r="1" fill="rgba(148,163,184,0.55)"/>`;
-      }
-      run = [];
-    };
-    shares.forEach((v, i) => { if (v == null) flushRun(); else run.push({ x: sx(i), y: sySh(v) }); });
-    flushRun();
 
     // Per-point geometry + values for the hover crosshair
     _histState = {
@@ -367,11 +322,10 @@
       pts: chartData.map((h, i) => ({
         x:       +sx(i).toFixed(2),
         yT:      +sy(h.tankers || 0).toFixed(2),
-        ySh:     shares[i] == null ? null : +sySh(shares[i]).toFixed(2),
+        yTot:    +sy(h.total   || 0).toFixed(2),
         ts:      h.ts,
         tankers: h.tankers || 0,
         total:   h.total   || 0,
-        share:   shares[i] == null ? null : Math.round(shares[i] * 10) / 10,
       })),
     };
 
@@ -379,32 +333,23 @@
     const step = Math.max(1, Math.floor(n / 5));
     let xLabels = '';
     const _fmtTs = ts => { const d = new Date(ts); return `${d.getMonth()+1}/${d.getDate()}`; };
-    let lastTick = 0;
     for (let i = 0; i < n; i += step) {
       xLabels += `<text x="${sx(i).toFixed(1)}" y="${H - 4}" text-anchor="middle" class="oc-xlabel">${_fmtTs(chartData[i].ts)}</text>`;
-      lastTick = i;
     }
-    // The final date only gets its own tick if it clears the previous one — at n=52/step=10
-    // the last regular tick lands on index 50 and the unconditional extra at 51 overprinted it
-    // ("8/8" + "8/12" rendered as "8/8112").
-    if ((n - 1) - lastTick >= step / 2) {
+    if ((n - 1) % step !== 0) {
       xLabels += `<text x="${sx(n-1).toFixed(1)}" y="${H - 4}" text-anchor="middle" class="oc-xlabel">${_fmtTs(chartData[n-1].ts)}</text>`;
     }
 
-    // Y labels — 3 ticks for the tanker pane, hi/lo for the share pane
+    // Y labels (3 ticks)
     const yTicks = [Math.round(yMax - yPad), Math.round((yMin + yMax) / 2), Math.round(yMin + yPad)];
     const yLabels = yTicks.map(v =>
       `<text x="${padL - 3}" y="${(sy(v)+3).toFixed(1)}" text-anchor="end" class="oc-xlabel">${v}</text>`
-    ).join('') + (shVals.length
-      ? `<text x="${padL - 3}" y="${(subT + 6).toFixed(1)}" text-anchor="end" class="oc-xlabel">${shHi.toFixed(1)}%</text>`
-      + `<text x="${padL - 3}" y="${subB.toFixed(1)}" text-anchor="end" class="oc-xlabel">${shLo.toFixed(1)}%</text>`
-      : '');
+    ).join('');
 
-    // Grid lines (tanker pane only — they must not bleed into the share pane)
+    // Grid lines
     const grid = yTicks.map(v =>
       `<line x1="${padL}" y1="${sy(v).toFixed(1)}" x2="${W-padR}" y2="${sy(v).toFixed(1)}" class="oc-grid"/>`
-    ).join('')
-    + `<line x1="${padL}" y1="${(mainB + SUB_GAP / 2).toFixed(1)}" x2="${W-padR}" y2="${(mainB + SUB_GAP / 2).toFixed(1)}" class="oc-grid"/>`;
+    ).join('');
 
     // Status badge
     const cur = tankers[n - 1];
@@ -423,19 +368,19 @@
           <span style="font-size:10px;color:var(--fg-dim);letter-spacing:.05em">TANKERS · ${daySpan}d HISTORY (${n} daily avg · ${snapshots} snapshots)</span>
           ${baseline ? `<span class="mono" style="font-size:9px;color:var(--fg-faint)">μ=${baseline.mean} ±${baseline.sigma}</span>${statusHtml}` : ''}
           <span style="margin-left:auto;display:flex;align-items:center;gap:5px">
+            <span style="width:10px;height:2px;background:rgba(148,163,184,0.45);display:inline-block;vertical-align:middle"></span>
+            <span style="font-size:9px;color:var(--fg-faint)">total</span>
             <span style="width:10px;height:2px;background:#f59e0b;display:inline-block;vertical-align:middle"></span>
             <span style="font-size:9px;color:var(--fg-faint)">tankers</span>
-            ${baseline ? `<span style="width:10px;height:8px;background:rgba(245,158,11,0.14);border:1px solid rgba(245,158,11,0.3);display:inline-block;vertical-align:middle"></span><span style="font-size:9px;color:var(--fg-faint)">±1σ</span>` : ''}
-            <span style="width:10px;height:8px;background:rgba(148,163,184,0.16);border-top:1px solid rgba(148,163,184,0.55);display:inline-block;vertical-align:middle"></span>
-            <span style="font-size:9px;color:var(--fg-faint)">share of fleet</span>
+            ${baseline ? `<span style="width:10px;height:8px;background:rgba(245,158,11,0.10);border:1px solid rgba(245,158,11,0.3);display:inline-block;vertical-align:middle"></span><span style="font-size:9px;color:var(--fg-faint)">±1σ</span>` : ''}
           </span>
         </div>
         <svg id="geo-hist-svg" class="oc-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;max-width:${W}px;height:${H}px;cursor:crosshair">
           ${grid}${bandSvg}
+          <path d="${totalPath}"  style="fill:none;stroke:rgba(148,163,184,0.4);stroke-width:1;stroke-dasharray:3 2"/>
           <path d="${tankerPath}" style="fill:none;stroke:#f59e0b;stroke-width:1.6"/>
-          ${sharePath}
           ${xLabels}${yLabels}
-          <line   id="geo-cross-x" y1="${padT}" y2="${subB}" stroke="var(--fg-faint,#8a93a3)" stroke-width="0.7" stroke-dasharray="2 2" vector-effect="non-scaling-stroke" style="display:none"/>
+          <line   id="geo-cross-x" y1="${padT}" y2="${H - padB}" stroke="var(--fg-faint,#8a93a3)" stroke-width="0.7" stroke-dasharray="2 2" vector-effect="non-scaling-stroke" style="display:none"/>
           <circle id="geo-cross-dt" r="2.6" fill="rgba(148,163,184,0.95)" stroke="var(--panel)" stroke-width="0.6" style="display:none"/>
           <circle id="geo-cross-dk" r="2.8" fill="#f59e0b" stroke="var(--panel)" stroke-width="0.6" style="display:none"/>
         </svg>
@@ -1019,17 +964,14 @@
       const p = st.pts[best];
 
       lineX.setAttribute('x1', p.x); lineX.setAttribute('x2', p.x); lineX.style.display = '';
-      dotK.setAttribute('cx', p.x);  dotK.setAttribute('cy', p.yT); dotK.style.display = '';
-      // The share dot lives in the sub-pane; it is hidden on a gap (total missing/zero).
-      if (p.ySh == null) { dotT.style.display = 'none'; }
-      else { dotT.setAttribute('cx', p.x); dotT.setAttribute('cy', p.ySh); dotT.style.display = ''; }
+      dotK.setAttribute('cx', p.x);  dotK.setAttribute('cy', p.yT);   dotK.style.display = '';
+      dotT.setAttribute('cx', p.x);  dotT.setAttribute('cy', p.yTot); dotT.style.display = '';
 
       const dt = new Date(p.ts);
       tip.innerHTML =
         `<b>${dt.getMonth() + 1}/${dt.getDate()}</b>&nbsp; ` +
         `<span style="color:#f59e0b">${p.tankers}</span> tankers · ` +
-        `<span style="color:rgba(148,163,184,0.95)">${p.total}</span> total` +
-        (p.share == null ? '' : ` · <span style="color:rgba(148,163,184,0.95)">${p.share}%</span>`);
+        `<span style="color:rgba(148,163,184,0.95)">${p.total}</span> total`;
       tip.style.display = '';
 
       // position tooltip near the point, flipping left if it would overflow
